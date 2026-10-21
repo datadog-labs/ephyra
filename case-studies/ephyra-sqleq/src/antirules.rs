@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Anti-rules: plausible rewrites that are NOT equalities, the traps a
 //! careless prover or optimizer falls into, applied one at a time so a pair
 //! differs semantically in one place. A pair is only evidence once a witness

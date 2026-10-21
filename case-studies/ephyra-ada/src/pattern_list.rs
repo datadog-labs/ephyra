@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! URLPattern list cases: [`ListCase`] (pathname patterns and pathnames),
 //! run by [`run`] through `ada::parse_url_pattern_list` and, route by route,
 //! through `ada::url_pattern::exec`, and drawn by [`list_cases`].

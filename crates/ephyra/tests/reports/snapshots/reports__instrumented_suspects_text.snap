@@ -12,7 +12,7 @@ ephyra: FAILED, property panicked: planted: too large
   or rerun the whole search: Config::default().seed(24301)
   coverage: 2 of 2 functions in `reports::planted` reached, 5 of 5 counters
   suspects (68 passing and 36 failing runs over 9 regions):
-    1. tests/reports/planted.rs:5-15 in `reports::planted::classify`  ochiai=1.00 delta=1.00  HIGH panic-site (singleton_panic_overlap)
+    1. tests/reports/planted.rs:8-18 in `reports::planted::classify`  ochiai=1.00 delta=1.00  HIGH panic-site (singleton_panic_overlap)
   timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
     slowest input: [input]
   sample (random, iteration 0, size 0): 117

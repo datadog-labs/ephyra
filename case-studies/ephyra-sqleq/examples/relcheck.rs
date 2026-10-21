@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The relational rewrites on PostgreSQL with the case's data: every
 //! `rel-..` one-step variant of each seed against the seed.
 //! `cargo run --release --example relcheck -- <first seed> <count> <out dir>`;

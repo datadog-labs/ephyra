@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The logical database a setup creates and the statements change
 //! ([`Model`]): tables of typed columns, their rows (a multiset: PostgreSQL
 //! has no rowid), indexes, CHECK constraints, identity sequences and open

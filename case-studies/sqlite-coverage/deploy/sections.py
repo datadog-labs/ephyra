@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 """Regenerate ../sections.tsv, the function-to-file map of the vendored
 SQLite amalgamation, from its "Begin file" and "Continuing where we left
 off" markers (the map format_counters reads).

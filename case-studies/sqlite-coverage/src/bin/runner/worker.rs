@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A worker: oracle inputs one after another until its deadline, the stop
 //! file, or the supervisor's death (its parent process changes).
 //!

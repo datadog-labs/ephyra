@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! AST v0: one table `t` with columns `c0, c1, ...`, some rows, and one
 //! `SELECT` over it. `Display` renders runnable SQL.
 

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Read a file written by `crate::writer` back into its model and layout,
 //! without SQLite: the header, the `sqlite_schema` B-tree, each table's
 //! B-tree with its overflow chains, and the records. Index B-trees are not

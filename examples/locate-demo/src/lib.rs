@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A toy library with one planted bug and one property over it.
 //!
 //! `buggy_addition` panics when `x > 100`. The property says the function

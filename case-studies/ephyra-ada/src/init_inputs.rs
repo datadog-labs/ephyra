@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! URLPatternInit inputs, processed by `exec` against the all-wildcard
 //! pattern `{}`: the component inputs a match reports are the processed init
 //! ("process a URLPatternInit" with type "url": canonicalization, and

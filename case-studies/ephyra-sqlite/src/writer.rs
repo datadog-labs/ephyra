@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Serialize a [`Model`] with a [`Layout`] into the bytes of a database file,
 //! following SQLite's "Database File Format" document: the 100-byte header,
 //! table and index B-trees (leaf and interior pages, cell pointer arrays,

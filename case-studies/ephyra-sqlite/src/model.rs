@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The logical database a generated file holds ([`Model`]) and the layout
 //! choices it is written with ([`Layout`]). The writer (`crate::writer`)
 //! turns the pair into bytes, the reader (`crate::reader`) turns those bytes

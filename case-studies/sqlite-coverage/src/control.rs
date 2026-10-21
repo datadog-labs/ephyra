@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The control for a generated file: the same logical contents, written by
 //! SQLite the ordinary way. Coverage a generated file reaches beyond its
 //! control is what its physical layout adds (page size, packing, free

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Print the input `case_queries` draws for a seed and size, as a SQL
 //! script psql runs (the setup's COPY data inline), for triage.
 //!

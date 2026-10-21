@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # From cron every 30 minutes: pre-triage the current run's findings that
 # have no verdict yet (pretriage.py; arguments passed on: run or findings
 # directories, --force, --check-bugs for the known-bug check, --expected),

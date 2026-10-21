@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Start a new run: build the runner (and check that the binary is built
 # from the sources on disk), make a run directory named after the date and
 # the PostgreSQL commit (RUN_ROOT/<date>-postgresql-<commit12>/), copy the

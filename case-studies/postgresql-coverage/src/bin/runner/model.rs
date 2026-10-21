@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The model property of ephyra-postgresql's `tests/cases.rs` as a function
 //! the runner rotates with the oracles: PostgreSQL loading a case's setup
 //! and running its statements agrees with the model, statement by statement

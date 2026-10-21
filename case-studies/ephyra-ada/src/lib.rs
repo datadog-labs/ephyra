@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A testing engine for ada, the WHATWG URL parser, built on ephyra. A
 //! [`Case`] is an input, an optional base and setter calls; [`ada::run`]
 //! runs it on either of ada's URL representations and [`servo::run`] on the

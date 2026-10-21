@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! `ephyra check` end to end, on a throwaway consumer package: it lists
 //! what the source index finds, runs generator and strategy checks, reports
 //! predicates that still need a generator, and fails a broken generator.

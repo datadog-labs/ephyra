@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Re-run `sqleq-solver` (resuming after HANGs) on a run's saved jobs and
 //! rewrite the solver and finding columns of its `results.tsv`:
 //! `cargo run --release --example resolve -- <run dir>`. For runs made

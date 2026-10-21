@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! SQLancer-style metamorphic oracles: SQLite compared with itself on
 //! queries ([`crate::expr::Query`]) over the state a [`Case`] leaves. Test
 //! support for `tests/sqlancer.rs` and `examples/sqlancer.rs` (which run

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Which ada functions the grammar reaches: generates cases, runs each on
 //! both representations, and prints every ada function with the share of
 //! its counters executed, least covered first.

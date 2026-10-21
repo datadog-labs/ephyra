@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A batch of pairs past sqleq: the frontend (does it lower?), QED and
 //! `sqleq-solver` (do they prove?), `sqleq-fuzz` (does it refute, on
 //! DuckDB?). Each pair also carries what PostgreSQL said on the case's own

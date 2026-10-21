@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Keep the current run's supervisor alive: from cron at boot and every 5
 # minutes. Does nothing when there is no current run, when it was stopped
 # (its stop file), when it finished (past its deadline, no supervisor), or

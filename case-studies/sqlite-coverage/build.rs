@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The runner's build-time version (`RUNNER_BUILT_VERSION`): the content
 //! hash of the sources this build compiles, so that a run records what its
 //! binary was built from, not only what is on disk when it starts (a

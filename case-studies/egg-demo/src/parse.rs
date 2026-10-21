@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A script of `CREATE TABLE`s and one `SELECT`, read with sqlparser into
 //! the schema and a term. The fragment: SELECT [DISTINCT] columns FROM tables
 //! joined by inner, cross and left joins, WHERE, a GROUP BY of exactly the

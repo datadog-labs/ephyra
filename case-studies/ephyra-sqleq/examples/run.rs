@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The pipeline end to end: seeds from ephyra-postgresql, variants from the
 //! e-graph and a mutant of each, PostgreSQL's verdict on the case's data,
 //! then sqleq's tools (`ephyra_sqleq::check`).

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A consumer of the packaged crates, built by `ci/package-smoke.sh` against
 //! the `.crate` contents the way a crates.io user would see them.
 

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Near-miss pairs end to end: per seed, every anti-rule application
 //! (`ephyra_sqleq::antirules`), plain and disguised (an e-graph variant of
 //! it: sound rewrites elsewhere, so the pair differs widely in syntax and

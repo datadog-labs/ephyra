@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Stateful cases: a table and a script of statements over it. Scripts are
 //! generated against a live SQLite, so later statements use what earlier
 //! ones left behind (how many rows there are, which values they hold), and

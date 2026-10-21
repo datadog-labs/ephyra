@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Test cases for PostgreSQL: a generated database ([`Setup`]) and a
 //! sequence of SQL statements over it ([`Case`]), with the predicate
 //! [`well_formed`], the generator [`cases`] and its metrics

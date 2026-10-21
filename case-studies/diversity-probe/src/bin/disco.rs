@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Coverage found per second for k queries per database: for each setting,
 //! 120 s of databases (fresh Cases draws) with k queries each (fresh Queries
 //! draws on the final schema), each database under one oracle in turn;

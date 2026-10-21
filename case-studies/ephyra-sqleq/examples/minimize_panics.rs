@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! One minimal pair per QED panic site, from a one-step run whose panics
 //! were listed (`<run>/panics/sites.txt`, lines `site ..|pair`):
 //! `cargo run --release --example minimize_panics -- <run dir> [seconds] [threads]`.

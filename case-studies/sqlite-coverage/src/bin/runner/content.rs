@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Content hashes of the runner's sources, shared by the build script (the
 //! version the binary is built from) and [`crate::records`] (the version on
 //! disk). FNV-1a (64 bits): identities, not security.

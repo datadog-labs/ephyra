@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Relational rewrites: equalities between queries that change their
 //! shape, not one expression, applied one at a time (one-step variants, as
 //! [`crate::onestep`] makes for the expression rules). Each holds in

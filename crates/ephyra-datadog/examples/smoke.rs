@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Send a passing and a failing run to the local Datadog agent, tagged
 //! `run:<name>`, with sampled inputs logged to `<name>.jsonl`:
 //!

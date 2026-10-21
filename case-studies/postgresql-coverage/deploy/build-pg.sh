@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Build PostgreSQL master for the runner.
 #
 #     build-pg.sh [--print] [--no-fetch] [--coverage] [--ref REF]

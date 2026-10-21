@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A loop shipped in `ephyra::loops` with a seed pool policy: targeted
 //! testing with a heap that always mutates the best seed, on insertion
 //! sort with its number of moves as the score. `perf_fuzz.rs` runs the

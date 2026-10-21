@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A Datadog dashboard for what [`Datadog`](crate::Datadog) sends, laid out
 //! from the properties and features that reached Datadog.
 //!

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Build master with the fix of every open bug of known-bugs.json applied, so
 # that a run on it stops rediscovering them (PG_TARGET=fixed in runner.env).
 #

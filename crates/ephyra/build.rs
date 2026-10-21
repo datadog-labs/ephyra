@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Detects whether this build is compiled with `-C instrument-coverage`
 //! and, if so, sets `cfg(ephyra_instrumented)` so the coverage module
 //! can link against the LLVM profile runtime. Without the flag those

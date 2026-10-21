@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Entity hierarchy updates: traces of `Entities::add_entities`,
 //! `upsert_entities` and `remove_entities` calls on entities with parents and
 //! no attributes, and a model of their result.

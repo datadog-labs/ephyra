@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The coverage grid: a self-contained HTML page with every tracked
 //! function's lines, how many inputs executed each, the targets and the
 //! sampled inputs, from which a line range can be turned into a new target

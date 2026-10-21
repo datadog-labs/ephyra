@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The joint coverage score of ephyra-ada's generators: the distinct ada
 //! counters reached by running a fixed seed set from every generator
 //! (URL cases on both representations, search params, URLPattern, pattern

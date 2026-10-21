@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! One-step variants: a seed with one rule applied at one place. An
 //! unproved one-step pair names the rule sqleq cannot follow, and keeping
 //! that one application while the seed shrinks gives small pairs.

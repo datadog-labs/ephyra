@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Targeted fuzzing of rare SQLite counters, after FairFuzz, against fresh
 //! generation, at equal wall-clock time. Every input is an oracle input (a
 //! case and its queries) exercised plainly ([`exercise`]).
