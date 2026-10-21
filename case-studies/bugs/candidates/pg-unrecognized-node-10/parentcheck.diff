@@ -1,0 +1,40 @@
+diff --git a/src/backend/optimizer/util/pathnode.c b/src/backend/optimizer/util/pathnode.c
+index eba8535d3cd..319f4f9928d 100644
+--- a/src/backend/optimizer/util/pathnode.c
++++ b/src/backend/optimizer/util/pathnode.c
+@@ -627,7 +627,7 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+ 			/*
+ 			 * Delete the data pointed-to by the deleted cell, if possible
+ 			 */
+-			if (!IsA(old_path, IndexPath))
++			if (!IsA(old_path, IndexPath) && old_path->parent == parent_rel)
+ 				pfree(old_path);
+ 		}
+ 		else
+@@ -660,7 +660,7 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+ 	else
+ 	{
+ 		/* Reject and recycle the new path */
+-		if (!IsA(new_path, IndexPath))
++		if (!IsA(new_path, IndexPath) && new_path->parent == parent_rel)
+ 			pfree(new_path);
+ 	}
+ }
+@@ -863,7 +863,7 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
+ 		{
+ 			parent_rel->partial_pathlist =
+ 				foreach_delete_current(parent_rel->partial_pathlist, p1);
+-			pfree(old_path);
++			if (old_path->parent == parent_rel) pfree(old_path);
+ 		}
+ 		else
+ 		{
+@@ -895,7 +895,7 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
+ 	else
+ 	{
+ 		/* Reject and recycle the new path */
+-		pfree(new_path);
++		if (new_path->parent == parent_rel) pfree(new_path);
+ 	}
+ }
+ 

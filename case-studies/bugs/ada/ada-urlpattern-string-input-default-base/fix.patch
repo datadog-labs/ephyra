@@ -1,0 +1,63 @@
+diff --git a/include/ada/url_pattern-inl.h b/include/ada/url_pattern-inl.h
+index 8ba8124c..75924a67 100644
+--- a/include/ada/url_pattern-inl.h
++++ b/include/ada/url_pattern-inl.h
+@@ -318,7 +318,9 @@ result<bool> url_pattern<regex_provider>::test(
+   }
+ 
+   // URL string input path
+-  result<url_aggregator> base_url;
++  // Let baseURL be null. (A default-constructed result holds a value: an
++  // empty URL that relative inputs would resolve against.)
++  result<url_aggregator> base_url = tl::unexpected(errors::type_error);
+   if (base_url_string) {
+     base_url = ada::parse<url_aggregator>(*base_url_string, nullptr);
+     if (!base_url) {
+@@ -434,8 +436,9 @@ result<std::optional<url_pattern_result>> url_pattern<regex_provider>::match(
+   } else {
+     ADA_ASSERT_TRUE(std::holds_alternative<std::string_view>(input));
+ 
+-    // Let baseURL be null.
+-    result<url_aggregator> base_url;
++    // Let baseURL be null. (A default-constructed result holds a value: an
++    // empty URL that relative inputs would resolve against.)
++    result<url_aggregator> base_url = tl::unexpected(errors::type_error);
+ 
+     // If baseURLString was given, then:
+     if (base_url_string) {
+diff --git a/tests/wpt_urlpattern_tests.cpp b/tests/wpt_urlpattern_tests.cpp
+index a1d953f5..313e7e4e 100644
+--- a/tests/wpt_urlpattern_tests.cpp
++++ b/tests/wpt_urlpattern_tests.cpp
+@@ -1372,3 +1372,31 @@ TEST(wpt_urlpattern_tests, urlpattern_test_data) {
+   }
+   SUCCEED();
+ }
++
++TEST(wpt_urlpattern_tests, string_input_without_base_must_parse_alone) {
++  // A string input is parsed with the base URL string only when one is
++  // given; a relative string with no base is not a URL, so test() is false
++  // and exec() is null, whatever the pattern.
++  auto check = [](std::variant<std::string_view, ada::url_pattern_init> pattern,
++                  std::string_view input) {
++    auto p = ada::parse_url_pattern<regex_provider>(std::move(pattern));
++    ASSERT_TRUE(p);
++    auto t = p->test(input);
++    ASSERT_TRUE(t);
++    ASSERT_FALSE(*t) << input;
++    auto e = p->exec(input);
++    ASSERT_TRUE(e);
++    ASSERT_FALSE(e->has_value()) << input;
++  };
++  ada::url_pattern_init users{};
++  users.pathname = "/users/:id";
++  check(users, "/users/1");
++  ada::url_pattern_init admin{};
++  admin.pathname = "/admin/*";
++  check(admin, "/admin/x");
++  check(std::string_view("*://*"), "not a url");
++  // With a base, the same relative input matches.
++  auto p = ada::parse_url_pattern<regex_provider>(users);
++  std::string_view base = "https://example.com";
++  ASSERT_TRUE(*p->test("/users/1", &base));
++}

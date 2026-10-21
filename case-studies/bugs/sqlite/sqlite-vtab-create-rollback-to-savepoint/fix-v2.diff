@@ -1,0 +1,126 @@
+--- a/src/vtab.c
++++ b/src/vtab.c
+@@ -800,7 +800,17 @@
+   if( rc==SQLITE_OK && ALWAYS(sqlite3GetVTable(db, pTab)) ){
+     rc = growVTrans(db);
+     if( rc==SQLITE_OK ){
+-      addToVTrans(db, sqlite3GetVTable(db, pTab));
++      VTable *pVTab = sqlite3GetVTable(db, pTab);
++      const sqlite3_module *pModule = pMod->pModule;
++      int iSvpt = db->nStatement + db->nSavepoint;
++      addToVTrans(db, pVTab);
++      /* As in sqlite3VtabBegin(): open the current savepoint on the new
++      ** table, so that a ROLLBACK TO that undoes the CREATE also invokes
++      ** its xRollbackTo method. */
++      if( iSvpt && pModule->iVersion>=2 && pModule->xSavepoint ){
++        pVTab->iSavepoint = iSvpt;
++        rc = pModule->xSavepoint(pVTab->pVtab, iSvpt-1);
++      }
+     }
+   }
+ 
+--- a/test/vtab1.test
++++ b/test/vtab1.test
+@@ -1556,6 +1556,47 @@
+     SAVEPOINT c;
+     RELEASE a;
+   }
++
++  # A virtual table created within a savepoint that is not the
++  # transaction savepoint must also see a ROLLBACK TO that savepoint.
++  # At one point it did not, as sqlite3VtabCallCreate() did not invoke
++  # xSavepoint. So FTS kept the pending terms written by the INSERT
++  # below and the next SAVEPOINT or COMMIT failed with SQLITE_ERROR
++  # while trying to flush them to the rolled back shadow tables.
++  #
++  do_execsql_test 24.4.1 {
++    CREATE TABLE t6(x);
++    BEGIN;
++      INSERT INTO t6 VALUES(1);
++      SAVEPOINT a;
++        CREATE VIRTUAL TABLE t7 USING fts4(x);
++        INSERT INTO t7 VALUES('a b c');
++      ROLLBACK TO a;
++      SAVEPOINT b;
++    COMMIT;
++    SELECT * FROM t6;
++  } {1}
++  do_execsql_test 24.4.2 {
++    SELECT name FROM sqlite_schema WHERE name LIKE 't7%';
++  } {}
++  do_execsql_test 24.4.3 {
++    BEGIN;
++      INSERT INTO t6 VALUES(2);
++      SAVEPOINT a;
++        SAVEPOINT b;
++          CREATE VIRTUAL TABLE t7 USING fts3(x);
++          INSERT INTO t7 VALUES('a b c');
++        RELEASE b;
++      ROLLBACK TO a;
++      CREATE VIRTUAL TABLE t7 USING fts4(x);
++      INSERT INTO t7 VALUES('d e f');
++    COMMIT;
++    SELECT * FROM t6;
++    SELECT * FROM t7 WHERE t7 MATCH 'b OR e';
++  } {1 2 {d e f}}
++  do_execsql_test 24.4.4 {
++    INSERT INTO t7(t7) VALUES('integrity-check');
++  } {}
+ }
+ 
+ # 2021-07-04 https://sqlite.org/forum/forumpost/16ca0e9f32
+--- a/ext/fts5/test/fts5savepoint.test
++++ b/ext/fts5/test/fts5savepoint.test
+@@ -81,5 +81,52 @@
+   }
+ }
+ 
++#-------------------------------------------------------------------------
++# Check that a ROLLBACK TO that undoes a CREATE VIRTUAL TABLE also
++# discards the pending terms of the new table, even if the savepoint
++# is not the transaction savepoint.
++#
++reset_db
++do_execsql_test 4.0 {
++  CREATE TABLE t1(a);
++}
++do_execsql_test 4.1 {
++  BEGIN;
++    INSERT INTO t1 VALUES(1);
++    SAVEPOINT one;
++      CREATE VIRTUAL TABLE ft USING fts5(x);
++      INSERT INTO ft VALUES('a');
++    ROLLBACK TO one;
++    SAVEPOINT two;
++  COMMIT;
++  SELECT * FROM t1;
++} {1}
++do_execsql_test 4.2 {
++  SELECT name FROM sqlite_schema;
++} {t1}
++do_execsql_test 4.3 {
++  BEGIN;
++    SAVEPOINT one;
++      SAVEPOINT two;
++        CREATE VIRTUAL TABLE ft USING fts5(x);
++        INSERT INTO ft VALUES('a');
++      RELEASE two;
++    ROLLBACK TO one;
++    CREATE VIRTUAL TABLE ft USING fts5(x);
++    INSERT INTO ft VALUES('b');
++    SAVEPOINT three;
++      INSERT INTO ft VALUES('c');
++    ROLLBACK TO three;
++    INSERT INTO ft VALUES('d');
++  COMMIT;
++  SELECT * FROM ft;
++} {b d}
++do_execsql_test 4.4 {
++  SELECT rowid FROM ft('a OR c');
++} {}
++do_execsql_test 4.5 {
++  INSERT INTO ft(ft) VALUES('integrity-check');
++}
++
+ finish_test
+ 

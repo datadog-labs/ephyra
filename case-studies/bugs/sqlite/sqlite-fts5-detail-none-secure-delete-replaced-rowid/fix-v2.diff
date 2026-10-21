@@ -1,0 +1,35 @@
+--- a/ext/fts5/fts5_index.c
++++ b/ext/fts5/fts5_index.c
+@@ -5295,8 +5295,10 @@
+   **     + the rowid or delta rowid value for the entry, and
+   **     + the size of the position list in bytes.
+   **
+-  ** Or, in detail=none mode, there is a single varint prior to 
+-  ** pSeg->iLeafOffset - the rowid or delta rowid value.
++  ** Or, in detail=none mode, the rowid or delta rowid value for the
++  ** entry is followed by zero, one or two 0x00 flag bytes, and
++  ** pSeg->iLeafOffset is the offset following the flag bytes. There is
++  ** one flag byte if pSeg->bDel is set, two if pSeg->nPos is also set.
+   **
+   ** This block sets the following variables:
+   **
+@@ -5331,7 +5333,9 @@
+     assert_nc( iSOP<=pSeg->iLeafOffset );
+ 
+     if( bDetailNone ){
+-      while( iSOP<pSeg->iLeafOffset ){
++      /* Offset of the first byte following the rowid varint */
++      const int iEnd = pSeg->iLeafOffset - (pSeg->bDel ? 1+pSeg->nPos : 0);
++      while( iSOP<iEnd ){
+         if( aPg[iSOP]==0x00 ) iSOP++;
+         if( aPg[iSOP]==0x00 ) iSOP++;
+         iStart = iSOP;
+@@ -5396,7 +5400,7 @@
+ 
+   if( pSeg->bDel ){
+     iOff += sqlite3Fts5PutVarint(&aPg[iOff], iDelta);
+-    aPg[iOff++] = 0x01;
++    aPg[iOff++] = (bDetailNone ? 0x00 : 0x01);
+   }else if( bLastInDoclist==0 ){
+     if( iNextOff!=iPgIdx ){
+       u64 iNextDelta = 0;

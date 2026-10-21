@@ -1,0 +1,275 @@
+diff --git a/src/backend/executor/execParallel.c b/src/backend/executor/execParallel.c
+index 316dd3f67c6..cc6964f8829 100644
+--- a/src/backend/executor/execParallel.c
++++ b/src/backend/executor/execParallel.c
+@@ -120,6 +120,7 @@ typedef struct ExecParallelEstimateContext
+ {
+ 	ParallelContext *pcxt;
+ 	int			nnodes;
++	Bitmapset  *seen;			/* plan_node_ids already visited */
+ } ExecParallelEstimateContext;
+ 
+ /* Context object for ExecParallelInitializeDSM. */
+@@ -128,8 +129,19 @@ typedef struct ExecParallelInitializeDSMContext
+ 	ParallelContext *pcxt;
+ 	SharedExecutorInstrumentation *instrumentation;
+ 	int			nnodes;
++	Bitmapset  *seen;			/* plan_node_ids already visited */
+ } ExecParallelInitializeDSMContext;
+ 
++/*
++ * Context object for ExecParallelRetrieveInstrumentation and
++ * ExecParallelReportInstrumentation.
++ */
++typedef struct ExecParallelInstrumentationContext
++{
++	SharedExecutorInstrumentation *instrumentation;
++	Bitmapset  *seen;			/* plan_node_ids already visited */
++} ExecParallelInstrumentationContext;
++
+ /* Helper functions that run in the parallel leader. */
+ static char *ExecSerializePlan(Plan *plan, EState *estate);
+ static bool ExecParallelEstimate(PlanState *planstate,
+@@ -141,11 +153,31 @@ static shm_mq_handle **ExecParallelSetupTupleQueues(ParallelContext *pcxt,
+ static bool ExecParallelReInitializeDSM(PlanState *planstate,
+ 										ParallelContext *pcxt);
+ static bool ExecParallelRetrieveInstrumentation(PlanState *planstate,
+-												SharedExecutorInstrumentation *instrumentation);
++												ExecParallelInstrumentationContext *c);
++static bool ExecParallelNodeSeen(PlanState *planstate, Bitmapset **seen);
+ 
+ /* Helper function that runs in the parallel worker. */
+ static DestReceiver *ExecParallelGetReceiver(dsm_segment *seg, shm_toc *toc);
+ 
++/*
++ * A SubPlan referenced from more than one place in the plan tree (for
++ * instance, a qual copied to each child of an Append) has a single PlanState,
++ * which planstate_tree_walker() visits once per reference.  Walkers that set
++ * up per-node shared memory or accumulate per-node instrumentation must
++ * process such a subtree only once.  Returns true if this node was already
++ * visited, otherwise remembers it and returns false.
++ */
++static bool
++ExecParallelNodeSeen(PlanState *planstate, Bitmapset **seen)
++{
++	int			plan_node_id = planstate->plan->plan_node_id;
++
++	if (bms_is_member(plan_node_id, *seen))
++		return true;
++	*seen = bms_add_member(*seen, plan_node_id);
++	return false;
++}
++
+ /*
+  * Create a serialized representation of the plan to be sent to each worker.
+  */
+@@ -249,6 +281,9 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
+ 	if (planstate == NULL)
+ 		return false;
+ 
++	if (ExecParallelNodeSeen(planstate, &e->seen))
++		return false;
++
+ 	/* Count this node. */
+ 	e->nnodes++;
+ 
+@@ -488,6 +523,9 @@ ExecParallelInitializeDSM(PlanState *planstate,
+ 	if (planstate == NULL)
+ 		return false;
+ 
++	if (ExecParallelNodeSeen(planstate, &d->seen))
++		return false;
++
+ 	/* If instrumentation is enabled, initialize slot for this node. */
+ 	if (d->instrumentation != NULL)
+ 		d->instrumentation->plan_node_id[d->nnodes] =
+@@ -763,7 +801,9 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
+ 	 */
+ 	e.pcxt = pcxt;
+ 	e.nnodes = 0;
++	e.seen = NULL;
+ 	ExecParallelEstimate(planstate, &e);
++	bms_free(e.seen);
+ 
+ 	/* Estimate space for instrumentation, if required. */
+ 	if (estate->es_instrument)
+@@ -925,11 +965,13 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
+ 	d.pcxt = pcxt;
+ 	d.instrumentation = instrumentation;
+ 	d.nnodes = 0;
++	d.seen = NULL;
+ 
+ 	/* Install our DSA area while initializing the plan. */
+ 	estate->es_query_dsa = pei->area;
+ 	ExecParallelInitializeDSM(planstate, &d);
+ 	estate->es_query_dsa = NULL;
++	bms_free(d.seen);
+ 
+ 	/*
+ 	 * Make sure that the world hasn't shifted under our feet.  This could
+@@ -1100,8 +1142,9 @@ ExecParallelReInitializeDSM(PlanState *planstate,
+  */
+ static bool
+ ExecParallelRetrieveInstrumentation(PlanState *planstate,
+-									SharedExecutorInstrumentation *instrumentation)
++									ExecParallelInstrumentationContext *c)
+ {
++	SharedExecutorInstrumentation *instrumentation = c->instrumentation;
+ 	NodeInstrumentation *instrument;
+ 	int			i;
+ 	int			n;
+@@ -1109,6 +1152,9 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
+ 	int			plan_node_id = planstate->plan->plan_node_id;
+ 	MemoryContext oldcontext;
+ 
++	if (ExecParallelNodeSeen(planstate, &c->seen))
++		return false;
++
+ 	/* Find the instrumentation for this node. */
+ 	for (i = 0; i < instrumentation->num_plan_nodes; ++i)
+ 		if (instrumentation->plan_node_id[i] == plan_node_id)
+@@ -1182,7 +1228,7 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
+ 	}
+ 
+ 	return planstate_tree_walker(planstate, ExecParallelRetrieveInstrumentation,
+-								 instrumentation);
++								 c);
+ }
+ 
+ /*
+@@ -1286,8 +1332,14 @@ ExecParallelCleanup(ParallelExecutorInfo *pei)
+ {
+ 	/* Accumulate instrumentation, if any. */
+ 	if (pei->instrumentation)
+-		ExecParallelRetrieveInstrumentation(pei->planstate,
+-											pei->instrumentation);
++	{
++		ExecParallelInstrumentationContext c;
++
++		c.instrumentation = pei->instrumentation;
++		c.seen = NULL;
++		ExecParallelRetrieveInstrumentation(pei->planstate, &c);
++		bms_free(c.seen);
++	}
+ 
+ 	/* Accumulate JIT instrumentation, if any. */
+ 	if (pei->jit_instrumentation)
+@@ -1367,12 +1419,16 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
+  */
+ static bool
+ ExecParallelReportInstrumentation(PlanState *planstate,
+-								  SharedExecutorInstrumentation *instrumentation)
++								  ExecParallelInstrumentationContext *c)
+ {
++	SharedExecutorInstrumentation *instrumentation = c->instrumentation;
+ 	int			i;
+ 	int			plan_node_id = planstate->plan->plan_node_id;
+ 	NodeInstrumentation *instrument;
+ 
++	if (ExecParallelNodeSeen(planstate, &c->seen))
++		return false;
++
+ 	InstrEndLoop(planstate->instrument);
+ 
+ 	/*
+@@ -1398,7 +1454,7 @@ ExecParallelReportInstrumentation(PlanState *planstate,
+ 	InstrAggNode(&instrument[ParallelWorkerNumber], planstate->instrument);
+ 
+ 	return planstate_tree_walker(planstate, ExecParallelReportInstrumentation,
+-								 instrumentation);
++								 c);
+ }
+ 
+ /*
+@@ -1610,8 +1666,14 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
+ 
+ 	/* Report instrumentation data if any instrumentation options are set. */
+ 	if (instrumentation != NULL)
+-		ExecParallelReportInstrumentation(queryDesc->planstate,
+-										  instrumentation);
++	{
++		ExecParallelInstrumentationContext c;
++
++		c.instrumentation = instrumentation;
++		c.seen = NULL;
++		ExecParallelReportInstrumentation(queryDesc->planstate, &c);
++		bms_free(c.seen);
++	}
+ 
+ 	/* Report JIT instrumentation data if any */
+ 	if (queryDesc->estate->es_jit && jit_instrumentation != NULL)
+diff --git a/src/test/regress/expected/partition_prune.out b/src/test/regress/expected/partition_prune.out
+index 3506ecec477..879c8b09f6e 100644
+--- a/src/test/regress/expected/partition_prune.out
++++ b/src/test/regress/expected/partition_prune.out
+@@ -2868,6 +2868,49 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on
+                                  Index Cond: (a = a.a)
+ (28 rows)
+ 
++-- A SubPlan referenced by several children of a Parallel Append has a
++-- single PlanState; make sure its per-node shared state is set up only once.
++create table ps_shared (a int) partition by list (a);
++create table ps_shared1 partition of ps_shared for values in (1);
++create table ps_shared2 partition of ps_shared for values in (2);
++create table ps_shared_s (b int) with (parallel_workers = 0);
++select explain_parallel_append('select * from ps_shared where a not in (select 1 from ps_shared_s s1, ps_shared_s s2)');
++                              explain_parallel_append                              
++-----------------------------------------------------------------------------------
++ Gather (actual rows=N loops=N)
++   Workers Planned: 2
++   Workers Launched: N
++   ->  Parallel Append (actual rows=N loops=N)
++         ->  Parallel Seq Scan on ps_shared1 ps_shared_1 (actual rows=N loops=N)
++               Filter: (NOT (ANY (a = (SubPlan any_1).col1)))
++               SubPlan any_1
++                 ->  Materialize (never executed)
++                       ->  Nested Loop (never executed)
++                             ->  Seq Scan on ps_shared_s s1 (never executed)
++                             ->  Materialize (never executed)
++                                   ->  Seq Scan on ps_shared_s s2 (never executed)
++         ->  Parallel Seq Scan on ps_shared2 ps_shared_2 (actual rows=N loops=N)
++               Filter: (NOT (ANY (a = (SubPlan any_1).col1)))
++(14 rows)
++
++select explain_parallel_append('select * from ps_shared where a > all (select b from ps_shared_s order by b, b + 1)');
++                             explain_parallel_append                             
++---------------------------------------------------------------------------------
++ Gather (actual rows=N loops=N)
++   Workers Planned: 2
++   Workers Launched: N
++   ->  Parallel Append (actual rows=N loops=N)
++         ->  Parallel Seq Scan on ps_shared1 ps_shared_1 (actual rows=N loops=N)
++               Filter: (ALL (a > (SubPlan all_1).col1))
++               SubPlan all_1
++                 ->  Sort (never executed)
++                       Sort Key: ps_shared_s.b, ((ps_shared_s.b + 1))
++                       ->  Seq Scan on ps_shared_s (never executed)
++         ->  Parallel Seq Scan on ps_shared2 ps_shared_2 (actual rows=N loops=N)
++               Filter: (ALL (a > (SubPlan all_1).col1))
++(12 rows)
++
++drop table ps_shared, ps_shared_s;
+ reset enable_hashjoin;
+ reset enable_mergejoin;
+ reset enable_memoize;
+diff --git a/src/test/regress/sql/partition_prune.sql b/src/test/regress/sql/partition_prune.sql
+index d6e096dc565..1480c3de975 100644
+--- a/src/test/regress/sql/partition_prune.sql
++++ b/src/test/regress/sql/partition_prune.sql
+@@ -753,6 +753,16 @@ delete from lprt_a where a = 1;
+ 
+ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 0)');
+ 
++-- A SubPlan referenced by several children of a Parallel Append has a
++-- single PlanState; make sure its per-node shared state is set up only once.
++create table ps_shared (a int) partition by list (a);
++create table ps_shared1 partition of ps_shared for values in (1);
++create table ps_shared2 partition of ps_shared for values in (2);
++create table ps_shared_s (b int) with (parallel_workers = 0);
++select explain_parallel_append('select * from ps_shared where a not in (select 1 from ps_shared_s s1, ps_shared_s s2)');
++select explain_parallel_append('select * from ps_shared where a > all (select b from ps_shared_s order by b, b + 1)');
++drop table ps_shared, ps_shared_s;
++
+ reset enable_hashjoin;
+ reset enable_mergejoin;
+ reset enable_memoize;

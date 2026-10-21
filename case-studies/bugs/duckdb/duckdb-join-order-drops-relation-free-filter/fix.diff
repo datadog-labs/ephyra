@@ -1,0 +1,112 @@
+diff --git a/src/include/duckdb/optimizer/join_order/query_graph_manager.hpp b/src/include/duckdb/optimizer/join_order/query_graph_manager.hpp
+index 55129f1560..eaf5a40dfa 100644
+--- a/src/include/duckdb/optimizer/join_order/query_graph_manager.hpp
++++ b/src/include/duckdb/optimizer/join_order/query_graph_manager.hpp
+@@ -94,6 +94,7 @@ private:
+ 	//! used by the cardinality estimator to estimate distinct counts
+ 	vector<unique_ptr<FilterInfo>> filters_and_bindings;
+ 	vector<unique_ptr<JoinOrderOperator>> join_operators;
++	vector<unique_ptr<Expression>> root_filters;
+ 	unordered_set<idx_t> operator_costing_predicates;
+ 	unordered_set<idx_t> reconstructed_operators;
+ 	vector<idx_t> inner_companion_roots;
+diff --git a/src/include/duckdb/optimizer/join_order/relation_manager.hpp b/src/include/duckdb/optimizer/join_order/relation_manager.hpp
+index 1aa886b9d4..6072e60f60 100644
+--- a/src/include/duckdb/optimizer/join_order/relation_manager.hpp
++++ b/src/include/duckdb/optimizer/join_order/relation_manager.hpp
+@@ -28,6 +28,8 @@ class FilterInfo;
+ struct JoinOrderExtraction {
+ 	vector<unique_ptr<FilterInfo>> filters;
+ 	vector<unique_ptr<JoinOrderOperator>> join_operators;
++	//! Filters that reference no relation and must be applied on top of the reordered plan
++	vector<unique_ptr<Expression>> root_filters;
+ };
+ 
+ //! Represents a single relation and any metadata accompanying that relation
+diff --git a/src/optimizer/join_order/query_graph_manager.cpp b/src/optimizer/join_order/query_graph_manager.cpp
+index 7f91cf7005..09e46c20c7 100644
+--- a/src/optimizer/join_order/query_graph_manager.cpp
++++ b/src/optimizer/join_order/query_graph_manager.cpp
+@@ -229,6 +229,7 @@ bool QueryGraphManager::Build(JoinOrderOptimizer &optimizer, LogicalOperator &op
+ 	auto extraction = relation_manager.ExtractEdges(op, filter_operators, set_manager);
+ 	filters_and_bindings = std::move(extraction.filters);
+ 	join_operators = std::move(extraction.join_operators);
++	root_filters = std::move(extraction.root_filters);
+ 	JoinOrderConflictDetector::Build(join_operators, set_manager, relation_manager.relation_mapping);
+ 	for (auto &join_operator : join_operators) {
+ 		if (!JoinOrderConflictDetector::MustApplyAsOperator(*join_operator)) {
+@@ -537,6 +538,10 @@ unique_ptr<LogicalOperator> QueryGraphManager::Reconstruct(unique_ptr<LogicalOpe
+ 			join_tree.op = PushFilter(std::move(join_tree.op), std::move(filter->filter));
+ 		}
+ 	}
++	for (auto &filter : root_filters) {
++		join_tree.op = PushFilter(std::move(join_tree.op), std::move(filter));
++	}
++	root_filters.clear();
+ 
+ 	// find the first join in the relation to know where to place this node
+ 	if (root_is_join) {
+diff --git a/src/optimizer/join_order/relation_manager.cpp b/src/optimizer/join_order/relation_manager.cpp
+index 8b6139caea..44df564854 100644
+--- a/src/optimizer/join_order/relation_manager.cpp
++++ b/src/optimizer/join_order/relation_manager.cpp
+@@ -866,6 +866,11 @@ JoinOrderExtraction RelationManager::ExtractEdges(LogicalOperator &op,
+ 	reference_map_t<LogicalOperator, vector<idx_t>> operator_predicates;
+ 	reference_map_t<LogicalOperator, vector<JoinCondition>> operator_conditions;
+ 	expression_set_t filter_set;
++	// operators above the root join are kept as-is during reconstruction
++	reference_set_t<LogicalOperator> root_operators;
++	for (auto root_op = &op; root_op->children.size() == 1; root_op = root_op->children[0].get()) {
++		root_operators.insert(*root_op);
++	}
+ 	auto normalize_conditions = [&](LogicalComparisonJoin &join, const column_binding_set_t &semantic_left_bindings,
+ 	                                const column_binding_set_t &semantic_right_bindings) {
+ 		vector<JoinCondition> result;
+@@ -1063,6 +1068,10 @@ JoinOrderExtraction RelationManager::ExtractEdges(LogicalOperator &op,
+ 					if (bindings.empty()) {
+ 						// the filter is on a column that is not in our relational map. (example: limit_rownum)
+ 						// in this case we do not create a FilterInfo for it. (duckdb-internal/#1493)
++						if (!root_operators.count(f_op) && !HasNonReorderableChild(f_op)) {
++							// the filter operator is dropped during reconstruction, re-apply it at the root
++							result.root_filters.push_back(expression->Copy());
++						}
+ 						continue;
+ 					}
+ 					auto &set = set_manager.GetJoinRelation(bindings);
+diff --git a/test/optimizer/joins/join_order_constant_filter.test b/test/optimizer/joins/join_order_constant_filter.test
+new file mode 100644
+index 0000000000..1bb145d29f
+--- /dev/null
++++ b/test/optimizer/joins/join_order_constant_filter.test
+@@ -0,0 +1,31 @@
++# name: test/optimizer/joins/join_order_constant_filter.test
++# description: Filters that reference no relation must survive join reordering
++# group: [joins]
++
++statement ok
++CREATE TABLE t0(c0 INTEGER);
++
++statement ok
++INSERT INTO t0 VALUES (1);
++
++statement ok
++SET disabled_optimizers='filter_pushdown';
++
++query II
++SELECT (SELECT 1), (SELECT 2) FROM t0 WHERE NULL;
++----
++
++query I
++SELECT count(*) FROM (SELECT (SELECT 1), (SELECT 2) FROM t0 WHERE random() > 2);
++----
++0
++
++query II
++SELECT min((SELECT 0 FROM t0)), count((SELECT 0 FROM t0)) FROM t0 JOIN t0 AS x2 ON CAST(NULL AS BOOLEAN);
++----
++NULL	0
++
++query II
++SELECT (SELECT 1), (SELECT 2) FROM t0 WHERE true;
++----
++1	2

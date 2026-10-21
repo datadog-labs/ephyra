@@ -1,0 +1,158 @@
+diff -ruN a/ext/fts5/test/fts5constprop.test b/ext/fts5/test/fts5constprop.test
+--- a/ext/fts5/test/fts5constprop.test	1969-12-31 19:00:00
++++ b/ext/fts5/test/fts5constprop.test	2026-10-20 12:51:35
+@@ -0,0 +1,101 @@
++# 2026 October 20
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++#*************************************************************************
++# This file implements regression tests for SQLite library.  The
++# focus of this script is the interaction between the WHERE-clause
++# constant propagation optimization and the "<tbl> = 'query'" and
++# "rank = 'func(...)'" forms of FTS5 queries.  An "=" constraint on
++# either hidden column is consumed by xBestIndex and does not mean that
++# the column holds the constant, so the constant must not be substituted
++# for other references to the column.
++#
++
++source [file join [file dirname [info script]] fts5_common.tcl]
++set testprefix fts5constprop
++
++# If SQLITE_ENABLE_FTS5 is not defined, omit this file.
++return_if_no_fts5
++
++do_execsql_test 1.0 {
++  CREATE VIRTUAL TABLE ft USING fts5(a);
++  INSERT INTO ft(rowid, a) VALUES (1, 'one apple'), (2, 'apple pie');
++}
++
++# Auxiliary functions in the WHERE clause.  These used to fail with
++# "no such cursor: 0".
++#
++do_execsql_test 1.1 {
++  SELECT rowid FROM ft
++   WHERE ft = 'apple' AND snippet(ft, 0, '[', ']', '..', 4) IS NOT NULL;
++} {1 2}
++do_execsql_test 1.2 {
++  SELECT rowid FROM ft WHERE ft = 'apple' AND bm25(ft) < 0;
++} {1 2}
++do_execsql_test 1.3 {
++  SELECT rowid FROM ft
++   WHERE ft = 'apple' AND highlight(ft, 0, '[', ']') LIKE '%pie%';
++} {2}
++
++# Two "=" full-text constraints.  The second used to become 'apple'='pie'.
++#
++do_execsql_test 1.4 {
++  SELECT rowid FROM ft WHERE ft = 'apple' AND ft = 'pie';
++} {2}
++do_execsql_test 1.5 {
++  SELECT rowid FROM ft WHERE 'apple' = ft AND ft = 'one';
++} {1}
++
++# "rank = 'func()'" together with another reference to rank.
++#
++do_execsql_test 1.6 {
++  SELECT rowid FROM ft
++   WHERE ft MATCH 'apple' AND rank = 'bm25(10.0)' AND rank < 0;
++} {1 2}
++do_execsql_test 1.7 {
++  SELECT rowid FROM ft
++   WHERE ft = 'apple' AND rank = 'bm25(10.0)' AND rank < 0 ORDER BY rowid;
++} {1 2}
++
++# A flattened subquery joined with itself.  This used to fail with
++# "unable to use function MATCH in the requested context".
++#
++do_execsql_test 1.8 {
++  WITH c AS (SELECT rowid AS r FROM ft WHERE ft = 'apple' AND ft MATCH 'pie')
++  SELECT * FROM c AS x JOIN c AS y ON x.r = y.r;
++} {2 2}
++
++# A join with an ordinary table.
++#
++do_execsql_test 1.9 {
++  CREATE TABLE t1(x INTEGER PRIMARY KEY, y);
++  INSERT INTO t1 VALUES(1, 'one'), (2, 'two');
++  SELECT t1.y FROM ft, t1
++   WHERE ft = 'pie' AND t1.x = ft.rowid AND bm25(ft) < 0;
++} {two}
++
++# The equivalent MATCH and table-valued function forms, and constant
++# propagation on an ordinary FTS5 column, which is still done.
++#
++do_execsql_test 2.1 {
++  SELECT rowid FROM ft
++   WHERE ft MATCH 'apple' AND snippet(ft, 0, '[', ']', '..', 4) IS NOT NULL;
++} {1 2}
++do_execsql_test 2.2 {
++  SELECT rowid FROM ft('apple') WHERE bm25(ft) < 0;
++} {1 2}
++do_execsql_test 2.3 {
++  SELECT rowid FROM ft WHERE a = 'apple pie' AND length(a) = 9;
++} {2}
++do_execsql_test 2.4 {
++  SELECT t1.y FROM ft, t1 WHERE ft.a = 'one apple' AND t1.y = 'one'
++     AND t1.x = ft.rowid;
++} {one}
++
++finish_test
+diff -ruN a/src/select.c b/src/select.c
+--- a/src/select.c	2026-10-20 12:51:35
++++ b/src/select.c	2026-10-20 12:52:03
+@@ -4844,6 +4844,8 @@
+ **
+ **    *   Do not add if pValue is a function that might return a subtype
+ **
++**    *   Do not add if pColumn is a HIDDEN column of a virtual table
++**
+ ** The caller guarantees the pColumn is a column.
+ */
+ static void constInsert(
+@@ -4856,6 +4858,12 @@
+   assert( pColumn->op==TK_COLUMN );
+   assert( sqlite3ExprIsConstant(pConst->pParse, pValue) );
+   if( ExprHasProperty(pColumn, EP_FixedCol) ) return;
++  if( ExprIsVtab(pColumn)
++   && pColumn->iColumn>=0
++   && IsHiddenColumn(&pColumn->y.pTab->aCol[pColumn->iColumn])
++  ){
++    return;
++  }
+   if( sqlite3ExprAffinity(pValue)!=0 ) return;
+   if( !sqlite3IsBinary(sqlite3ExprCompareCollSeq(pConst->pParse,pExpr)) ){
+     return;
+diff -ruN a/test/whereL.test b/test/whereL.test
+--- a/test/whereL.test	2026-10-20 12:51:35
++++ b/test/whereL.test	2026-10-20 12:51:35
+@@ -294,4 +294,24 @@
+     LEFT JOIN t1 ON ((subQuery.col_0) == (false)) WHERE t1.c0;
+ } {0.0 {} 1 0.0 {} 1}
+ 
++# 2026-10-20: Constants are not propagated from an "=" constraint on a
++# HIDDEN column of a virtual table, which the virtual table might take
++# as something other than an equality test (as FTS5 does).  They are
++# still propagated from other virtual table columns.  In 1000, "a" is
++# fixed at 19 so qpvtab sees a usable "b=" constraint.  In 1010, "flags"
++# (HIDDEN) is not fixed, so SQLite tests "b=flags" itself and, as column
++# b holds 'b', no row matches.
++#
++ifcapable vtab {
++  load_static_extension db qpvtab
++  do_execsql_test 1000 {
++    SELECT cn, op, ux FROM qpvtab
++     WHERE vn='aConstraint' AND a=19 AND b=a;
++  } {vn 2 1 a 2 1 b 2 1}
++  do_execsql_test 1010 {
++    SELECT count(*) FROM qpvtab
++     WHERE vn='aConstraint' AND flags=0 AND b=flags;
++  } {0}
++}
++
+ finish_test

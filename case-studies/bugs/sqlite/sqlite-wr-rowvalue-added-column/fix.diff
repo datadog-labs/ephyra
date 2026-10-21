@@ -1,0 +1,20 @@
+--- a/src/where.c
++++ b/src/where.c
+@@ -3157,9 +3157,16 @@
+   WhereTerm *pTerm     /* The vector inequality constraint */
+ ){
+   int nCmp = sqlite3ExprVectorSize(pTerm->pExpr->pLeft);
++  int nCol = pIdx->nColumn;
+   int i;
+ 
+-  nCmp = MIN(nCmp, (pIdx->nColumn - nEq));
++  /* If this is the PK of a WITHOUT ROWID table, do not use any field
++  ** past nKeyCol. If ALTER TABLE has been used to add columns to the
++  ** table, those fields may not be present in all records.  */
++  if( IsPrimaryKeyIndex(pIdx) && !HasRowid(pIdx->pTable) ){
++    nCol = pIdx->nKeyCol;
++  }
++  nCmp = MIN(nCmp, (nCol - nEq));
+   for(i=1; i<nCmp; i++){
+     /* Test if comparison i of pTerm is compatible with column (i+nEq)
+     ** of the index. If not, exit the loop.  */

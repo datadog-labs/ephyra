@@ -1,0 +1,10 @@
+PRAGMA encoding = 'UTF-16le';
+CREATE TABLE t(n, c);
+CREATE INDEX i ON t(c);
+INSERT INTO t VALUES (1000, char(0xFEFF) || printf('%.*c', 1000, 'a'));
+INSERT INTO t VALUES (5000, char(0xFEFF) || printf('%.*c', 5000, 'a'));
+SELECT n, length(c), unicode(c) FROM t NOT INDEXED;
+SELECT n, length(c), unicode(c) FROM t INDEXED BY i;
+PRAGMA integrity_check;
+UPDATE t SET n = n + 1;
+SELECT n, length(c) FROM t INDEXED BY i;

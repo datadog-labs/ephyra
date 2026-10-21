@@ -1,0 +1,93 @@
+--- a/ext/fts5/fts5_storage.c
++++ b/ext/fts5/fts5_storage.c
+@@ -377,7 +377,7 @@
+           sqlite3_str_appendf(pDefn, ", c%d", i);
+         }
+       }
+-      if( pConfig->bLocale ){
++      if( pConfig->bLocale && pConfig->eContent==FTS5_CONTENT_NORMAL ){
+         for(i=0; i<pConfig->nCol; i++){
+           if( pConfig->abUnindexed[i]==0 ){
+             sqlite3_str_appendf(pDefn, ", l%d", i);
+--- a/ext/fts5/test/fts5unindexed2.test
++++ b/ext/fts5/test/fts5unindexed2.test
+@@ -291,7 +291,79 @@
+   100 {} b1.1 c1.1 {}
+   200 {} b2.1 c2 {}
+   300 {} b3 c3.1 {}
++}
++
++#-------------------------------------------------------------------------
++# Test that rows may be written to a contentless_unindexed=1 table that
++# has an UNINDEXED column and is created with locale=1.
++#
++reset_db
++do_execsql_test 7.0 {
++  CREATE VIRTUAL TABLE ft1 USING fts5(a, b UNINDEXED, c,
++      locale=1, contentless_unindexed=1, content='', contentless_delete=1
++  );
++}
++
++do_execsql_test 7.1 {
++  INSERT INTO ft1(rowid, a, b, c) VALUES (4, 'p q', 'r', 's');
++  SELECT rowid, a, b, c FROM ft1;
++} {4 {} r {}}
++
++do_execsql_test 7.2 {
++  INSERT INTO ft1(rowid, a, b, c) VALUES (
++      5, fts5_locale('en', 'x y'), fts5_locale('de', 'b5'), 'z'
++  );
++  SELECT rowid, b FROM ft1('y');
++} {5 b5}
++
++do_execsql_test 7.3 {
++  UPDATE ft1 SET b='r2' WHERE rowid=4;
++  SELECT rowid, b FROM ft1('p');
++} {4 r2}
++
++do_execsql_test 7.4 {
++  DELETE FROM ft1 WHERE rowid=5;
++  SELECT rowid, b FROM ft1;
++} {4 r2}
++
++do_execsql_test 7.5 {
++  INSERT INTO ft1(ft1) VALUES('integrity-check');
+ }
+ 
++do_execsql_test 7.6 {
++  SELECT sql FROM sqlite_schema WHERE name='ft1_content';
++} {{CREATE TABLE 'ft1_content'(id INTEGER PRIMARY KEY, c1)}}
++
++do_execsql_test 7.7 {
++  INSERT INTO ft1(rowid, a, b, c) VALUES (
++      6, fts5_locale('en', 'x y'), fts5_locale('de', 'b6'), 'z'
++  );
++  SELECT rowid, b, fts5_get_locale(ft1, 0), fts5_get_locale(ft1, 1)
++  FROM ft1('x');
++} {6 b6 {} {}}
++
++#-------------------------------------------------------------------------
++# As above, but without contentless_delete=1, using the 'delete' command.
++#
++reset_db
++do_execsql_test 8.0 {
++  CREATE VIRTUAL TABLE ft1 USING fts5(a, b UNINDEXED,
++      locale=1, contentless_unindexed=1, content=''
++  );
++  INSERT INTO ft1(rowid, a, b) VALUES (4, 'p q', 'r');
++  INSERT INTO ft1(rowid, a, b) VALUES (5, fts5_locale('en', 'x y'), 's');
++  SELECT rowid, a, b FROM ft1;
++} {4 {} r 5 {} s}
++
++do_execsql_test 8.1 {
++  INSERT INTO ft1(ft1, rowid, a, b) VALUES('delete', 5, 'x y', 's');
++  SELECT rowid, b FROM ft1;
++} {4 r}
++
++do_execsql_test 8.2 {
++  SELECT rowid, b FROM ft1('q');
++  INSERT INTO ft1(ft1) VALUES('integrity-check');
++} {4 r}
++
+ finish_test
+ 

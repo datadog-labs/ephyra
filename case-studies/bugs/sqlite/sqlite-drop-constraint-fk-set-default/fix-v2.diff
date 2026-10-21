@@ -1,0 +1,24 @@
+--- a/src/alter.c
++++ b/src/alter.c
+@@ -2481,6 +2481,21 @@
+   */
+   while( 1 ){
+     int n = getConstraintToken(&z[iOff], &t);
++    if( eTok==TK_REFERENCES && (t==TK_SET || t==TK_NOT || t==TK_MATCH) ){
++      /* Within a foreign key constraint, "SET DEFAULT", "NOT DEFERRABLE"
++      ** and "MATCH name" are each consumed as a unit. Otherwise the
++      ** DEFAULT, the NOT, or a name that is the fallback token GENERATED
++      ** would be taken for the start of the next constraint.  */
++      int t2 = 0;
++      int n2 = getConstraintToken(&z[iOff+n], &t2);
++      if( t==TK_MATCH
++       || (t==TK_SET && t2==TK_DEFAULT)
++       || (t==TK_NOT && t2==TK_DEFERRABLE)
++      ){
++        iOff += n + n2;
++        continue;
++      }
++    }
+     if( t==TK_CONSTRAINT || t==TK_PRIMARY || t==TK_NOT || t==TK_UNIQUE
+      || t==TK_CHECK || t==TK_DEFAULT || t==TK_COLLATE || t==TK_REFERENCES
+      || t==TK_FOREIGN || t==TK_RP || t==TK_COMMA || t==TK_ILLEGAL

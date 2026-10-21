@@ -1,0 +1,106 @@
+--- a/ext/fts5/fts5_vocab.c
++++ b/ext/fts5/fts5_vocab.c
+@@ -51,6 +51,7 @@
+   Fts5Global *pGlobal;            /* FTS5 global object for this database */
+   int eType;                      /* FTS5_VOCAB_COL, ROW or INSTANCE */
+   unsigned bBusy;                 /* True if busy */
++  int bUtf8;                      /* True if db text encoding is UTF-8 */
+ };
+ 
+ struct Fts5VocabCursor {
+@@ -149,6 +150,28 @@
+ }
+ 
+ /*
++** Return true if the text encoding of database connection db is UTF-8.
++** Terms are stored in the FTS5 index in UTF-8 byte order. This matches
++** the order of the BINARY collation only if the database text encoding
++** is also UTF-8.
++*/
++static int fts5VocabIsUtf8(int *pRc, sqlite3 *db){
++  int bRet = 0;
++  if( *pRc==SQLITE_OK ){
++    sqlite3_stmt *pStmt = 0;
++    *pRc = sqlite3_prepare_v2(db, "PRAGMA encoding", -1, &pStmt, 0);
++    if( *pRc==SQLITE_OK ){
++      if( SQLITE_ROW==sqlite3_step(pStmt) ){
++        const char *zEnc = (const char*)sqlite3_column_text(pStmt, 0);
++        bRet = (zEnc && sqlite3_stricmp(zEnc, "UTF-8")==0);
++      }
++      *pRc = sqlite3_finalize(pStmt);
++    }
++  }
++  return bRet;
++}
++
++/*
+ ** This function is the implementation of both the xConnect and xCreate
+ ** methods of the FTS3 virtual table.
+ **
+@@ -200,18 +223,21 @@
+     i64 nDb = strlen(zDb)+1; 
+     i64 nTab = strlen(zTab)+1;
+     int eType = 0;
++    int bUtf8 = 0;
+     
+     rc = fts5VocabTableType(zType, pzErr, &eType);
+     if( rc==SQLITE_OK ){
+       assert( eType>=0 && eType<ArraySize(azSchema) );
+       rc = sqlite3_declare_vtab(db, azSchema[eType]);
+     }
++    bUtf8 = fts5VocabIsUtf8(&rc, db);
+ 
+     nByte = sizeof(Fts5VocabTable) + nDb + nTab;
+     pRet = sqlite3Fts5MallocZero(&rc, nByte);
+     if( pRet ){
+       pRet->pGlobal = (Fts5Global*)pAux;
+       pRet->eType = eType;
++      pRet->bUtf8 = bUtf8;
+       pRet->db = db;
+       pRet->zFts5Tbl = (char*)&pRet[1];
+       pRet->zFts5Db = &pRet->zFts5Tbl[nTab];
+@@ -271,11 +297,16 @@
+ **
+ ** are interpreted. Less-than and less-than-or-equal are treated 
+ ** identically, as are greater-than and greater-than-or-equal.
++**
++** Terms are visited in UTF-8 byte order. If the database text encoding
++** is UTF-16, the BINARY collation orders text differently, so range
++** constraints and ORDER BY are left to the core in that case.
+ */
+ static int fts5VocabBestIndexMethod(
+-  sqlite3_vtab *pUnused,
++  sqlite3_vtab *pVTab,
+   sqlite3_index_info *pInfo
+ ){
++  Fts5VocabTable *pTab = (Fts5VocabTable*)pVTab;
+   int i;
+   int iTermEq = -1;
+   int iTermGe = -1;
+@@ -283,8 +314,6 @@
+   int idxNum = (int)pInfo->colUsed;
+   int nArg = 0;
+ 
+-  UNUSED_PARAM(pUnused);
+-
+   assert( (pInfo->colUsed & FTS5_VOCAB_COLUSED_MASK)==pInfo->colUsed );
+ 
+   for(i=0; i<pInfo->nConstraint; i++){
+@@ -292,6 +321,7 @@
+     if( p->usable==0 ) continue;
+     if( p->iColumn==0 && fts5VocabIsBinary(pInfo, i) ){    /* term column */
+       if( p->op==SQLITE_INDEX_CONSTRAINT_EQ ) iTermEq = i;
++      if( pTab->bUtf8==0 ) continue;
+       if( p->op==SQLITE_INDEX_CONSTRAINT_LE ) iTermLe = i;
+       if( p->op==SQLITE_INDEX_CONSTRAINT_LT ) iTermLe = i;
+       if( p->op==SQLITE_INDEX_CONSTRAINT_GE ) iTermGe = i;
+@@ -322,7 +352,8 @@
+   ** specifically - "ORDER BY term" or "ORDER BY term ASC" - set the
+   ** sqlite3_index_info.orderByConsumed flag to tell the core the results
+   ** are already in sorted order.  */
+-  if( pInfo->nOrderBy==1 
++  if( pTab->bUtf8
++   && pInfo->nOrderBy==1 
+    && pInfo->aOrderBy[0].iColumn==0 
+    && pInfo->aOrderBy[0].desc==0
+   ){

@@ -1,0 +1,26 @@
+# The bundled SQLite (libsqlite3-sys, built by the cc crate) is compiled by
+# clang with its coverage instrumentation, and clang's profile runtime is
+# linked in (clang links it when the link line has -fprofile-instr-generate,
+# so no path to it is needed). Rust code is not instrumented: the counters
+# are SQLite's alone. On Linux, clang (and its profile runtime, Ubuntu's
+# libclang-rt-<version>-dev) must be installed; it is both the C compiler and
+# the linker driver.
+[env]
+CC = "clang"
+CFLAGS = "-fprofile-instr-generate -fcoverage-mapping"
+LLVM_PROFILE_FILE = { value = "target/profraw/%m_%p.profraw", relative = true }
+
+[build]
+rustflags = ["-C", "link-arg=-fprofile-instr-generate"]
+
+# On Linux, Rust links with -nodefaultlibs, and clang puts the profile runtime
+# after -lc, so its reference to atexit (in glibc's libc_nonshared.a) is left
+# unresolved unless the linker is told up front that atexit is needed. A
+# target's own rustflags replace [build]'s, so they repeat the profile flag.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fprofile-instr-generate", "-C", "link-arg=-Wl,-u,atexit"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fprofile-instr-generate", "-C", "link-arg=-Wl,-u,atexit"]

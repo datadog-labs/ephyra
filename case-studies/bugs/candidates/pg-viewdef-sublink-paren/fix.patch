@@ -1,0 +1,84 @@
+diff --git a/src/backend/utils/adt/ruleutils.c b/src/backend/utils/adt/ruleutils.c
+index 5e8e1683db0..67335a27a75 100644
+--- a/src/backend/utils/adt/ruleutils.c
++++ b/src/backend/utils/adt/ruleutils.c
+@@ -11942,7 +11942,15 @@ get_sublink_expr(SubLink *sublink, deparse_context *context)
+ 			/* single combining operator */
+ 			OpExpr	   *opexpr = (OpExpr *) sublink->testexpr;
+ 
+-			get_rule_expr(linitial(opexpr->args), context, true);
++			/*
++			 * In pretty mode the lefthand expression may need parentheses:
++			 * IN binds more tightly than comparison operators, and both IN
++			 * and "op ANY/ALL" bind more tightly than IS, NOT, AND and OR.
++			 * (The multiple-operator cases below separate the lefthand
++			 * expressions with commas, so they need no such care.)
++			 */
++			get_rule_expr_paren(linitial(opexpr->args), context, true,
++								(Node *) sublink);
+ 			opname = generate_operator_name(opexpr->opno,
+ 											exprType(linitial(opexpr->args)),
+ 											exprType(lsecond(opexpr->args)));
+diff --git a/src/test/regress/expected/create_view.out b/src/test/regress/expected/create_view.out
+index 053fa56573f..b9089143d75 100644
+--- a/src/test/regress/expected/create_view.out
++++ b/src/test/regress/expected/create_view.out
+@@ -2251,22 +2251,28 @@ select x + y + z as c1,
+        (x > y) AND (y > z OR x > z) as c8,
+        (x > y) OR (y > z AND NOT (x > z)) as c9,
+        (x,y) <> ALL (values(1,2),(3,4)) as c10,
+-       (x,y) <= ANY (values(1,2),(3,4)) as c11
++       (x,y) <= ANY (values(1,2),(3,4)) as c11,
++       (x > y) IN (select true) as c12,
++       (x > y OR y > z) <> ALL (select true) as c13,
++       (x IS DISTINCT FROM y) NOT IN (select true) as c14
+ from (values(1,2,3)) v(x,y,z);
+ select pg_get_viewdef('tt26v', true);
+-                   pg_get_viewdef                   
+-----------------------------------------------------
+-  SELECT x + y + z AS c1,                          +
+-     x * y + z AS c2,                              +
+-     x + y * z AS c3,                              +
+-     (x + y) * z AS c4,                            +
+-     x * (y + z) AS c5,                            +
+-     x + (y + z) AS c6,                            +
+-     x + (y # z) AS c7,                            +
+-     x > y AND (y > z OR x > z) AS c8,             +
+-     x > y OR y > z AND NOT x > z AS c9,           +
+-     ((x, y) <> ALL ( VALUES (1,2), (3,4))) AS c10,+
+-     ((x, y) <= ANY ( VALUES (1,2), (3,4))) AS c11 +
++                      pg_get_viewdef                       
++-----------------------------------------------------------
++  SELECT x + y + z AS c1,                                 +
++     x * y + z AS c2,                                     +
++     x + y * z AS c3,                                     +
++     (x + y) * z AS c4,                                   +
++     x * (y + z) AS c5,                                   +
++     x + (y + z) AS c6,                                   +
++     x + (y # z) AS c7,                                   +
++     x > y AND (y > z OR x > z) AS c8,                    +
++     x > y OR y > z AND NOT x > z AS c9,                  +
++     ((x, y) <> ALL ( VALUES (1,2), (3,4))) AS c10,       +
++     ((x, y) <= ANY ( VALUES (1,2), (3,4))) AS c11,       +
++     ((x > y) IN ( SELECT true)) AS c12,                  +
++     ((x > y OR y > z) <> ALL ( SELECT true)) AS c13,     +
++     NOT ((x IS DISTINCT FROM y) IN ( SELECT true)) AS c14+
+     FROM ( VALUES (1,2,3)) v(x, y, z);
+ (1 row)
+ 
+diff --git a/src/test/regress/sql/create_view.sql b/src/test/regress/sql/create_view.sql
+index 75b8cd5d0fb..f66b0373137 100644
+--- a/src/test/regress/sql/create_view.sql
++++ b/src/test/regress/sql/create_view.sql
+@@ -825,7 +825,10 @@ select x + y + z as c1,
+        (x > y) AND (y > z OR x > z) as c8,
+        (x > y) OR (y > z AND NOT (x > z)) as c9,
+        (x,y) <> ALL (values(1,2),(3,4)) as c10,
+-       (x,y) <= ANY (values(1,2),(3,4)) as c11
++       (x,y) <= ANY (values(1,2),(3,4)) as c11,
++       (x > y) IN (select true) as c12,
++       (x > y OR y > z) <> ALL (select true) as c13,
++       (x IS DISTINCT FROM y) NOT IN (select true) as c14
+ from (values(1,2,3)) v(x,y,z);
+ select pg_get_viewdef('tt26v', true);
+ 

@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# Standalone example crate: needs coverage rustflags, built on its own.
+# Case studies are crates (and workspaces) of their own.
+# turso/ and cedar/ are the checkouts turso-diff and ephyra-cedar build against.
+exclude = ["examples/locate-demo", "case-studies", "turso", "cedar"]
+
+[workspace.package]
+repository = "https://github.com/datadog-labs/ephyra"
+license = "MIT"
+authors = ["Alperen Keleş <alp.keles@datadoghq.com>"]
+rust-version = "1.88"

@@ -1,0 +1,18 @@
+[package]
+name = "sqlite-coverage"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "The SQLite code that ephyra-sqlite's generated files exercise, read from an instrumented SQLite"
+
+[dependencies]
+ephyra = { path = "../../crates/ephyra", features = ["coverage-force"] }
+ephyra-sqlite = { path = "../ephyra-sqlite" }
+rusqlite = { version = "0.37", features = ["bundled", "serialize"] }
+
+[workspace]
+
+# SQLite trunk in place of the bundled release, as in ephyra-sqlite (made by
+# ../vendor/fetch.sh, which must run first); sections.tsv is generated from the same amalgamation.
+[patch.crates-io]
+libsqlite3-sys = { path = "../vendor/libsqlite3-sys-trunk" }

@@ -1,0 +1,11 @@
+# name: test/optimizer/statistics/statistics_table_filter_folded_column.test
+# description: A table filter whose column is simplified away by statistics must not hit an assertion
+# group: [statistics]
+
+statement ok
+CREATE TABLE t0(c0 INTEGER);
+
+query I
+SELECT count(*) FROM t0 WHERE (c0 IS NULL) IN (NULL, true) AND (c0 = 1 OR 0 IN (SELECT 0))
+----
+0

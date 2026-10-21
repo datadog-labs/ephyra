@@ -1,0 +1,49 @@
+diff --git a/src/url_pattern_helpers.cpp b/src/url_pattern_helpers.cpp
+index 8c11f05f..1cb9693a 100644
+--- a/src/url_pattern_helpers.cpp
++++ b/src/url_pattern_helpers.cpp
+@@ -241,6 +241,15 @@ tl::expected<std::string, errors> canonicalize_protocol(
+     input.remove_suffix(1);
+   }
+ 
++  // A bare ":" is empty once the suffix is removed. process_protocol strips
++  // the trailing ":" of an init value before calling this, so only the
++  // encoding callback gets here with ":", and the spec's canonicalize a
++  // protocol fails on it (":://dummy.invalid/" does not parse). Reading
++  // input[0] below would be out of bounds.
++  if (input.empty()) [[unlikely]] {
++    return tl::unexpected(errors::type_error);
++  }
++
+   // Fast path: special schemes are already canonical
+   if (scheme::is_special(input)) {
+     return std::string(input);
+diff --git a/tests/wpt_urlpattern_tests.cpp b/tests/wpt_urlpattern_tests.cpp
+index a1d953f5..38ee35bc 100644
+--- a/tests/wpt_urlpattern_tests.cpp
++++ b/tests/wpt_urlpattern_tests.cpp
+@@ -1372,3 +1372,24 @@ TEST(wpt_urlpattern_tests, urlpattern_test_data) {
+   }
+   SUCCEED();
+ }
++
++TEST(wpt_urlpattern_tests, protocol_bare_colon_does_not_read_out_of_bounds) {
++  // canonicalize_protocol strips a trailing ":" before checking the first
++  // scheme character. The encoding callback can pass it a bare ":" (from an
++  // escaped colon in a protocol pattern), which is empty once stripped: it
++  // must not be read. The spec's canonicalize a protocol fails on ":"
++  // (":://dummy.invalid/" does not parse), so these patterns are errors.
++  for (auto src : {"\\:", "\\:?", "\\:*", "\\:+"}) {
++    ada::url_pattern_init init{};
++    init.protocol = src;
++    ASSERT_FALSE(ada::parse_url_pattern<regex_provider>(init)) << src;
++  }
++  ASSERT_FALSE(ada::parse_url_pattern<regex_provider>("{\\:}?://a"));
++  // An init protocol of ":" is stripped by process protocol for init first,
++  // and canonicalizes to the empty protocol.
++  ada::url_pattern_init colon{};
++  colon.protocol = ":";
++  auto p = ada::parse_url_pattern<regex_provider>(colon);
++  ASSERT_TRUE(p);
++  ASSERT_EQ(p->get_protocol(), "");
++}

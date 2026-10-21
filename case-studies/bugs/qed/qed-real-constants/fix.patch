@@ -1,0 +1,64 @@
+diff --git a/src/pipeline/normal.rs b/src/pipeline/normal.rs
+index 3631bea..11b4f0a 100644
+--- a/src/pipeline/normal.rs
++++ b/src/pipeline/normal.rs
+@@ -632,6 +632,41 @@ impl<'c> Eval<&Neutral, Int<'c>> for &Z3Env<'c> {
+ 	}
+ }
+ 
++/// Parse a decimal literal such as `-12.50`, `1E+39` or `9.7e-28` into the exact rational it
++/// denotes. Anything else (e.g. `NaN` or `Infinity`, which have no counterpart among the reals)
++/// is rejected with an error, so the constant is kept uninterpreted instead of approximated.
++fn parse_decimal(input: &str) -> anyhow::Result<num::BigRational> {
++	use num::{BigInt, BigRational};
++	let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
++	let (mantissa, exp) = match input.find(['e', 'E']) {
++		Some(i) => (&input[..i], input[i + 1..].parse::<i64>()?),
++		None => (input, 0),
++	};
++	let (neg, mantissa) = match mantissa.strip_prefix('-') {
++		Some(m) => (true, m),
++		None => (false, mantissa.strip_prefix('+').unwrap_or(mantissa)),
++	};
++	let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
++	if (int.is_empty() && frac.is_empty()) || !digits(int) || !digits(frac) {
++		bail!("not a decimal literal: {}", input);
++	}
++	// Bound the exponent so a hostile literal cannot make us build an enormous numeral.
++	let exp = exp - frac.len() as i64;
++	if exp.abs() > 100_000 {
++		bail!("decimal exponent out of range: {}", input);
++	}
++	let mut num: BigInt = format!("{}{}", int, frac).parse()?;
++	if neg {
++		num = -num;
++	}
++	let scale = num::pow(BigInt::from(10), exp.unsigned_abs() as usize);
++	Ok(if exp >= 0 {
++		BigRational::from_integer(num * scale)
++	} else {
++		BigRational::new(num, scale)
++	})
++}
++
+ impl<'c> Eval<&Expr, Dynamic<'c>> for &Z3Env<'c> {
+ 	fn eval(self, source: &Expr) -> Dynamic<'c> {
+ 		use DataType::*;
+@@ -651,13 +686,10 @@ impl<'c> Eval<&Expr, Dynamic<'c>> for &Z3Env<'c> {
+ 			Ok(match ty {
+ 				Integer => ctx.int_some(Int::from_i64(z3_ctx, input.parse()?)),
+ 				Real => {
+-					let r: f32 = input.parse()?;
+-					let r = num::rational::Ratio::from_float(r).unwrap();
+-					ctx.real_some(Re::from_real(
+-						z3_ctx,
+-						r.numer().to_i32().unwrap(),
+-						r.denom().to_i32().unwrap(),
+-					))
++					let r = parse_decimal(input)?;
++					let (num, den) = (r.numer().to_string(), r.denom().to_string());
++					let r = Re::from_real_str(z3_ctx, &num, &den);
++					ctx.real_some(r.ok_or_else(|| anyhow::anyhow!("invalid real constant {}", input))?)
+ 				},
+ 				Boolean => ctx.bool(Some(input.to_lowercase().parse()?)),
+ 				String => ctx.string_some(Str::from_str(z3_ctx, input).unwrap()),

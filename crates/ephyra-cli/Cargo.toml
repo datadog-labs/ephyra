@@ -1,0 +1,34 @@
+[package]
+name = "ephyra-cli"
+description = "The ephyra command: runs ephyra properties into one artifact directory, checks generators and strategies, and serves a local page for exploring and rerunning them"
+version = "0.2.0"
+edition = "2024"
+categories = ["development-tools::testing", "command-line-utilities"]
+keywords = ["property-testing", "pbt", "ephyra", "cli"]
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "ephyra"
+path = "src/main.rs"
+# The library target documents the command; the bin would collide with the
+# `ephyra` library's docs.
+doc = false
+
+[dependencies]
+ephyra = { version = "=0.2.0", path = "../ephyra" }
+# The source index: line numbers need span locations outside a proc macro.
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+quote = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+syn = { version = "2.0", features = ["full", "visit"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+missing_docs = "warn"

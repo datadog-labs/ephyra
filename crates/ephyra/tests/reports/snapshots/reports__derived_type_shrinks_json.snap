@@ -1,0 +1,92 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")"
+---
+{
+  "name": "x_at_most_y",
+  "status": "Failed",
+  "seed": 24301,
+  "tests": 0,
+  "unique_tests": 0,
+  "discarded": 0,
+  "iterations": 1,
+  "stopped_by_budget": false,
+  "max_size": 100,
+  "duration": "[duration]",
+  "gen_time": "[duration]",
+  "prop_time": "[duration]",
+  "distinct_inputs_ratio": 1.0,
+  "distinct_growth": {
+    "points": [
+      [
+        1,
+        1
+      ]
+    ]
+  },
+  "features": {},
+  "timing": {
+    "prop": {
+      "median": "[duration]",
+      "p90": "[duration]",
+      "max": "[duration]"
+    },
+    "generation": {
+      "median": "[duration]",
+      "p90": "[duration]",
+      "max": "[duration]"
+    },
+    "slowest": "[input]"
+  },
+  "samples": [],
+  "failure": {
+    "kind": "False",
+    "message": null,
+    "location": null,
+    "original": {
+      "debug": "Point { x: 127, y: 103 }",
+      "truncated": false
+    },
+    "size": 0,
+    "iteration": 0,
+    "shrunk": {
+      "debug": "Point { x: 1, y: 0 }",
+      "truncated": false
+    },
+    "replay": {
+      "seed": 24301,
+      "iteration": 0
+    },
+    "flaky": false,
+    "shrink": {
+      "steps": 26,
+      "accepted": 6,
+      "rejected_not_smaller": 0,
+      "rejected_seen": 19,
+      "budget_exhausted": false,
+      "duration": "[duration]"
+    }
+  },
+  "abort": null,
+  "replay": null,
+  "regressions": {
+    "file": null,
+    "replayed": 0,
+    "stale": 0,
+    "saved": false
+  },
+  "target": null,
+  "profraw": null,
+  "coverage_html": null,
+  "run": {
+    "package": "ephyra",
+    "kind": "test",
+    "target": "reports",
+    "test": "derived_type_shrinks_field_by_field"
+  },
+  "covers": {},
+  "labels": {},
+  "sizes": {},
+  "discard_reasons": {},
+  "health": []
+}

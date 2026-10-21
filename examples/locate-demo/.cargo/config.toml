@@ -1,0 +1,11 @@
+# Coverage instrumentation for the whole build. ephyra's build script
+# sees the flag and links the profile runtime; the counters and the coverage
+# mapping are then read in process.
+[build]
+rustflags = ["-C", "instrument-coverage"]
+
+# Every instrumented process (the test binary, and rustc running an
+# instrumented proc macro) writes a profile file at exit; keep them in the
+# target directory.
+[env]
+LLVM_PROFILE_FILE = { value = "target/profraw/%m_%p.profraw", relative = true }

@@ -1,0 +1,79 @@
+--- a/ext/fts5/test/fts5vocab2.test
++++ b/ext/fts5/test/fts5vocab2.test
+@@ -337,6 +337,76 @@ do_execsql_test 8.1 {
+ }
+ 
+ 
++#-------------------------------------------------------------------------
++# Terms are visited in UTF-8 byte order. In a UTF-16 database the BINARY
++# collation orders text differently, so the fts5vocab table must not use
++# term range constraints or consume ORDER BY term there. char(0x133) is
++# "ij" ligature U+0133, which sorts before "apple" in UTF-16le.
++#
++foreach {tn enc} {1 UTF-8 2 UTF-16le 3 UTF-16be} {
++  reset_db
++  execsql "PRAGMA encoding = '$enc'"
++  do_execsql_test 9.$tn.0 {
++    CREATE VIRTUAL TABLE t1 USING fts5(a, tokenize=ascii);
++    CREATE VIRTUAL TABLE vr USING fts5vocab(t1, row);
++    CREATE VIRTUAL TABLE vc USING fts5vocab(t1, col);
++    CREATE VIRTUAL TABLE vi USING fts5vocab(t1, instance);
++    INSERT INTO t1 VALUES('apple ' || char(0x133) || 's b zz');
++    CREATE TABLE x1(term TEXT);
++    INSERT INTO x1 SELECT term FROM vr;
++  }
++  foreach {tn2 where} {
++    1 "term < 'b'"
++    2 "term <= 'b'"
++    3 "term > 'apple'"
++    4 "term >= char(0x133) || 's'"
++    5 "term = char(0x133) || 's'"
++    6 "term < 'zz' AND term > 'apple'"
++  } {
++    set res [execsql "SELECT term FROM x1 WHERE $where ORDER BY term"]
++    foreach v {vr vc vi} {
++      do_execsql_test 9.$tn.$tn2.$v "
++        SELECT term FROM $v WHERE $where ORDER BY term
++      " $res
++      do_execsql_test 9.$tn.$tn2.$v.count "
++        SELECT count(*) FROM $v WHERE $where
++      " [execsql "SELECT count(*) FROM $v WHERE [string map {term +term} $where]"]
++    }
++  }
++  do_execsql_test 9.$tn.7 {
++    SELECT term FROM vr ORDER BY term
++  } [execsql {SELECT term FROM x1 ORDER BY term}]
++}
++
++reset_db
++execsql "PRAGMA encoding = 'UTF-16le'"
++do_execsql_test 10.0 {
++  CREATE VIRTUAL TABLE t1 USING fts5(a, tokenize=ascii);
++  CREATE VIRTUAL TABLE vr USING fts5vocab(t1, row);
++  INSERT INTO t1 VALUES('apple ' || char(0x133) || 's b zz');
++}
++do_execsql_test 10.1 {
++  SELECT unicode(term) FROM vr WHERE term < 'b' ORDER BY term
++} {307 97}
++do_execsql_test 10.2 {
++  SELECT unicode(term) FROM vr WHERE term >= char(0x133, 0x73)
++} {97 98 122 307}
++
++reset_db
++execsql "PRAGMA encoding = 'UTF-16be'"
++do_execsql_test 11.0 {
++  CREATE VIRTUAL TABLE t1 USING fts5(a, tokenize=ascii);
++  CREATE VIRTUAL TABLE vr USING fts5vocab(t1, row);
++  INSERT INTO t1 VALUES('b ' || char(0xFB00) || ' ' || char(0x1F600));
++}
++do_execsql_test 11.1 {
++  SELECT unicode(term) FROM vr ORDER BY term
++} {98 128512 64256}
++do_execsql_test 11.2 {
++  SELECT unicode(term) FROM vr WHERE term < char(0xFB00)
++} {98 128512}
++
++
+ finish_test
+ 
+ 

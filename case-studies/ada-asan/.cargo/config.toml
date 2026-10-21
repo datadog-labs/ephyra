@@ -1,0 +1,17 @@
+# ada and the shim (built by ephyra-ada's build.rs through cc, which honours
+# CXXFLAGS) are compiled with AddressSanitizer, UBSan and libc++'s extensive
+# hardening, every error fatal; Rust code is not instrumented. On Darwin the
+# ASan runtime carries UBSan's, so linking it is enough. EA_SANITIZE makes the
+# shim save the case it runs to $EA_CRASH_FILE when the process dies.
+[env]
+CXXFLAGS = "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -DEA_SANITIZE -g"
+EA_CRASH_FILE = { value = "target/crash.bin", relative = true }
+
+# An explicit target keeps the link flags off build scripts and proc macros,
+# which rustc loads with dlopen, too late for ASan.
+[build]
+target = "aarch64-apple-darwin"
+rustflags = [
+    "-C", "link-arg=/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin/libclang_rt.asan_osx_dynamic.dylib",
+    "-C", "link-arg=-Wl,-rpath,/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin",
+]

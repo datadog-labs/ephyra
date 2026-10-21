@@ -1,0 +1,133 @@
+--- /dev/null
++++ b/ext/fts5/test/fts5secure11.test
+@@ -0,0 +1,130 @@
++# 2026 October 21
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++#*************************************************************************
++#
++# Tests for rowid-constrained queries on a term whose doclist has a
++# doclist-index, after secure-delete has removed the last rowids of the
++# doclist. The doclist-index still points to the page that held them.
++#
++
++source [file join [file dirname [info script]] fts5_common.tcl]
++ifcapable !fts5 { finish_test ; return }
++set ::testprefix fts5secure11
++
++# Rows 1 to $na contain 'a' and rows $na+1 to $na+$nb contain 'b'. With
++# pgsz=32, the doclist for 'a' spans enough pages to have a doclist-index,
++# and the doclist for 'b' starts on the page that the last doclist-index
++# entry for 'a' points to. Each $ndel value is a number of rows, at the
++# end of the doclist for 'a', to remove with secure-delete. The first
++# leaves that page without a rowid for 'a'. The second also removes all
++# rowids from the page before it, which the doclist-index points to as
++# well.
++foreach {tn detail na nb ndellist} {
++  1 full   50 10 {3 15}
++  2 column 50 10 {3 15}
++  3 none  140 30 {5 35}
++} {
++  set nAll [expr $na+$nb]
++
++  # Remove the last $ndel rows that contain 'a'. Then no row with a
++  # rowid larger than $nLast contains 'a'.
++  set tn2 0
++  foreach ndel $ndellist {
++    incr tn2
++    set nLast [expr $na-$ndel]
++    reset_db
++    do_execsql_test $tn.$tn2.0 "
++      CREATE VIRTUAL TABLE t1 USING fts5(x, detail=$detail);
++      INSERT INTO t1(t1, rank) VALUES('pgsz', 32);
++      WITH s(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<$nAll)
++        INSERT INTO t1(rowid, x)
++        SELECT i, CASE WHEN i<=$na THEN 'a' ELSE 'b' END FROM s;
++      INSERT INTO t1(t1, rank) VALUES('secure-delete', 1);
++    "
++    set bList [db eval {SELECT rowid FROM t1('b')}]
++    do_execsql_test $tn.$tn2.1 {
++      DELETE FROM t1 WHERE rowid>$nLast AND rowid<=$na;
++    }
++    for {set i [expr $nLast-5]} {$i<=$nAll} {incr i} {
++      set res [list]
++      for {set j $i} {$j<=$nLast} {incr j} { lappend res $j }
++      do_execsql_test $tn.$tn2.2.$i {
++        SELECT rowid FROM t1('a') WHERE rowid>=$i
++      } $res
++    }
++    do_execsql_test $tn.$tn2.3 {
++      SELECT rowid FROM t1('a') WHERE rowid=$nAll
++    } {}
++    do_execsql_test $tn.$tn2.4 {
++      SELECT rowid FROM t1('b NOT a')
++    } $bList
++    do_execsql_test $tn.$tn2.5 {
++      SELECT rowid FROM t1('a AND b')
++    } {}
++    do_execsql_test $tn.$tn2.6 {
++      INSERT INTO t1(rowid, x) VALUES($nAll+1, 'a');
++      SELECT rowid FROM t1('a') WHERE rowid>=$nLast+1
++    } [expr $nAll+1]
++    do_execsql_test $tn.$tn2.7 {
++      INSERT INTO t1(t1) VALUES('integrity-check');
++    }
++  }
++}
++
++# Other layouts. In each case secure-delete removes the last rowids of 'a',
++# the doclist-index for 'a' still points to a page that held them, and the
++# queries must not return rowids of a later term.
++#
++#   4: 'a' is followed by 'b' (3 rows) and 'c'. Both terms start on the
++#      page that the last doclist-index entry for 'a' points to.
++#   5: The rows that contain 'b' are removed as well, so 'c' follows 'a'.
++#   6: 'a' is the last term in the segment.
++#   7: 3000 rows contain 'a', so the doclist-index has two levels.
++#
++foreach {tn n1 n2 n3 ndel1 ndel2} {
++  4    50   53   80   50   50
++  5    50   60   80   50   60
++  6    50   50   50   46   50
++  7  3000 3300 3300 2701 3000
++} {
++  reset_db
++  do_execsql_test 4.$tn.0 "
++    CREATE VIRTUAL TABLE t1 USING fts5(x);
++    INSERT INTO t1(t1, rank) VALUES('pgsz', 32);
++    WITH s(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<$n3)
++      INSERT INTO t1(rowid, x)
++      SELECT i, CASE WHEN i<=$n1 THEN 'a' WHEN i<=$n2 THEN 'b' ELSE 'c' END
++      FROM s;
++    INSERT INTO t1(t1, rank) VALUES('secure-delete', 1);
++    DELETE FROM t1 WHERE rowid>=$ndel1 AND rowid<=$ndel2;
++  "
++  set nLast [expr $ndel1-1]
++  do_execsql_test 4.$tn.1 {
++    SELECT count(*) FROM t1('a') WHERE rowid>$nLast;
++    SELECT count(*) FROM t1('a') WHERE rowid>$ndel2;
++  } {0 0}
++  do_execsql_test 4.$tn.2 {
++    SELECT count(*), max(rowid) FROM t1('a') WHERE rowid>=$nLast-50
++  } [list [expr $nLast>50 ? 51 : $nLast] $nLast]
++  do_execsql_test 4.$tn.3 {
++    SELECT count(*) FROM t1('b NOT a');
++    SELECT count(*) FROM t1('c NOT a');
++  } [list [expr $n2-($n1>$ndel2 ? $n1 : $ndel2)] \
++         [expr $n3-($n2>$ndel2 ? $n2 : $ndel2)]]
++  do_execsql_test 4.$tn.4 {
++    SELECT count(*) FROM t1('a AND b');
++    SELECT count(*) FROM t1('a AND c');
++  } {0 0}
++  do_execsql_test 4.$tn.5 {
++    INSERT INTO t1(t1) VALUES('integrity-check');
++  }
++}
++
++finish_test

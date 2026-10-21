@@ -1,0 +1,11 @@
+[package]
+name = "synthesis-positive"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ephyra = { path = "../../../crates/ephyra" }
+
+[workspace]
+# Deliberately separate from the library workspace and the other experiments.

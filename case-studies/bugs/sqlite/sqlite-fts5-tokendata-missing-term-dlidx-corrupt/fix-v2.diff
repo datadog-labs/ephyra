@@ -1,0 +1,27 @@
+--- a/ext/fts5/fts5_index.c
++++ b/ext/fts5/fts5_index.c
+@@ -2756,7 +2756,23 @@
+       if( flags & FTS5INDEX_QUERY_DESC ){
+         pIter->flags |= FTS5_SEGITER_REVERSE;
+       }
+-      if( bDlidx ){
++      if( pIter->iTermLeafPgno!=iPg ){
++        /* The bDlidx flag read from %_idx above applies to the last term
++        ** on page iPg. This is a >= search and fts5LeafSeek() has moved
++        ** the iterator to the first term on a later page, so look up the
++        ** flag for that page instead.  */
++        bDlidx = 0;
++        sqlite3_bind_int(pIdxSelect, 1, pSeg->iSegid);
++        sqlite3_bind_blob(pIdxSelect, 2, pIter->term.p, pIter->term.n,
++            SQLITE_STATIC
++        );
++        if( SQLITE_ROW==sqlite3_step(pIdxSelect) ){
++          bDlidx = (sqlite3_column_int(pIdxSelect, 0) & 0x0001);
++        }
++        p->rc = sqlite3_reset(pIdxSelect);
++        sqlite3_bind_null(pIdxSelect, 2);
++      }
++      if( bDlidx && p->rc==SQLITE_OK ){
+         fts5SegIterLoadDlidx(p, pIter);
+       }
+       if( flags & FTS5INDEX_QUERY_DESC ){

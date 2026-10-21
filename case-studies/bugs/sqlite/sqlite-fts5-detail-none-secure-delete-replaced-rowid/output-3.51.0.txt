@@ -1,0 +1,10 @@
+$ /usr/bin/sqlite3 :memory: < repro.sql   # 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e2
+0
+1
+5
+6
+137438953473|000000080230610104
+274877906945|0000000C023061010000040104
+Runtime error near line 9: database disk image is malformed (11)
+$ /usr/bin/sqlite3 :memory: < found-case.sql
+Runtime error near line 6: database disk image is malformed (11)

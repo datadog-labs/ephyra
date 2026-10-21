@@ -1,0 +1,50 @@
+diff --git a/src/uu/comm/src/comm.rs b/src/uu/comm/src/comm.rs
+index bfe5ffd50..2f4e0a422 100644
+--- a/src/uu/comm/src/comm.rs
++++ b/src/uu/comm/src/comm.rs
+@@ -69,7 +69,13 @@ struct OrderChecker {
+ /// `sort` orders with the locale collation, and so do `join` and `ls`. Reading
+ /// that order back with a byte comparison rejects input that is in order and
+ /// puts lines in the wrong column, so `comm` has to measure it the same way.
++///
++/// Both lines end with their terminator (`LineReader::read_line` guarantees
++/// it), which is not part of the line and must not take part in the
++/// comparison: `""` sorts before `"\t"`, yet `"\n"` is greater than `"\t\n"`.
+ fn line_cmp(a: &[u8], b: &[u8], use_locale: bool) -> Ordering {
++    let a = a.split_last().map_or(a, |(_, line)| line);
++    let b = b.split_last().map_or(b, |(_, line)| line);
+     if use_locale {
+         locale_cmp(a, b)
+     } else {
+diff --git a/tests/by-util/test_comm.rs b/tests/by-util/test_comm.rs
+index 88a01f211..95deaebd8 100644
+--- a/tests/by-util/test_comm.rs
++++ b/tests/by-util/test_comm.rs
+@@ -859,3 +859,27 @@ fn test_both_inputs_stdin() {
+         .stdout_is("\ta\nb\n\t\tc\n")
+         .no_stderr();
+ }
++
++#[test]
++fn test_line_terminator_not_compared() {
++    // "" sorts before "\t" and "a" before "a\tb"; the newline that ends each
++    // line must not take part in the comparison.
++    let scene = TestScenario::new(util_name!());
++    let at = &scene.fixtures;
++    at.write("empty", "");
++    at.write("sorted", "\n\t\n");
++    at.write("f1", "a\n");
++    at.write("f2", "a\tb\n");
++    scene
++        .ucmd()
++        .env("LC_ALL", "C")
++        .args(&["--check-order", "empty", "sorted"])
++        .succeeds()
++        .stdout_only("\t\n\t\t\n");
++    scene
++        .ucmd()
++        .env("LC_ALL", "C")
++        .args(&["f1", "f2"])
++        .succeeds()
++        .stdout_only("a\n\ta\tb\n");
++}

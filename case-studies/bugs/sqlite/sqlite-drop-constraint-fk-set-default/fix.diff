@@ -1,0 +1,61 @@
+--- a/src/alter.c
++++ b/src/alter.c
+@@ -2478,9 +2478,29 @@
+   **   COLLATE, REFERENCES, FOREIGN, GENERATED, AS, RP, or COMMA
+   **
+   ** Also exit the loop if ILLEGAL turns up.
++  **
++  ** Within a foreign key constraint, the DEFAULT of "SET DEFAULT", the
++  ** NOT of "NOT DEFERRABLE" and the name following MATCH (which may be
++  ** the fallback token GENERATED) are part of the constraint.
+   */
++  t = 0;
+   while( 1 ){
++    int tPrev = t;
+     int n = getConstraintToken(&z[iOff], &t);
++    if( eTok==TK_REFERENCES ){
++      if( tPrev==TK_MATCH || (tPrev==TK_SET && t==TK_DEFAULT) ){
++        iOff += n;
++        continue;
++      }
++      if( t==TK_NOT ){
++        int t2 = 0;
++        getConstraintToken(&z[iOff+n], &t2);
++        if( t2==TK_DEFERRABLE ){
++          iOff += n;
++          continue;
++        }
++      }
++    }
+     if( t==TK_CONSTRAINT || t==TK_PRIMARY || t==TK_NOT || t==TK_UNIQUE
+      || t==TK_CHECK || t==TK_DEFAULT || t==TK_COLLATE || t==TK_REFERENCES
+      || t==TK_FOREIGN || t==TK_RP || t==TK_COMMA || t==TK_ILLEGAL
+@@ -2642,6 +2662,12 @@
+           t = TK_CHECK;
+         }else{
+           iOff += nTok;
++          if( t==TK_NOT && iNotNull>=0 ){
++            /* A named "NOT DEFERRABLE" clause is not a NOT NULL */
++            int t2 = 0;
++            getConstraintToken(&zSql[iOff], &t2);
++            if( t2==TK_DEFERRABLE ) t = TK_DEFERRABLE;
++          }
+           iOff += getConstraint(&zSql[iOff], t);
+         }
+ 
+@@ -2655,8 +2681,13 @@
+         }
+ 
+       }else if( t==TK_NOT && iNotNull==ii ){
+-        iEnd = iOff + getConstraint(&zSql[iOff], 0);
+-        break;
++        /* Skip the NOT of a "NOT DEFERRABLE" clause */
++        int t2 = 0;
++        getConstraintToken(&zSql[iOff], &t2);
++        if( t2==TK_NULL ){
++          iEnd = iOff + getConstraint(&zSql[iOff], 0);
++          break;
++        }
+       }else if( t==TK_RP || t==TK_ILLEGAL ){
+         iEnd = -1;
+         break;

@@ -1,0 +1,100 @@
+--- a/test/altercons3.test
++++ b/test/altercons3.test
+@@ -97,5 +97,96 @@
+   SELECT sql FROM sqlite_schema
+ } {{CREATE TABLE x1(a, b }}
+ 
+-finish_test
++#-------------------------------------------------------------------------
++# The DEFAULT of "SET DEFAULT", the NOT of "NOT DEFERRABLE" and a MATCH
++# name that is the fallback token GENERATED are part of a foreign key
++# constraint.
++#
++reset_db
++foreach {tn before after} {
++  1 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1(a)
++       ON DELETE SET DEFAULT ON UPDATE CASCADE, c)"
++    "CREATE TABLE c1(b, c)"
+ 
++  2 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1(a) ON UPDATE SET DEFAULT)"
++    "CREATE TABLE c1(b)"
++
++  3 "CREATE TABLE c1(b, CONSTRAINT fk FOREIGN KEY(b) REFERENCES p1(a)
++       ON DELETE SET DEFAULT)"
++    "CREATE TABLE c1(b)"
++
++  4 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1(a) NOT DEFERRABLE, c)"
++    "CREATE TABLE c1(b, c)"
++
++  5 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1(a) NOT DEFERRABLE NOT NULL)"
++    "CREATE TABLE c1(b NOT NULL)"
++
++  6 "CREATE TABLE c1(b, CONSTRAINT fk FOREIGN KEY(b) REFERENCES p1
++       NOT DEFERRABLE INITIALLY IMMEDIATE)"
++    "CREATE TABLE c1(b)"
++
++  7 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1 MATCH generated, c)"
++    "CREATE TABLE c1(b, c)"
++
++  8 "CREATE TABLE c1(b, c, CONSTRAINT fk FOREIGN KEY(b)
++       REFERENCES p1 MATCH generated)"
++    "CREATE TABLE c1(b, c)"
++
++  9 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES match, c)"
++    "CREATE TABLE c1(b, c)"
++} {
++  do_execsql_test 6.$tn.1 { DROP TABLE IF EXISTS c1 }
++  do_execsql_test 6.$tn.2 $before
++  do_execsql_test 6.$tn.3 { ALTER TABLE c1 DROP CONSTRAINT fk }
++  do_execsql_test 6.$tn.4 {
++    SELECT sql FROM sqlite_schema WHERE name='c1'
++  } [list $after]
++}
++
++reset_db
++do_execsql_test 7.0 {
++  CREATE TABLE p1(a PRIMARY KEY);
++  CREATE TABLE c1(b REFERENCES p1 DEFERRABLE INITIALLY DEFERRED,
++                  c CONSTRAINT fk REFERENCES p1 NOT DEFERRABLE);
++  ALTER TABLE c1 DROP CONSTRAINT fk;
++  PRAGMA foreign_keys = 1;
++}
++do_execsql_test 7.1 {
++  BEGIN;
++    INSERT INTO c1(b) VALUES(1);
++    INSERT INTO p1 VALUES(1);
++  COMMIT;
++  SELECT * FROM c1;
++} {1 {}}
++
++#-------------------------------------------------------------------------
++# DROP NOT NULL and SET NOT NULL do not mistake the NOT of a
++# "NOT DEFERRABLE" clause for a NOT NULL constraint.
++#
++reset_db
++foreach {tn before alter after} {
++  1 "CREATE TABLE c1(b REFERENCES p1 NOT DEFERRABLE NOT NULL, c)"
++    "ALTER TABLE c1 ALTER b DROP NOT NULL"
++    "CREATE TABLE c1(b REFERENCES p1 NOT DEFERRABLE, c)"
++
++  2 "CREATE TABLE c1(b REFERENCES p1 NOT DEFERRABLE CONSTRAINT nn NOT NULL)"
++    "ALTER TABLE c1 ALTER b DROP NOT NULL"
++    "CREATE TABLE c1(b REFERENCES p1 NOT DEFERRABLE)"
++
++  3 "CREATE TABLE c1(b REFERENCES p1 CONSTRAINT d NOT DEFERRABLE NOT NULL)"
++    "ALTER TABLE c1 ALTER b DROP NOT NULL"
++    "CREATE TABLE c1(b REFERENCES p1 CONSTRAINT d NOT DEFERRABLE)"
++
++  4 "CREATE TABLE c1(b REFERENCES p1 NOT DEFERRABLE, c)"
++    "ALTER TABLE c1 ALTER b SET NOT NULL"
++    "CREATE TABLE c1(b REFERENCES p1 NOT DEFERRABLE NOT NULL, c)"
++} {
++  do_execsql_test 8.$tn.1 { DROP TABLE IF EXISTS c1 }
++  do_execsql_test 8.$tn.2 $before
++  do_execsql_test 8.$tn.3 $alter
++  do_execsql_test 8.$tn.4 {
++    SELECT sql FROM sqlite_schema WHERE name='c1'
++  } [list $after]
++}
++
++finish_test

@@ -1,0 +1,185 @@
+### rel14
+PostgreSQL 14.24 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+pg_dump (PostgreSQL) 14.24
+--- minimal.sql
+CREATE TABLE t (a int);
+CREATE TABLE
+INSERT INTO t VALUES (1), (2);
+INSERT 0 2
+CREATE VIEW o AS SELECT a FROM t ORDER BY (- '3'::int4);
+CREATE VIEW
+CREATE VIEW g AS SELECT count(*) AS n FROM t GROUP BY (- '3'::int4);
+CREATE VIEW
+SELECT * FROM o;
+ a 
+---
+ 1
+ 2
+(2 rows)
+
+SELECT * FROM g;
+ n 
+---
+ 2
+(1 row)
+
+SELECT pg_get_viewdef('o'::regclass, false);
+  pg_get_viewdef   
+-------------------
+  SELECT t.a      +
+    FROM t        +
+   ORDER BY (- 3);
+(1 row)
+
+SELECT pg_get_viewdef('g'::regclass, false);
+    pg_get_viewdef     
+-----------------------
+  SELECT count(*) AS n+
+    FROM t            +
+   GROUP BY (- 3);
+(1 row)
+
+SELECT t.a FROM t ORDER BY (- 3);
+psql:minimal.sql:14: ERROR:  ORDER BY position -3 is not in select list
+LINE 1: SELECT t.a FROM t ORDER BY (- 3);
+                                    ^
+SELECT count(*) AS n FROM t GROUP BY (- 3);
+psql:minimal.sql:15: ERROR:  GROUP BY position -3 is not in select list
+LINE 1: SELECT count(*) AS n FROM t GROUP BY (- 3);
+                                              ^
+--- dump
+CREATE VIEW public.o AS
+ SELECT t.a
+   FROM public.t
+  ORDER BY (- 3);
+--
+CREATE VIEW public.g AS
+ SELECT count(*) AS n
+   FROM public.t
+  GROUP BY (- 3);
+--- restore
+ set_config 
+------------
+(1 row)
+psql:dump-rel14.sql:43: ERROR:  ORDER BY position -3 is not in select list
+LINE 4:   ORDER BY (- 3);
+                    ^
+psql:dump-rel14.sql:46: ERROR:  relation "public.o" does not exist
+psql:dump-rel14.sql:54: ERROR:  relation "public.o" does not exist
+LINE 3:    FROM public.o;
+                ^
+psql:dump-rel14.sql:57: ERROR:  relation "public.dep" does not exist
+psql:dump-rel14.sql:66: ERROR:  GROUP BY position -3 is not in select list
+LINE 4:   GROUP BY (- 3);
+                    ^
+psql:dump-rel14.sql:69: ERROR:  relation "public.g" does not exist
+--- relations after restore:
+t
+--- extent
+v | raw | pretty
+agg_order |  SELECT array_agg(t.a ORDER BY (- 3)) AS x FROM t; |  SELECT array_agg(t.a ORDER BY (- 3)) AS x FROM t;
+distinct |  SELECT DISTINCT (- 3) AS x FROM t; |  SELECT DISTINCT - 3 AS x FROM t;
+do_dbl |  SELECT DISTINCT ON ((- (- 1))) t.a, t.b FROM t ORDER BY (- (- 1)), t.b DESC; |  SELECT DISTINCT ON ((- (- 1))) t.a, t.b FROM t ORDER BY (- (- 1)), t.b DESC;
+do_int4 |  SELECT DISTINCT ON ((- 3)) t.a FROM t; |  SELECT DISTINCT ON ((- 3)) t.a FROM t;
+g_dbl |  SELECT t.a, count(*) AS n FROM t GROUP BY t.a, (- (- 1)); |  SELECT t.a, count(*) AS n FROM t GROUP BY t.a, (- (- 1));
+g_int4 |  SELECT count(*) AS n FROM t GROUP BY (- 3); |  SELECT count(*) AS n FROM t GROUP BY (- 3);
+gs_cube |  SELECT count(*) AS n FROM t GROUP BY CUBE((- 3)); |  SELECT count(*) AS n FROM t GROUP BY CUBE((- 3));
+gs_rollup |  SELECT count(*) AS n FROM t GROUP BY ROLLUP((- 3)); |  SELECT count(*) AS n FROM t GROUP BY ROLLUP((- 3));
+gs_sets |  SELECT count(*) AS n FROM t GROUP BY GROUPING SETS (((- 3)), ()); |  SELECT count(*) AS n FROM t GROUP BY GROUPING SETS (((- 3)), ());
+o_binop |  SELECT t.a FROM t ORDER BY ((- 3) + 0); |  SELECT t.a FROM t ORDER BY ((- 3) + 0);
+o_float8 |  SELECT t.a FROM t ORDER BY (- (1.5)::double precision); |  SELECT t.a FROM t ORDER BY (- 1.5::double precision);
+o_int2 |  SELECT t.a FROM t ORDER BY (- '3'::smallint); |  SELECT t.a FROM t ORDER BY (- '3'::smallint);
+o_int4 |  SELECT t.a FROM t ORDER BY (- 3); |  SELECT t.a FROM t ORDER BY (- 3);
+o_int4_0 |  SELECT t.a FROM t ORDER BY (- 0); |  SELECT t.a FROM t ORDER BY (- 0);
+o_int4_dbl |  SELECT t.a, t.b, t.c FROM t ORDER BY (- (- 3)); |  SELECT t.a, t.b, t.c FROM t ORDER BY (- (- 3));
+o_int4_dbl1 |  SELECT t.a, t.b, t.c FROM t ORDER BY (- (- 1)); |  SELECT t.a, t.b, t.c FROM t ORDER BY (- (- 1));
+o_int4_neg |  SELECT t.a FROM t ORDER BY (- '-1'::integer); |  SELECT t.a FROM t ORDER BY (- '-1'::integer);
+o_int4_neg3 |  SELECT t.a, t.b, t.c FROM t ORDER BY (- '-3'::integer); |  SELECT t.a, t.b, t.c FROM t ORDER BY (- '-3'::integer);
+o_int8 |  SELECT t.a FROM t ORDER BY (- '3'::bigint); |  SELECT t.a FROM t ORDER BY (- '3'::bigint);
+o_minus_plus |  SELECT t.a, t.b, t.c FROM t ORDER BY (- (+ 3)); |  SELECT t.a, t.b, t.c FROM t ORDER BY (- (+ 3));
+o_num_dec |  SELECT t.a FROM t ORDER BY (- 1.5); |  SELECT t.a FROM t ORDER BY (- 1.5);
+o_num_dec_dbl |  SELECT t.a FROM t ORDER BY (- (- 1.5)); |  SELECT t.a FROM t ORDER BY (- (- 1.5));
+o_num_int |  SELECT t.a FROM t ORDER BY (- '3'::numeric); |  SELECT t.a FROM t ORDER BY (- '3'::numeric);
+o_plus |  SELECT t.a FROM t ORDER BY (+ 3); |  SELECT t.a FROM t ORDER BY (+ 3);
+setop_order |  SELECT t.a FROM t UNION ALL SELECT t.b AS a FROM t ORDER BY 1; |  SELECT t.a FROM t UNION ALL SELECT t.b AS a FROM t ORDER BY 1;
+sub_order |  SELECT s.a FROM ( SELECT t.a FROM t ORDER BY (- 3) LIMIT 2) s; |  SELECT s.a FROM ( SELECT t.a FROM t ORDER BY (- 3) LIMIT 2) s;
+w_named |  SELECT t.a, count(*) OVER w AS n FROM t WINDOW w AS (PARTITION BY (- 3) ORDER BY (- 3)); |  SELECT t.a, count(*) OVER w AS n FROM t WINDOW w AS (PARTITION BY (- 3) ORDER BY (- 3));
+w_order |  SELECT t.a, row_number() OVER (ORDER BY (- 3)) AS rn FROM t; |  SELECT t.a, row_number() OVER (ORDER BY (- 3)) AS rn FROM t;
+w_part |  SELECT t.a, count(*) OVER (PARTITION BY (- 3)) AS n FROM t; |  SELECT t.a, count(*) OVER (PARTITION BY (- 3)) AS n FROM t;
+(29 rows)
+v | raw_reparse | pretty_reparse
+agg_order | same rows ; redeparse:  SELECT array_agg(t.a ORDER BY '-3'::integer) AS x FROM t; | same rows ; redeparse:  SELECT array_agg(t.a ORDER BY '-3'::integer) AS x FROM t;
+distinct | same rows ; redeparse:  SELECT DISTINCT '-3'::integer AS x FROM t; | same rows ; redeparse:  SELECT DISTINCT '-3'::integer AS x FROM t;
+do_dbl | ROWS DIFFER: (1,40)  vs  (1,40) (2,20) (3,30) ; redeparse:  SELECT DISTINCT ON (t.a) t.a, t.b FROM t ORDER BY t.a, t.b DESC; | ROWS DIFFER: (1,40)  vs  (1,40) (2,20) (3,30) ; redeparse:  SELECT DISTINCT ON (t.a) t.a, t.b FROM t ORDER BY t.a, t.b DESC;
+do_int4 | REPARSE ERROR: DISTINCT ON position -3 is not in select list | REPARSE ERROR: DISTINCT ON position -3 is not in select list
+g_dbl | ROWS DIFFER: (1,2) (3,1) (2,1)  vs  (3,1) (2,1) (1,2) ; redeparse:  SELECT t.a, count(*) AS n FROM t GROUP BY t.a; | ROWS DIFFER: (1,2) (3,1) (2,1)  vs  (3,1) (2,1) (1,2) ; redeparse:  SELECT t.a, count(*) AS n FROM t GROUP BY t.a;
+g_int4 | REPARSE ERROR: GROUP BY position -3 is not in select list | REPARSE ERROR: GROUP BY position -3 is not in select list
+gs_cube | REPARSE ERROR: GROUP BY position -3 is not in select list | REPARSE ERROR: GROUP BY position -3 is not in select list
+gs_rollup | REPARSE ERROR: GROUP BY position -3 is not in select list | REPARSE ERROR: GROUP BY position -3 is not in select list
+gs_sets | REPARSE ERROR: GROUP BY position -3 is not in select list | REPARSE ERROR: GROUP BY position -3 is not in select list
+o_binop | same rows ; redeparse:  SELECT t.a FROM t ORDER BY ('-3'::integer + 0); | same rows ; redeparse:  SELECT t.a FROM t ORDER BY ('-3'::integer + 0);
+o_float8 | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- (1.5)::double precision); | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- (1.5)::double precision);
+o_int2 | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- '3'::smallint); | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- '3'::smallint);
+o_int4 | REPARSE ERROR: ORDER BY position -3 is not in select list | REPARSE ERROR: ORDER BY position -3 is not in select list
+o_int4_0 | REPARSE ERROR: ORDER BY position 0 is not in select list | REPARSE ERROR: ORDER BY position 0 is not in select list
+o_int4_dbl | ROWS DIFFER: (1,10,3) (2,20,2) (3,30,1) (1,40,0)  vs  (1,40,0) (3,30,1) (2,20,2) (1,10,3) ; redeparse:  SELECT t.a, t.b, t.c FROM t ORDER BY t.c; | ROWS DIFFER: (1,10,3) (2,20,2) (3,30,1) (1,40,0)  vs  (1,40,0) (3,30,1) (2,20,2) (1,10,3) ; redeparse:  SELECT t.a, t.b, t.c FROM t ORDER BY t.c;
+o_int4_dbl1 | ROWS DIFFER: (1,10,3) (2,20,2) (3,30,1) (1,40,0)  vs  (1,10,3) (1,40,0) (2,20,2) (3,30,1) ; redeparse:  SELECT t.a, t.b, t.c FROM t ORDER BY t.a; | ROWS DIFFER: (1,10,3) (2,20,2) (3,30,1) (1,40,0)  vs  (1,10,3) (1,40,0) (2,20,2) (3,30,1) ; redeparse:  SELECT t.a, t.b, t.c FROM t ORDER BY t.a;
+o_int4_neg | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- '-1'::integer); | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- '-1'::integer);
+o_int4_neg3 | same rows ; redeparse:  SELECT t.a, t.b, t.c FROM t ORDER BY (- '-3'::integer); | same rows ; redeparse:  SELECT t.a, t.b, t.c FROM t ORDER BY (- '-3'::integer);
+o_int8 | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- '3'::bigint); | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- '3'::bigint);
+o_minus_plus | same rows ; redeparse:  SELECT t.a, t.b, t.c FROM t ORDER BY (- (+ 3)); | same rows ; redeparse:  SELECT t.a, t.b, t.c FROM t ORDER BY (- (+ 3));
+o_num_dec | REPARSE ERROR: non-integer constant in ORDER BY | REPARSE ERROR: non-integer constant in ORDER BY
+o_num_dec_dbl | REPARSE ERROR: non-integer constant in ORDER BY | REPARSE ERROR: non-integer constant in ORDER BY
+o_num_int | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- '3'::numeric); | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (- '3'::numeric);
+o_plus | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (+ 3); | same rows ; redeparse:  SELECT t.a FROM t ORDER BY (+ 3);
+setop_order | same rows ; redeparse:  SELECT t.a FROM t UNION ALL SELECT t.b AS a FROM t ORDER BY 1; | same rows ; redeparse:  SELECT t.a FROM t UNION ALL SELECT t.b AS a FROM t ORDER BY 1;
+sub_order | REPARSE ERROR: ORDER BY position -3 is not in select list | REPARSE ERROR: ORDER BY position -3 is not in select list
+w_named | same rows ; redeparse:  SELECT t.a, count(*) OVER w AS n FROM t WINDOW w AS (PARTITION BY '-3'::integer ORDER BY '-3'::integer); | same rows ; redeparse:  SELECT t.a, count(*) OVER w AS n FROM t WINDOW w AS (PARTITION BY '-3'::integer ORDER BY '-3'::integer);
+w_order | same rows ; redeparse:  SELECT t.a, row_number() OVER (ORDER BY '-3'::integer) AS rn FROM t; | same rows ; redeparse:  SELECT t.a, row_number() OVER (ORDER BY '-3'::integer) AS rn FROM t;
+w_part | same rows ; redeparse:  SELECT t.a, count(*) OVER (PARTITION BY '-3'::integer) AS n FROM t; | same rows ; redeparse:  SELECT t.a, count(*) OVER (PARTITION BY '-3'::integer) AS n FROM t;
+(29 rows)
+pg_get_ruledef
+CREATE RULE r_ins AS
+    ON INSERT TO public.log DO  INSERT INTO log (x)  SELECT t.a
+           FROM t
+          GROUP BY t.a, (- (- 2))
+         LIMIT 0;
+(1 row)
+pg_get_ruledef
+CREATE RULE r_ins AS
+    ON INSERT TO log DO  INSERT INTO log (x)  SELECT t.a
+           FROM t
+          GROUP BY t.a, (- (- 2))
+         LIMIT 0;
+(1 row)
+psql:extent.sql:68: ERROR:  GROUP BY position 2 is not in select list
+LINE 4:           GROUP BY t.a, (- (- 2))
+                                 ^
+pg_get_viewdef
+ SELECT t.a
+   FROM t
+  ORDER BY (- 3);
+(1 row)
+pg_get_functiondef
+CREATE OR REPLACE FUNCTION public.sqlf()
+ RETURNS SETOF integer
+ LANGUAGE sql
+BEGIN ATOMIC
+ SELECT t.a
+    FROM t
+   ORDER BY (- 3);
+END
+
+(1 row)
+sqlf
+1
+2
+3
+1
+(4 rows)
+psql:extent.sql:74: ERROR:  ORDER BY position -3 is not in select list
+LINE 7:    ORDER BY (- 3);
+                     ^
+psql:extent.sql:75: ERROR:  ORDER BY position -3 is not in select list
+LINE 3:   ORDER BY (- 3)
+                    ^

@@ -1,0 +1,26 @@
+--- a/src/alter.c
++++ b/src/alter.c
+@@ -692,12 +692,17 @@
+       pTab->zName
+   );
+ 
+-  sqlite3NestedParse(pParse,
+-      "UPDATE temp." LEGACY_SCHEMA_TABLE " SET "
+-      "sql = sqlite_rename_column(sql, type, name, %Q, %Q, %d, %Q, %d, 1) "
+-      "WHERE type IN ('trigger', 'view')",
+-      zDb, pTab->zName, iCol, zNew, bQuote
+-  );
++  /* If the table is not itself in the temp database, edit the views and
++  ** triggers of the temp database too. If it is, the statement above has
++  ** already edited them.  */
++  if( iSchema!=1 ){
++    sqlite3NestedParse(pParse,
++        "UPDATE temp." LEGACY_SCHEMA_TABLE " SET "
++        "sql = sqlite_rename_column(sql, type, name, %Q, %Q, %d, %Q, %d, 1) "
++        "WHERE type IN ('trigger', 'view')",
++        zDb, pTab->zName, iCol, zNew, bQuote
++    );
++  }
+ 
+   /* Drop and reload the database schema. */
+   renameReloadSchema(pParse, iSchema, INITFLAG_AlterRename);

@@ -1,0 +1,4 @@
+url        new URL("C|", "file:")   has_opaque_path 1 | set_hostname("h") 0 -> file:///C:   | set_pathname("/D:/y") 0 -> file:///C:    | new URL("x", it) failure
+url        new URL("file:///C:")    has_opaque_path 0 | set_hostname("h") 1 -> file://h/C:  | set_pathname("/D:/y") 1 -> file:///D:/y  | new URL("x", it) file:///C:/x
+aggregator new URL("C|", "file:")   has_opaque_path 1 | set_hostname("h") 0 -> file:///C:   | set_pathname("/D:/y") 0 -> file:///C:    | new URL("x", it) failure
+aggregator new URL("file:///C:")    has_opaque_path 0 | set_hostname("h") 1 -> file://h/C:  | set_pathname("/D:/y") 1 -> file:///D:/y  | new URL("x", it) file:///C:/x

@@ -1,0 +1,30 @@
+[package]
+name = "turso-diff"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Differential testing of Turso against SQLite 3.50.4 on ephyra-sqlite's cases and queries"
+
+[dependencies]
+# The ephyra checkout, two directories up.
+ephyra = { path = "../../crates/ephyra" }
+# The generator, pinned: a copy of ephyra-sqlite as of 2026-10-13, so that
+# changes in ../ephyra-sqlite do not break this build or its replays.
+ephyra-sqlite = { path = "../ephyra-sqlite-pinned" }
+rusqlite = { version = "0.37", features = ["bundled", "serialize"] }
+# Turso's Rust API from a checkout at the repository root (README.md gives
+# the revision).
+turso = { path = "../../turso/bindings/rust", default-features = false }
+pollster = "0.4"
+
+[workspace]
+
+# SQLite 3.50.4, the version Turso tracks (COMPAT.md), in place of the
+# bundled 3.50.2. Also what ephyra-sqlite's rusqlite links here, so the
+# generator judges cases with 3.50.4 too. Made by ../vendor/fetch.sh, which
+# must run first.
+[patch.crates-io]
+libsqlite3-sys = { path = "../vendor/libsqlite3-sys-3.50.4" }
+
+[profile.release]
+debug = 1

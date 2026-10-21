@@ -1,0 +1,6 @@
+CREATE TABLE t(a, b);
+CREATE TABLE u(x);
+CREATE INDEX i ON t(a) WHERE b > 1;
+INSERT INTO t VALUES (2, 3);
+INSERT INTO u VALUES (2);
+SELECT count(*) FROM t JOIN u ON u.x = t.a WHERE a = 2 AND b > 1;

@@ -1,0 +1,154 @@
+diff --git a/src/backend/utils/adt/ruleutils.c b/src/backend/utils/adt/ruleutils.c
+index 5e8e1683db0..0d68da89e24 100644
+--- a/src/backend/utils/adt/ruleutils.c
++++ b/src/backend/utils/adt/ruleutils.c
+@@ -435,6 +435,8 @@ static void get_setop_query(Node *setOp, Query *query,
+ static Node *get_rule_sortgroupclause(Index ref, List *tlist,
+ 									  bool force_colno,
+ 									  deparse_context *context);
++static bool is_prefix_op_over_const(Node *expr);
++static void get_prefix_op_over_const(Node *expr, deparse_context *context);
+ static void get_rule_groupingset(GroupingSet *gset, List *targetlist,
+ 								 bool omit_parens, deparse_context *context);
+ static void get_rule_orderby(List *orderList, List *targetList,
+@@ -6583,12 +6585,13 @@ get_rule_sortgroupclause(Index ref, List *tlist, bool force_colno,
+ 	 * expression is a constant, force it to be dumped with an explicit cast
+ 	 * as decoration --- this is because a simple integer constant is
+ 	 * ambiguous (and will be misinterpreted by findTargetlistEntrySQL92()) if
+-	 * we dump it without any decoration.  Similarly, if it's just a Var,
+-	 * there is risk of misinterpretation if the column name is reassigned in
+-	 * the SELECT list, so we may need to force table qualification.  And, if
+-	 * it's anything more complex than a simple Var, then force extra parens
+-	 * around it, to ensure it can't be misinterpreted as a cube() or rollup()
+-	 * construct.
++	 * we dump it without any decoration.  The same goes for a prefix operator
++	 * applied to a constant, since gram.y folds "- 3" into the constant -3.
++	 * Similarly, if it's just a Var, there is risk of misinterpretation if
++	 * the column name is reassigned in the SELECT list, so we may need to
++	 * force table qualification.  And, if it's anything more complex than a
++	 * simple Var, then force extra parens around it, to ensure it can't be
++	 * misinterpreted as a cube() or rollup() construct.
+ 	 */
+ 	if (force_colno)
+ 	{
+@@ -6599,6 +6602,8 @@ get_rule_sortgroupclause(Index ref, List *tlist, bool force_colno,
+ 		 /* do nothing, probably can't happen */ ;
+ 	else if (IsA(expr, Const))
+ 		get_const_expr((Const *) expr, context, 1);
++	else if (is_prefix_op_over_const(expr))
++		get_prefix_op_over_const(expr, context);
+ 	else if (IsA(expr, Var))
+ 	{
+ 		/* Tell get_variable to check for name conflict */
+@@ -6633,6 +6638,44 @@ get_rule_sortgroupclause(Index ref, List *tlist, bool force_colno,
+ 	return expr;
+ }
+ 
++/*
++ * Is expr a prefix operator applied, perhaps repeatedly, to a Const?
++ */
++static bool
++is_prefix_op_over_const(Node *expr)
++{
++	while (IsA(expr, OpExpr) && list_length(((OpExpr *) expr)->args) == 1)
++		expr = (Node *) linitial(((OpExpr *) expr)->args);
++	return IsA(expr, Const);
++}
++
++/*
++ * Display such an expression for get_rule_sortgroupclause, with the Const
++ * decorated by an explicit cast.  Otherwise "- 3" would be read back as the
++ * integer constant -3, which a sort/group clause takes as a column number.
++ */
++static void
++get_prefix_op_over_const(Node *expr, deparse_context *context)
++{
++	StringInfo	buf = context->buf;
++	OpExpr	   *opexpr;
++	Node	   *arg;
++
++	if (IsA(expr, Const))
++	{
++		get_const_expr((Const *) expr, context, 1);
++		return;
++	}
++	opexpr = castNode(OpExpr, expr);
++	arg = (Node *) linitial(opexpr->args);
++	appendStringInfo(buf, "(%s ",
++					 generate_operator_name(opexpr->opno,
++											InvalidOid,
++											exprType(arg)));
++	get_prefix_op_over_const(arg, context);
++	appendStringInfoChar(buf, ')');
++}
++
+ /*
+  * Display a GroupingSet
+  */
+diff --git a/src/test/regress/expected/create_view.out b/src/test/regress/expected/create_view.out
+index 053fa56573f..a548397eae2 100644
+--- a/src/test/regress/expected/create_view.out
++++ b/src/test/regress/expected/create_view.out
+@@ -891,6 +891,35 @@ View definition:
+    FROM tt1
+   ORDER BY tt1.x1;
+ 
++-- Test deparsing of ORDER BY / GROUP BY terms that negate a constant: the
++-- grammar folds "- 1" into the constant -1, which would be read back as a
++-- column number
++create view negated_const_sort as
++select distinct on (- '1'::int4) x1, x2, x3 from tt1
++  order by - '1'::int4, - (- '1'::int4), - '1.5'::numeric, + '2'::int4;
++select pg_get_viewdef('negated_const_sort', true);
++                                  pg_get_viewdef                                  
++----------------------------------------------------------------------------------
++  SELECT DISTINCT ON ((- 1::integer)) x1,                                        +
++     x2,                                                                         +
++     x3                                                                          +
++    FROM tt1                                                                     +
++   ORDER BY (- 1::integer), (- (- 1::integer)), (- 1.5::numeric), (+ 2::integer);
++(1 row)
++
++create view negated_const_group as
++select x1, count(*) from tt1
++  group by x1, - '1'::int4, rollup (- (- '2'::int4));
++select pg_get_viewdef('negated_const_group', false);
++                       pg_get_viewdef                       
++------------------------------------------------------------
++  SELECT x1,                                               +
++     count(*) AS count                                     +
++    FROM tt1                                               +
++   GROUP BY x1, (- 1::integer), ROLLUP((- (- 2::integer)));
++(1 row)
++
++drop view negated_const_sort, negated_const_group;
+ -- Test aliasing of joins
+ create view view_of_joins as
+ select * from
+diff --git a/src/test/regress/sql/create_view.sql b/src/test/regress/sql/create_view.sql
+index 75b8cd5d0fb..a39d5d45ae0 100644
+--- a/src/test/regress/sql/create_view.sql
++++ b/src/test/regress/sql/create_view.sql
+@@ -389,6 +389,22 @@ alter view aliased_order_by rename column x3 to x1;
+ 
+ \d+ aliased_order_by
+ 
++-- Test deparsing of ORDER BY / GROUP BY terms that negate a constant: the
++-- grammar folds "- 1" into the constant -1, which would be read back as a
++-- column number
++
++create view negated_const_sort as
++select distinct on (- '1'::int4) x1, x2, x3 from tt1
++  order by - '1'::int4, - (- '1'::int4), - '1.5'::numeric, + '2'::int4;
++select pg_get_viewdef('negated_const_sort', true);
++
++create view negated_const_group as
++select x1, count(*) from tt1
++  group by x1, - '1'::int4, rollup (- (- '2'::int4));
++select pg_get_viewdef('negated_const_group', false);
++
++drop view negated_const_sort, negated_const_group;
++
+ -- Test aliasing of joins
+ 
+ create view view_of_joins as

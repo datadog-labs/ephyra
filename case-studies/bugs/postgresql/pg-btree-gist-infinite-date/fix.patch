@@ -1,0 +1,89 @@
+diff --git a/contrib/btree_gist/btree_date.c b/contrib/btree_gist/btree_date.c
+index 1824a3d0e6e..54738f9a0df 100644
+--- a/contrib/btree_gist/btree_date.c
++++ b/contrib/btree_gist/btree_date.c
+@@ -91,10 +91,17 @@ gbt_datekey_cmp(const void *a, const void *b, FmgrInfo *flinfo)
+ static float8
+ gdb_date_dist(const void *a, const void *b, FmgrInfo *flinfo)
+ {
++	DateADT		aa = *((const DateADT *) a);
++	DateADT		bb = *((const DateADT *) b);
++	Datum		diff;
++
++	if (DATE_NOT_FINITE(aa) || DATE_NOT_FINITE(bb))
++		return get_float8_infinity();
++
+ 	/* we assume the difference can't overflow */
+-	Datum		diff = DirectFunctionCall2(date_mi,
+-										   DateADTGetDatum(*((const DateADT *) a)),
+-										   DateADTGetDatum(*((const DateADT *) b)));
++	diff = DirectFunctionCall2(date_mi,
++							   DateADTGetDatum(aa),
++							   DateADTGetDatum(bb));
+ 
+ 	return (float8) abs(DatumGetInt32(diff));
+ }
+@@ -119,10 +126,18 @@ PG_FUNCTION_INFO_V1(date_dist);
+ Datum
+ date_dist(PG_FUNCTION_ARGS)
+ {
++	DateADT		a = PG_GETARG_DATEADT(0);
++	DateADT		b = PG_GETARG_DATEADT(1);
++	Datum		diff;
++
++	/* like ts_dist, saturate instead of failing on infinite input */
++	if (DATE_NOT_FINITE(a) || DATE_NOT_FINITE(b))
++		PG_RETURN_INT32(PG_INT32_MAX);
++
+ 	/* we assume the difference can't overflow */
+-	Datum		diff = DirectFunctionCall2(date_mi,
+-										   PG_GETARG_DATUM(0),
+-										   PG_GETARG_DATUM(1));
++	diff = DirectFunctionCall2(date_mi,
++							   PG_GETARG_DATUM(0),
++							   PG_GETARG_DATUM(1));
+ 
+ 	PG_RETURN_INT32(abs(DatumGetInt32(diff)));
+ }
+@@ -206,30 +221,28 @@ gbt_date_penalty(PG_FUNCTION_ARGS)
+ 	dateKEY    *origentry = (dateKEY *) DatumGetPointer(((GISTENTRY *) PG_GETARG_POINTER(0))->key);
+ 	dateKEY    *newentry = (dateKEY *) DatumGetPointer(((GISTENTRY *) PG_GETARG_POINTER(1))->key);
+ 	float	   *result = (float *) PG_GETARG_POINTER(2);
+-	int32		diff,
++	double		diff,
+ 				res;
+ 
+-	diff = DatumGetInt32(DirectFunctionCall2(date_mi,
+-											 DateADTGetDatum(newentry->upper),
+-											 DateADTGetDatum(origentry->upper)));
+-
++	/*
++	 * Work on the raw DateADT values in double arithmetic rather than calling
++	 * date_mi, which rejects the infinities (DATEVAL_NOBEGIN/NOEND are
++	 * PG_INT32_MIN/MAX and simply act as very distant dates here).  This is
++	 * what gbt_ts_penalty does for timestamps.
++	 */
++	diff = (double) newentry->upper - (double) origentry->upper;
+ 	res = Max(diff, 0);
+ 
+-	diff = DatumGetInt32(DirectFunctionCall2(date_mi,
+-											 DateADTGetDatum(origentry->lower),
+-											 DateADTGetDatum(newentry->lower)));
+-
++	diff = (double) origentry->lower - (double) newentry->lower;
+ 	res += Max(diff, 0);
+ 
+ 	*result = 0.0;
+ 
+ 	if (res > 0)
+ 	{
+-		diff = DatumGetInt32(DirectFunctionCall2(date_mi,
+-												 DateADTGetDatum(origentry->upper),
+-												 DateADTGetDatum(origentry->lower)));
++		diff = (double) origentry->upper - (double) origentry->lower;
+ 		*result += FLT_MIN;
+-		*result += (float) (res / ((double) (res + diff)));
++		*result += (float) (res / (res + diff));
+ 		*result *= (FLT_MAX / (((GISTENTRY *) PG_GETARG_POINTER(0))->rel->rd_att->natts + 1));
+ 	}
+ 

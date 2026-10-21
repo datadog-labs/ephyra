@@ -1,0 +1,4 @@
+CREATE TABLE t0(c0 INTEGER);
+INSERT INTO t0 VALUES (1);
+SET disabled_optimizers='filter_pushdown';
+SELECT (SELECT 1) AS a0, (SELECT 2) AS a1 FROM t0 WHERE NULL;

@@ -1,0 +1,11 @@
+CREATE TABLE t0(x INT);
+CREATE TABLE t1(a INT, b INT);
+CREATE TABLE t2(c INT);
+CREATE TABLE t3(k INTEGER PRIMARY KEY);
+CREATE TABLE o(y INT, z INT);
+INSERT INTO t0 SELECT value%2 FROM generate_series(1,10);
+INSERT INTO t1 SELECT value%3, value%50 FROM generate_series(1,200);
+INSERT INTO t2 SELECT value FROM generate_series(1,2);
+INSERT INTO t3 SELECT value*2 FROM generate_series(1,5);
+INSERT INTO o SELECT value%3, value%4 FROM generate_series(1,5);
+SELECT o.rowid, (SELECT count(*) FROM t2, t1 AS p, t3 WHERE p.a = o.y AND t3.k = p.b + o.y - o.z) FROM o;

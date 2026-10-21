@@ -1,0 +1,17 @@
+--- a/src/expr.c
++++ b/src/expr.c
+@@ -3399,6 +3399,14 @@
+           testcase( pIdx->nColumn==BMS-2 );
+           testcase( pIdx->nColumn==BMS-1 );
+           if( pIdx->nColumn>=BMS-1 ) continue;
++          if( nExpr>pIdx->nKeyCol
++           && IsPrimaryKeyIndex(pIdx) && !HasRowid(pTab)
++          ){
++            /* The PK of a WITHOUT ROWID table holds all table columns, but
++            ** fields past nKeyCol may be missing from records written before
++            ** ALTER TABLE ADD COLUMN. Do not look them up in the b-tree. */
++            continue;
++          }
+           if( mustBeUnique ){
+             if( pIdx->nKeyCol>nExpr
+              ||(pIdx->nColumn>nExpr && !IsUniqueIndex(pIdx))

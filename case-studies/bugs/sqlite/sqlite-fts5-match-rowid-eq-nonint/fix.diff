@@ -1,0 +1,57 @@
+--- a/ext/fts5/fts5_main.c
++++ b/ext/fts5/fts5_main.c
+@@ -1298,6 +1298,32 @@
+ }
+ 
+ /*
++** Argument pVal is the right-hand side of a "rowid = ?" constraint. If
++** an integer rowid can be equal to it, set *piRowid to that integer and
++** return 1. Otherwise (NULL, a real that is not an integer, or a text or
++** blob value that is not a number) return 0.
++*/
++static int fts5RowidEqValue(sqlite3_value *pVal, i64 *piRowid){
++  switch( sqlite3_value_numeric_type(pVal) ){
++    case SQLITE_INTEGER:
++      *piRowid = sqlite3_value_int64(pVal);
++      return 1;
++    case SQLITE_FLOAT: {
++      double r = sqlite3_value_double(pVal);
++      if( r>=-9223372036854775808.0 && r<9223372036854775808.0 ){
++        i64 iVal = (i64)r;
++        if( (double)iVal==r ){
++          *piRowid = iVal;
++          return 1;
++        }
++      }
++      break;
++    }
++  }
++  return 0;
++}
++
++/*
+ ** Set the error message on the virtual table passed as the first argument.
+ */
+ static void fts5SetVtabError(Fts5FullTable *p, const char *zFormat, ...){
+@@ -1582,6 +1608,21 @@
+   }else{
+     pCsr->iLastRowid = fts5GetRowidLimit(pRowidLe, LARGEST_INT64);
+     pCsr->iFirstRowid = fts5GetRowidLimit(pRowidGe, SMALLEST_INT64);
++  }
++  if( pRowidEq ){
++    /* xBestIndex() sets the omit flag for "rowid = ?", so the limits
++    ** must select exactly the rowids equal to the value: none at all if
++    ** no integer is equal to it. */
++    i64 iEq;
++    if( fts5RowidEqValue(pRowidEq, &iEq) ){
++      pCsr->iFirstRowid = pCsr->iLastRowid = iEq;
++    }else if( bDesc ){
++      pCsr->iFirstRowid = SMALLEST_INT64;
++      pCsr->iLastRowid = LARGEST_INT64;
++    }else{
++      pCsr->iFirstRowid = LARGEST_INT64;
++      pCsr->iLastRowid = SMALLEST_INT64;
++    }
+   }
+ 
+   rc = sqlite3Fts5IndexLoadConfig(pTab->p.pIndex);

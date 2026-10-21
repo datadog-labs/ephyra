@@ -1,0 +1,1 @@
+sqleq-fuzz: after #205, a literal compared with an expression of a column, or seen through a value-changing cast, still hides a boundary difference

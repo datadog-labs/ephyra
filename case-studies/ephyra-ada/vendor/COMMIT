@@ -1,0 +1,14 @@
+ada main 42963db48056403f6ec3ff6e6dbea62ed724b6ec (2026-10-12), singleheader/amalgamate.py,
+with ada's own bundled IDNA (ada-idna v0.7.0: tables regenerated from the UCD, Unicode 18),
+built from a clean clone with the source part (tests excluded) of each still-open fix:
+  ../../bugs/ada/ada-file-drive-letter-opaque-path/fix.patch            (ada-url/ada#1278)
+  ../../bugs/ada/ada-set-host-port-length-limit/fix.patch               (ada-url/ada#1282)
+  ../../bugs/ada/ada-urlpattern-protocol-colon-oob/fix.patch            (ada-url/ada#1283)
+  ../../bugs/ada/ada-urlpattern-opaque-pathname-authority/fix.patch     (ada-url/ada#1284)
+  ../../bugs/ada/ada-urlpattern-search-special-query-encode/fix.patch   (ada-url/ada#1285)
+  ../../bugs/ada/ada-set-host-idna-expansion-limit/fix.patch            (ada-url/ada#1326, regression from #1262)
+  ../../bugs/ada/ada-urlpattern-pattern-string-prefix-grouping/fix.patch (ada-url/ada#1327)
+Fixed upstream and so no longer patched here: #1280 (#1312), #1281 (#1313), idna#97
+(idna #100, ada #1288), SSSE3 dispatch (#1321). #1279 was closed as not planned, so its
+deviation is live in this build.
+Regenerate when the remaining ones are fixed upstream.

@@ -1,0 +1,114 @@
+--- a/ext/fts5/test/fts5alter.test
++++ b/ext/fts5/test/fts5alter.test
+@@ -98,4 +98,111 @@
+   SELECT rowid FROM abc WHERE abc MATCH 'a';
+ } {1 2}
+ 
++#-------------------------------------------------------------------------
++# A contentless_unindexed=1 table has a %_content table. Check that
++# ALTER TABLE RENAME renames it and that DROP TABLE drops it.
++#
++foreach {tn opts} {
++  1 {}
++  2 {, contentless_delete=1}
++  3 {, columnsize=0}
++} {
++  reset_db
++  do_execsql_test 4.$tn.0 "
++    CREATE VIRTUAL TABLE ft USING fts5(a, b UNINDEXED,
++        content='', contentless_unindexed=1 $opts
++    );
++    INSERT INTO ft(rowid, a, b) VALUES(1, 'x y', 'b1');
++  "
++
++  do_execsql_test 4.$tn.1 {
++    ALTER TABLE ft RENAME TO ft2;
++    SELECT name FROM sqlite_schema WHERE name LIKE 'ft\_%' ESCAPE '\';
++  } {}
++
++  do_execsql_test 4.$tn.2 {
++    SELECT name FROM sqlite_schema WHERE name='ft2_content';
++  } {ft2_content}
++
++  do_execsql_test 4.$tn.3 {
++    INSERT INTO ft2(rowid, a, b) VALUES(2, 'x z', 'b2');
++    SELECT rowid, b FROM ft2('x');
++  } {1 b1 2 b2}
++
++  db close
++  sqlite3 db test.db
++  do_execsql_test 4.$tn.4 {
++    INSERT INTO ft2(rowid, a, b) VALUES(3, 'z', 'b3');
++    INSERT INTO ft2(ft2) VALUES('integrity-check');
++    SELECT rowid, b FROM ft2('z');
++  } {2 b2 3 b3}
++
++  do_execsql_test 4.$tn.5 {
++    PRAGMA integrity_check;
++  } {ok}
++
++  do_execsql_test 4.$tn.6 {
++    DROP TABLE ft2;
++    SELECT name FROM sqlite_schema;
++  } {}
++
++  set create "
++    CREATE VIRTUAL TABLE ft3 USING fts5(a, b UNINDEXED,
++        content='', contentless_unindexed=1 $opts
++    );
++  "
++  do_execsql_test 4.$tn.7 "
++    $create
++    INSERT INTO ft3(rowid, a, b) VALUES(1, 'x y', 'b1');
++    DROP TABLE ft3;
++    SELECT name FROM sqlite_schema WHERE name LIKE 'ft3%';
++  " {}
++
++  do_execsql_test 4.$tn.8 "
++    $create
++    SELECT count(*) FROM ft3_content;
++  " {0}
++}
++
++#-------------------------------------------------------------------------
++# Test the same for a table with an odd name in an attached database,
++# and that a RENAME or DROP rolled back leaves the table usable.
++#
++reset_db
++forcedelete test.db2
++do_execsql_test 5.0 {
++  ATTACH 'test.db2' AS aux;
++  CREATE VIRTUAL TABLE aux."a'b" USING fts5(a, b UNINDEXED,
++      content='', contentless_unindexed=1
++  );
++  INSERT INTO aux."a'b"(rowid, a, b) VALUES(1, 'x y', 'b1');
++}
++
++do_execsql_test 5.1 {
++  BEGIN;
++    ALTER TABLE aux."a'b" RENAME TO "c'd";
++    INSERT INTO aux."c'd"(rowid, a, b) VALUES(2, 'x z', 'b2');
++    SELECT name FROM aux.sqlite_schema ORDER BY name;
++  ROLLBACK;
++} {c'd c'd_config c'd_content c'd_data c'd_docsize c'd_idx}
++
++do_execsql_test 5.2 {
++  BEGIN;
++    DROP TABLE aux."a'b";
++    SELECT count(*) FROM aux.sqlite_schema;
++  ROLLBACK;
++  SELECT rowid, b FROM aux."a'b"('x');
++} {0 1 b1}
++
++do_execsql_test 5.3 {
++  ALTER TABLE aux."a'b" RENAME TO "c'd";
++  INSERT INTO aux."c'd"(rowid, a, b) VALUES(2, 'x z', 'b2');
++  SELECT rowid, b FROM aux."c'd"('x');
++} {1 b1 2 b2}
++
++do_execsql_test 5.4 {
++  DROP TABLE aux."c'd";
++  SELECT count(*) FROM aux.sqlite_schema;
++} {0}
++
+ finish_test

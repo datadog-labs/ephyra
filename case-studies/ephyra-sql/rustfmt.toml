@@ -1,0 +1,3 @@
+# The stable subset of the ephyra checkout's .rustfmt.toml.
+use_small_heuristics = "Max"
+match_block_trailing_comma = true

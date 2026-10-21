@@ -1,0 +1,16 @@
+# name: test/optimizer/statistics/statistics_join_always_matches_reorder.test
+# description: The projection map of an always-matching SEMI join replaced by a cross product survives join reordering
+# group: [statistics]
+
+statement ok
+CREATE TABLE t(c DOUBLE);
+
+statement ok
+INSERT INTO t VALUES (0.0), (NULL);
+
+statement ok
+SET disabled_optimizers='empty_result_pullup';
+
+query II
+SELECT * FROM (SELECT 0.5 AS a FROM (SELECT 1 AS a WHERE false) AS x4 CROSS JOIN t AS x5 SEMI JOIN t AS x6 ON true WHERE coalesce((SELECT x4.a), x5.c) IS NOT NULL) AS x9 JOIN t AS x1 ON x1.c < x9.a
+----

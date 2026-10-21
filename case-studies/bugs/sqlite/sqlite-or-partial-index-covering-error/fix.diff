@@ -1,0 +1,16 @@
+--- src/where.c
++++ src/where.c
+@@ -4195,7 +4195,12 @@
+         pNew->wsFlags = WHERE_IDX_ONLY | WHERE_INDEXED;
+       }else{
+         m = pSrc->colUsed & pProbe->colNotIdxed;
+-        if( pProbe->pPartIdxWhere ){
++        if( pProbe->pPartIdxWhere
++         && (pWInfo->wctrlFlags & WHERE_OR_SUBCLAUSE)==0
++        ){
++          /* A term of the OR-optimization reopens the shared index cursor
++          ** and does not register the column-to-constant substitutions
++          ** (see sqlite3WhereBegin()), so it must not count on them here */
+           wherePartIdxExpr(
+               pWInfo->pParse, pProbe, pProbe->pPartIdxWhere, &m, 0, 0
+           );

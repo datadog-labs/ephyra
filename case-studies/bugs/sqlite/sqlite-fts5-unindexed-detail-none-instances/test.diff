@@ -1,0 +1,72 @@
+--- a/ext/fts5/test/fts5unindexed.test
++++ b/ext/fts5/test/fts5unindexed.test
+@@ -74,5 +74,69 @@
+   INSERT INTO t4(t4) VALUES('integrity-check');
+ } {}
+ 
++#-------------------------------------------------------------------------
++# With detail=none and detail=col, the position lists used by auxiliary
++# functions are built by tokenizing the row's text. Check that phrase
++# instances in UNINDEXED columns are not reported - the results should
++# be the same as for detail=full, where the lists come from the index.
++#
++foreach_detail_mode $testprefix {
++  fts5_aux_test_functions db
++  sqlite3_fts5_register_matchinfo db
+ 
++  do_execsql_test 4.0 {
++    CREATE VIRTUAL TABLE t5 USING fts5(a, b UNINDEXED, detail=%DETAIL%);
++    INSERT INTO t5 VALUES('one two zeta three four', 'x y zeta');
++    INSERT INTO t5 VALUES('zeta', 'zeta');
++    INSERT INTO t5 VALUES('five', 'six');
++    CREATE VIRTUAL TABLE t6 USING fts5(a, b UNINDEXED, detail=full);
++    INSERT INTO t6 SELECT a, b FROM t5;
++  }
++
++  do_execsql_test 4.1 {
++    SELECT snippet(t5, -1, '[', ']', '..', 3) FROM t5('zeta');
++  } {{one two [zeta]..} {[zeta]}}
++
++  do_execsql_test 4.2 {
++    SELECT highlight(t5, 1, '[', ']') FROM t5('zeta');
++  } {{x y zeta} zeta}
++
++  do_execsql_test 4.3 {
++    SELECT fts5_test_poslist(t5), fts5_test_poslist2(t5), fts5_test_collist(t5)
++    FROM t5('zeta');
++  } {0.0.2 0.0.2 0.0 0.0.0 0.0.0 0.0}
++
++  do_execsql_test 4.4 {
++    SELECT rowid, fts5_test_poslist(t5) FROM t5('zeta OR x') ORDER BY rank;
++  } {2 0.0.0 1 0.0.2}
++
++  do_execsql_test 4.5 {
++    SELECT rowid, fts5_test_poslist(t5) FROM t5('zeta NOT x') ORDER BY rank;
++  } {2 0.0.0 1 0.0.2}
++
++  do_execsql_test 4.6 {
++    SELECT rowid, quote(matchinfo(t5, 'pcnals')) FROM t5('zeta');
++  } [db eval {
++    SELECT rowid, quote(matchinfo(t6, 'pcnals')) FROM t6('zeta');
++  }]
++
++  do_execsql_test 4.7 {
++    SELECT rowid, bm25(t5) FROM t5('zeta');
++  } [db eval {
++    SELECT rowid, bm25(t6) FROM t6('zeta');
++  }]
++
++  do_execsql_test 4.8 {
++    CREATE TABLE x7(i INTEGER PRIMARY KEY, a, b);
++    INSERT INTO x7 VALUES(1, 'one two zeta three four', 'x y zeta');
++    CREATE VIRTUAL TABLE t7 USING fts5(a, b UNINDEXED,
++        content=x7, content_rowid=i, detail=%DETAIL%
++    );
++    INSERT INTO t7(t7) VALUES('rebuild');
++    SELECT snippet(t7, -1, '[', ']', '..', 3), highlight(t7, 1, '[', ']'),
++           fts5_test_poslist(t7)
++    FROM t7('zeta');
++  } {{one two [zeta]..} {x y zeta} 0.0.2}
++}
++
+ finish_test

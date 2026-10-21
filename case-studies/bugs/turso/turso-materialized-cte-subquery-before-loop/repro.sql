@@ -1,0 +1,7 @@
+CREATE TABLE t0(c0);
+INSERT INTO t0 VALUES(7);
+WITH x AS MATERIALIZED (SELECT (SELECT c0) AS c0 FROM t0)
+SELECT * FROM (SELECT (SELECT c0 FROM x));
+-- same error without MATERIALIZED when the CTE is read twice:
+WITH x AS (SELECT (SELECT c0) AS c0 FROM t0)
+SELECT max(1) OVER (), (SELECT count(*) FROM x AS a, x AS b);

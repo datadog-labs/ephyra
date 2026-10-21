@@ -1,0 +1,18 @@
+PRAGMA page_size=512;
+CREATE TABLE t(c PRIMARY KEY) WITHOUT ROWID;
+INSERT INTO t VALUES (hex(zeroblob(35)));
+INSERT INTO t VALUES (hex(zeroblob(36)));
+INSERT INTO t VALUES (hex(zeroblob(37)));
+INSERT INTO t VALUES (hex(zeroblob(38)));
+INSERT INTO t VALUES (hex(zeroblob(44)));
+INSERT INTO t VALUES (hex(zeroblob(45)));
+INSERT INTO t VALUES (hex(zeroblob(46)));
+INSERT INTO t VALUES (hex(zeroblob(47)));
+INSERT INTO t VALUES (x'');
+INSERT INTO t VALUES (zeroblob(94));
+INSERT INTO t VALUES (zeroblob(95));
+INSERT INTO t VALUES (zeroblob(96));
+PRAGMA integrity_check;
+DELETE FROM t WHERE c = zeroblob(94);
+DELETE FROM t WHERE c = hex(zeroblob(44));
+DELETE FROM t WHERE c = x'';

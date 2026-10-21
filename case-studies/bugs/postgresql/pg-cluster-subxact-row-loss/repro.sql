@@ -1,0 +1,13 @@
+CREATE TABLE t1(c0 text, c1 int8);
+BEGIN; SAVEPOINT s0;
+INSERT INTO t1 DEFAULT VALUES;
+CREATE INDEX t1_i0 ON t1 USING btree (c1);
+SAVEPOINT s1;
+UPDATE t1 SET c0 = NULL;
+ROLLBACK TO s1;
+CLUSTER t1 USING t1_i0;
+SELECT 'after cluster, seqscan', count(*) FROM t1;
+DELETE FROM t1;
+SELECT 'after delete', count(*) FROM t1;
+COMMIT;
+SELECT 'after commit', count(*) FROM t1;

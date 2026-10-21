@@ -1,0 +1,12 @@
+CREATE TABLE t0(x INT);
+CREATE TABLE t1(a INT, b INT);
+CREATE TABLE t2(c INT);
+CREATE TABLE t3(k INTEGER PRIMARY KEY);
+CREATE TABLE o(y INT, z INT);
+INSERT INTO t0 SELECT value%3 FROM generate_series(1,3);
+INSERT INTO t1 SELECT value%3, value%3 FROM generate_series(1,200);
+INSERT INTO t2 SELECT value FROM generate_series(1,2);
+INSERT INTO t3 SELECT value*1 FROM generate_series(1,20);
+INSERT INTO o SELECT value%3, value%4 FROM generate_series(1,5);
+ANALYZE;
+SELECT o.rowid FROM o WHERE EXISTS (SELECT 1 FROM t2, t3, t0, (SELECT DISTINCT a, b FROM t1) AS p WHERE p.a = t0.x AND t3.k = p.b + o.y - o.z);

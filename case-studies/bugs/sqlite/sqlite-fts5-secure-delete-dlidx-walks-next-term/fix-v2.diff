@@ -1,0 +1,29 @@
+--- a/ext/fts5/fts5_index.c
++++ b/ext/fts5/fts5_index.c
+@@ -3125,6 +3125,12 @@
+ ** Move the seg-iter so that it points to the first rowid on page iLeafPgno.
+ ** It is an error if leaf iLeafPgno does not exist. Unless the db is
+ ** a 'secure-delete' db, if it contains no rowids then this is also an error.
++**
++** In a 'secure-delete' db, the doclist-index is not updated when entries
++** are removed, so page iLeafPgno may no longer contain any rowids from
++** the current doclist. In that case the iterator is moved to the first
++** rowid on a later page, or to EOF if the doclist has no rowids on or
++** after page iLeafPgno.
+ */
+ static void fts5SegIterGotoPage(
+   Fts5Index *p,                   /* FTS5 backend object */
+@@ -3157,6 +3163,13 @@
+         }
+         break;
+       }
++      if( !fts5LeafIsTermless(pIter->pLeaf) ){
++        /* The page has a term but no rowid before it, so the current
++        ** doclist ends on this page. The iterator is at EOF.  */
++        fts5DataRelease(pIter->pLeaf);
++        pIter->pLeaf = 0;
++        break;
++      }
+     }
+   }
+ }

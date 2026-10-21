@@ -1,0 +1,55 @@
+diff --git a/src/execution/operator/join/physical_hash_join.cpp b/src/execution/operator/join/physical_hash_join.cpp
+index 76961cf4ed..efdfc9a07e 100644
+--- a/src/execution/operator/join/physical_hash_join.cpp
++++ b/src/execution/operator/join/physical_hash_join.cpp
+@@ -1053,8 +1053,9 @@ void PhysicalHashJoin::PrepareFinalize(ClientContext &context, GlobalSinkState &
+ 
+ 	gstate.total_size =
+ 	    ht.GetTotalSize(gstate.local_hash_tables, gstate.max_partition_size, gstate.max_partition_count);
++	// the probe side is spilled together with its hash column (see probe_types), so size it with that layout
+ 	gstate.probe_side_requirement =
+-	    GetPartitioningSpaceRequirement(context, children[0].get().GetTypes(), ht.GetRadixBits(), gstate.num_threads);
++	    GetPartitioningSpaceRequirement(context, gstate.probe_types, ht.GetRadixBits(), gstate.num_threads);
+ 	const auto max_partition_ht_size =
+ 	    gstate.max_partition_size + gstate.hash_table->PointerTableSize(gstate.max_partition_count);
+ 	gstate.temporary_memory_state->SetMinimumReservation(max_partition_ht_size + gstate.probe_side_requirement);
+@@ -1450,7 +1451,8 @@ public:
+ 		sink.total_size = sink.hash_table->GetTotalSize(partition_sizes, partition_counts, sink.max_partition_size,
+ 		                                                sink.max_partition_count);
+ 		sink.probe_side_requirement =
+-		    GetPartitioningSpaceRequirement(sink.context, op.types, sink.hash_table->GetRadixBits(), sink.num_threads);
++		    GetPartitioningSpaceRequirement(sink.context, sink.probe_types, sink.hash_table->GetRadixBits(),
++		                                    sink.num_threads);
+ 
+ 		sink.temporary_memory_state->SetMinimumReservation(sink.max_partition_size +
+ 		                                                   sink.hash_table->PointerTableSize(sink.max_partition_count) +
+diff --git a/test/sql/join/hash_join/test_hash_join_zero_probe_columns.test b/test/sql/join/hash_join/test_hash_join_zero_probe_columns.test
+new file mode 100644
+index 0000000000..188896a29d
+--- /dev/null
++++ b/test/sql/join/hash_join/test_hash_join_zero_probe_columns.test
+@@ -0,0 +1,24 @@
++# name: test/sql/join/hash_join/test_hash_join_zero_probe_columns.test
++# description: Hash join whose probe side has no columns must not fail when sizing the probe-side spill
++# group: [hash_join]
++
++statement ok
++CREATE TABLE t1(c0 INTEGER);
++
++statement ok
++SET disabled_optimizers='unused_columns';
++
++query I
++SELECT 0 FROM t1 HAVING 0 IN (SELECT 0 FROM t1);
++----
++
++query I
++SELECT 0 FROM range(3) HAVING 0 IN (SELECT 0 FROM t1);
++----
++
++statement ok
++SET debug_force_external=true;
++
++query I
++SELECT 0 FROM range(3) HAVING 0 IN (SELECT 0 FROM t1);
++----

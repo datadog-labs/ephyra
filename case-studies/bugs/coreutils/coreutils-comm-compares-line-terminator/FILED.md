@@ -1,0 +1,1 @@
+Filed 2026-10-16 by the owner as https://github.com/uutils/coreutils/issues/15439 (report.md, Cedar format, with fix.patch embedded). PR not opened yet: uutils wants maintainer feedback on the issue first.

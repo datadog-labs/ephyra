@@ -1,0 +1,26 @@
+diff --git a/src/backend/executor/execGrouping.c b/src/backend/executor/execGrouping.c
+index 948aa2f177a..8d507e31b0f 100644
+--- a/src/backend/executor/execGrouping.c
++++ b/src/backend/executor/execGrouping.c
+@@ -216,6 +216,21 @@ BuildTupleHashTable(PlanState *parent,
+ 	else
+ 		nbuckets = (uint32) nelements;
+ 
++	/*
++	 * Limit the initial table size request to not more than hash_mem.  The
++	 * planner can choose a hashed plan it expects to exceed hash_mem (it is
++	 * only "disabled", e.g. when sorting is disabled too), and nodes such as
++	 * RecursiveUnion have no alternative at all; the table can still grow on
++	 * demand if the input really is that large.
++	 */
++	{
++		double		limit = (double) get_hash_memory_limit() /
++			(sizeof(TupleHashEntryData) + MAXALIGN(additionalsize));
++
++		if (nbuckets > limit)
++			nbuckets = (uint32) Max(limit, 1);
++	}
++
+ 	/* tuplescxt must be separate, else ResetTupleHashTable breaks things */
+ 	Assert(metacxt != tuplescxt);
+ 

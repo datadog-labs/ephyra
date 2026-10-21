@@ -1,0 +1,126 @@
+diff --git a/src/optimizer/join_order/join_order_optimizer.cpp b/src/optimizer/join_order/join_order_optimizer.cpp
+index 1ed6428e93..11b653046d 100644
+--- a/src/optimizer/join_order/join_order_optimizer.cpp
++++ b/src/optimizer/join_order/join_order_optimizer.cpp
+@@ -8,6 +8,7 @@
+ #include "duckdb/optimizer/join_order/plan_enumerator.hpp"
+ #include "duckdb/planner/expression/list.hpp"
+ #include "duckdb/planner/operator/list.hpp"
++#include "duckdb/planner/logical_operator_visitor.hpp"
+ 
+ namespace duckdb {
+ 
+@@ -41,6 +42,60 @@ static optional<RelationStats> CombineReorderableStats(const vector<ColumnBindin
+ 	return result;
+ }
+ 
++//! The child bindings that a positional projection map selects from, before join reordering
++struct ProjectionMapBindings {
++	idx_t child_index;
++	vector<ColumnBinding> child_bindings;
++};
++using projection_map_bindings_t = unordered_map<LogicalOperator *, vector<ProjectionMapBindings>>;
++
++static void CollectProjectionMapBindings(LogicalOperator &op, projection_map_bindings_t &result) {
++	if (op.HasProjectionMap()) {
++		for (idx_t child_index = 0; child_index < op.children.size(); child_index++) {
++			auto projection_map = LogicalOperatorVisitor::GetProjectionMap(op, child_index);
++			if (projection_map && !projection_map->empty()) {
++				result[&op].push_back({child_index, op.children[child_index]->GetColumnBindings()});
++			}
++		}
++	}
++	for (auto &child : op.children) {
++		CollectProjectionMapBindings(*child, result);
++	}
++}
++
++//! Reordering joins can change the column order of a reordered subtree, but projection maps (e.g. the one of the
++//! filter LogicalJoin::PromoteJoinSide places above a join replaced by a cross product) refer to child columns by
++//! position: translate them to the new positions of the bindings they selected
++static void RemapProjectionMaps(LogicalOperator &op, const projection_map_bindings_t &before) {
++	auto entry = before.find(&op);
++	if (entry != before.end()) {
++		for (auto &child_entry : entry->second) {
++			auto projection_map = LogicalOperatorVisitor::GetProjectionMap(op, child_entry.child_index);
++			if (!projection_map || projection_map->empty() || child_entry.child_index >= op.children.size()) {
++				continue;
++			}
++			auto child_bindings = op.children[child_entry.child_index]->GetColumnBindings();
++			if (child_bindings == child_entry.child_bindings) {
++				continue;
++			}
++			vector<ProjectionIndex> new_projection_map;
++			for (auto &projection_index : *projection_map) {
++				auto &binding = child_entry.child_bindings[projection_index.GetIndex()];
++				auto position = std::find(child_bindings.begin(), child_bindings.end(), binding);
++				if (position == child_bindings.end()) {
++					throw InternalException("Join order optimizer lost binding %s selected by a projection map",
++					                        binding.ToString());
++				}
++				new_projection_map.emplace_back(NumericCast<idx_t>(position - child_bindings.begin()));
++			}
++			*projection_map = std::move(new_projection_map);
++		}
++	}
++	for (auto &child : op.children) {
++		RemapProjectionMaps(*child, before);
++	}
++}
++
+ JoinOrderOptimizer::JoinOrderOptimizer(ClientContext &context)
+     : context(context), query_graph_manager(context), depth(1) {
+ }
+@@ -62,6 +117,11 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
+ 		return plan;
+ 	}
+ 
++	projection_map_bindings_t projection_map_bindings;
++	if (depth == 1) {
++		CollectProjectionMapBindings(*plan, projection_map_bindings);
++	}
++
+ 	// make sure query graph manager has not extracted a relation graph already
+ 	LogicalOperator *op = plan.get();
+ 
+@@ -118,6 +178,10 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
+ 		new_logical_plan->EstimateCardinality(context);
+ 	}
+ 
++	if (!projection_map_bindings.empty()) {
++		RemapProjectionMaps(*new_logical_plan, projection_map_bindings);
++	}
++
+ 	if (new_logical_plan->type == LogicalOperatorType::LOGICAL_EXPLAIN) {
+ 		new_logical_plan->SetEstimatedCardinality(3);
+ 	}
+diff --git a/test/optimizer/statistics/statistics_join_always_matches_reorder.test b/test/optimizer/statistics/statistics_join_always_matches_reorder.test
+new file mode 100644
+index 0000000000..b486c2a23d
+--- /dev/null
++++ b/test/optimizer/statistics/statistics_join_always_matches_reorder.test
+@@ -0,0 +1,24 @@
++# name: test/optimizer/statistics/statistics_join_always_matches_reorder.test
++# description: The projection map of an always-matching SEMI join replaced by a cross product survives join reordering
++# group: [statistics]
++
++statement ok
++SET debug_verify_column_bindings=true
++
++statement ok
++CREATE TABLE t(c DOUBLE);
++
++statement ok
++INSERT INTO t VALUES (0.0), (NULL);
++
++statement ok
++SET disabled_optimizers='empty_result_pullup';
++
++query II
++SELECT * FROM (SELECT 0.5 AS a FROM (SELECT 1 AS a WHERE false) AS x4 CROSS JOIN t AS x5 SEMI JOIN t AS x6 ON true WHERE coalesce((SELECT x4.a), x5.c) IS NOT NULL) AS x9 JOIN t AS x1 ON x1.c < x9.a
++----
++
++query I
++SELECT x5.c FROM t AS x4 CROSS JOIN t AS x5 SEMI JOIN t AS x6 ON true, t AS x1 WHERE x1.c < x5.c + x4.c + 1 ORDER BY ALL
++----
++0.0

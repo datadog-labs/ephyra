@@ -1,0 +1,16 @@
+# name: test/optimizer/join_elimination_no_conditions.test
+# description: decorrelated scalar subquery yields a join without conditions; join elimination must not assert
+# group: [optimizer]
+
+statement ok
+create table t(c int);
+
+statement ok
+insert into t values (1), (-1), (NULL);
+
+query I
+select (select case when true then 0 else count(distinct 1) end from t x where t.c > 0) from t;
+----
+0
+0
+0

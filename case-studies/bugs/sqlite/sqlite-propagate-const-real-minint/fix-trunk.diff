@@ -1,0 +1,137 @@
+--- a/src/select.c	2026-10-15 23:49:36
++++ b/src/select.c	2026-10-15 23:51:29
+@@ -4823,13 +4823,43 @@
+   u8 *pOomFault;   /* Pointer to pParse->db->mallocFailed */
+   int nConst;      /* Number for COLUMN=CONSTANT terms */
+   int nChng;       /* Number of times a constant is propagated */
+-  int bHasAffBlob; /* At least one column in apExpr[] as affinity BLOB */
++  int bHasAffBlob; /* At least one entry in apExpr[] is comparison-only */
+   u32 mExcludeOn;  /* Which ON expressions to exclude from considertion.
+                    ** Either EP_OuterON or EP_InnerON|EP_OuterON */
+   Expr **apExpr;   /* [i*2] is COLUMN and [i*2+1] is VALUE */
++  u8 *aCmpOnly;    /* aCmpOnly[i]: entry i is only propagated into the
++                   ** operands of comparisons (see constInsert()) */
+ };
+ 
+ /*
++** Return true if constant expression pExpr, with affinity aff applied, might
++** be -9223372036854775808, either as an INTEGER or as a REAL. Also return
++** true if the value of pExpr cannot be determined here (a bound parameter,
++** for instance).
++*/
++static int constMaybeMinInt(sqlite3 *db, Expr *pExpr, u8 aff){
++  sqlite3_value *pVal = 0;
++  int bRet = 1;                   /* Assume the worst if value is unknown */
++  if( sqlite3ValueFromExpr(db, pExpr, ENC(db), aff, &pVal)==SQLITE_OK
++   && pVal!=0
++  ){
++    switch( sqlite3_value_type(pVal) ){
++      case SQLITE_INTEGER:
++        bRet = sqlite3_value_int64(pVal)==SMALLEST_INT64;
++        break;
++      case SQLITE_FLOAT:
++        bRet = sqlite3_value_double(pVal)==-9223372036854775808.0;
++        break;
++      default:
++        bRet = 0;
++        break;
++    }
++  }
++  sqlite3ValueFree(pVal);
++  return bRet;
++}
++
++/*
+ ** Add a new entry to the pConst object, if appropriate.
+ **
+ **    *   Do not add if pValue is not constant.  (This is enforced by
+@@ -4844,6 +4874,19 @@
+ **
+ **    *   Do not add if pValue is a function that might return a subtype
+ **
++** The entry is marked comparison-only (the constant is only substituted
++** for the column where the column is an operand of a comparison) if:
++**
++**    *   pColumn has BLOB or no affinity, or
++**
++**    *   pColumn has INTEGER or NUMERIC affinity and pValue might be
++**        -9223372036854775808. Such a column can hold the INTEGER or
++**        the REAL -9223372036854775808; both satisfy COLUMN=VALUE, and
++**        sqlite3VdbeIntegerAffinity() does not convert one into the other,
++**        so the constant with the column's affinity has the right value but
++**        not necessarily the right type. Comparisons cannot tell the two
++**        apart, other uses (typeof(), text conversions) can.
++**
+ ** The caller guarantees the pColumn is a column.
+ */
+ static void constInsert(
+@@ -4853,6 +4896,8 @@
+   Expr *pExpr          /* Overall expression: COLUMN=VALUE or VALUE=COLUMN */
+ ){
+   int i;
++  u8 aff;
++  u8 bCmpOnly = 0;
+   assert( pColumn->op==TK_COLUMN );
+   assert( sqlite3ExprIsConstant(pConst->pParse, pValue) );
+   if( ExprHasProperty(pColumn, EP_FixedCol) ) return;
+@@ -4874,18 +4919,27 @@
+     }
+   }
+   assert( SQLITE_AFF_NONE<SQLITE_AFF_BLOB );
+-  if( sqlite3ExprAffinity(pColumn)<=SQLITE_AFF_BLOB ){
+-    pConst->bHasAffBlob = 1;
++  aff = sqlite3ExprAffinity(pColumn);
++  if( aff<=SQLITE_AFF_BLOB ){
++    bCmpOnly = 1;
++  }else if( (aff==SQLITE_AFF_INTEGER || aff==SQLITE_AFF_NUMERIC)
++         && constMaybeMinInt(pConst->pParse->db, pValue, aff)
++  ){
++    bCmpOnly = 1;
+   }
++  if( bCmpOnly ) pConst->bHasAffBlob = 1;
+ 
+   pConst->nConst++;
+   pConst->apExpr = sqlite3DbReallocOrFree(pConst->pParse->db, pConst->apExpr,
+                          pConst->nConst*2*sizeof(Expr*));
+-  if( pConst->apExpr==0 ){
++  pConst->aCmpOnly = sqlite3DbReallocOrFree(pConst->pParse->db,
++                         pConst->aCmpOnly, pConst->nConst);
++  if( pConst->apExpr==0 || pConst->aCmpOnly==0 ){
+     pConst->nConst = 0;
+   }else{
+     pConst->apExpr[pConst->nConst*2-2] = pColumn;
+     pConst->apExpr[pConst->nConst*2-1] = pValue;
++    pConst->aCmpOnly[pConst->nConst-1] = bCmpOnly;
+   }
+ }
+ 
+@@ -4949,8 +5003,7 @@
+     if( pColumn==pExpr ) continue;
+     if( pColumn->iTable!=pExpr->iTable ) continue;
+     if( pColumn->iColumn!=pExpr->iColumn ) continue;
+-    assert( SQLITE_AFF_NONE<SQLITE_AFF_BLOB );
+-    if( bIgnoreAffBlob && sqlite3ExprAffinity(pColumn)<=SQLITE_AFF_BLOB ){
++    if( bIgnoreAffBlob && pConst->aCmpOnly[i] ){
+       break;
+     }
+     /* A match is found.  Add the EP_FixedCol property */
+@@ -5065,6 +5118,7 @@
+     x.nConst = 0;
+     x.nChng = 0;
+     x.apExpr = 0;
++    x.aCmpOnly = 0;
+     x.bHasAffBlob = 0;
+     if( ALWAYS(p->pSrc!=0)
+      && p->pSrc->nSrc>0
+@@ -5087,9 +5141,10 @@
+       w.walkerDepth = 0;
+       w.u.pConst = &x;
+       sqlite3WalkExpr(&w, p->pWhere);
+-      sqlite3DbFree(x.pParse->db, x.apExpr);
+       nChng += x.nChng;
+     }
++    sqlite3DbFree(x.pParse->db, x.apExpr);
++    sqlite3DbFree(x.pParse->db, x.aCmpOnly);
+   }while( x.nChng ); 
+   return nChng;
+ }
