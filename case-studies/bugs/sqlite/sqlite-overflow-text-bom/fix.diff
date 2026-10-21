@@ -1,0 +1,13 @@
+--- a/src/vdbe.c	2026-10-12 19:38:03
++++ b/src/vdbe.c	2026-10-12 21:04:58
+@@ -796,8 +796,9 @@
+     assert( t>=12 );
+     sqlite3RCStrRef(pBuf);
+     if( t&1 ){
+-      rc = sqlite3VdbeMemSetStr(pDest, pBuf, len, encoding,
++      rc = sqlite3VdbeMemSetStr(pDest, pBuf, len, SQLITE_UTF8,
+                                 sqlite3RCStrUnref);
++      pDest->enc = encoding;
+       pDest->flags |= MEM_Term;
+     }else{
+       rc = sqlite3VdbeMemSetStr(pDest, pBuf, len, 0,

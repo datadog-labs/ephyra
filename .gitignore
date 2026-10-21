@@ -1,0 +1,32 @@
+# Build output (any crate in the tree, including standalone examples)
+target/
+build/
+work/
+
+# Environment
+.env
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# ephyra regressions written by failing example/test runs in this repo
+.ephyra/
+
+# Coverage artifacts from instrumented runs
+*.profraw
+*.profdata
+/coverage/
+
+# insta pending snapshots
+*.snap.new
+*.pending-snap
+
+# Case studies: checkouts they build against, and what their runs write
+/turso/
+/cedar/
+/case-studies/vendor/*
+!/case-studies/vendor/fetch.sh
+.pg/
+runs/

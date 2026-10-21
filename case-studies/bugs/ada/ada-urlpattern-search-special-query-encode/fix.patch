@@ -1,0 +1,58 @@
+diff --git a/src/url_pattern_helpers.cpp b/src/url_pattern_helpers.cpp
+index 8c11f05f..0fad8271 100644
+--- a/src/url_pattern_helpers.cpp
++++ b/src/url_pattern_helpers.cpp
+@@ -566,18 +566,18 @@ tl::expected<std::string, errors> canonicalize_search(std::string_view input) {
+     return "";
+   }
+ 
+-  // Percent-encode using QUERY_PERCENT_ENCODE (for non-special URLs)
+-  // Note: "fake://dummy.test" is not a special URL, so we use
+-  // QUERY_PERCENT_ENCODE
++  // The spec's dummy URL ("create a dummy URL") is https://dummy.invalid/,
++  // a special URL, so its query state uses the special-query percent-encode
++  // set, which also encodes U+0027 (').
+   size_t idx = ada::unicode::percent_encode_index(
+-      new_value, character_sets::QUERY_PERCENT_ENCODE);
++      new_value, character_sets::SPECIAL_QUERY_PERCENT_ENCODE);
+   if (idx == new_value.size()) {
+     // No encoding needed
+     return new_value;
+   }
+   // Percent-encode from the first character that needs encoding
+   return ada::unicode::percent_encode(
+-      new_value, character_sets::QUERY_PERCENT_ENCODE, idx);
++      new_value, character_sets::SPECIAL_QUERY_PERCENT_ENCODE, idx);
+ }
+ 
+ tl::expected<std::string, errors> canonicalize_hash(std::string_view input) {
+diff --git a/tests/wpt_urlpattern_tests.cpp b/tests/wpt_urlpattern_tests.cpp
+index a1d953f5..986f0179 100644
+--- a/tests/wpt_urlpattern_tests.cpp
++++ b/tests/wpt_urlpattern_tests.cpp
+@@ -1372,3 +1372,25 @@ TEST(wpt_urlpattern_tests, urlpattern_test_data) {
+   }
+   SUCCEED();
+ }
++
++TEST(wpt_urlpattern_tests, search_uses_special_query_percent_encode_set) {
++  // canonicalize a search runs the query state on the spec's dummy URL,
++  // https://dummy.invalid/, which is special: U+0027 (') is percent-encoded,
++  // as in the query of any special URL. Otherwise a search pattern with a
++  // quote never matches a special URL's query.
++  ada::url_pattern_init init{};
++  init.search = "q='x'";
++  auto p = ada::parse_url_pattern<regex_provider>(init);
++  ASSERT_TRUE(p);
++  ASSERT_EQ(p->get_search(), "q=%27x%27");
++  auto t = p->test(std::string_view("https://h/?q='x'"));
++  ASSERT_TRUE(t);
++  ASSERT_TRUE(*t);
++  // Processing an init input canonicalizes its search the same way.
++  ada::url_pattern_init input{};
++  input.search = "?'";
++  auto all = ada::parse_url_pattern<regex_provider>(ada::url_pattern_init{});
++  auto m = all->exec(ada::url_pattern_input(input), nullptr);
++  ASSERT_TRUE(m && *m);
++  ASSERT_EQ((**m).search.input, "%27");
++}

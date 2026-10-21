@@ -1,0 +1,19 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: report.to_string()
+---
+ephyra: FAILED, property panicked: sum too large: 101
+  at crates/ephyra/tests/reports/main.rs:[L:C]
+  counterexample: [29, 16, 26, 30]
+  original:       [35, 16, 26, 30] (size 5, iteration 31)
+  shrinking: 3 of 51 candidates accepted in [time]
+  after 31 passing tests (22 distinct, 0 discarded) in [time]
+  reproduce: EPHYRA_REPLAY=24301:31
+  or rerun the whole search: Config::default().seed(24301)
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): []
+  sample (random, iteration 15, size 4): []
+  sample (random, iteration 7, size 3): [16]
+  sample (random, iteration 5, size 2): [21]
+  sample (random, iteration 26, size 4): [36]

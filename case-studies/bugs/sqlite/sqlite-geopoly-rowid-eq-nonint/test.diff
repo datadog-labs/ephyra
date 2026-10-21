@@ -1,0 +1,91 @@
+--- a/ext/rtree/rtree1.test
++++ b/ext/rtree/rtree1.test
+@@ -868,7 +868,88 @@
+   } else {
+     do_catchsql_test 26.$i "INSERT INTO t1 VALUES($id,$a,$b);" \
+       {1 {rtree constraint failed: t1.(a<=b)}}
++  }
++}
++
++
++#-------------------------------------------------------------------------
++# The "rowid = ?" constraint on an rtree or geopoly table is consumed by
++# xBestIndex (omit flag set), so xFilter must find exactly the rowid that
++# SQLite considers equal to the value, or no row at all if no integer is
++# equal to it. Results are compared with those of an ordinary table that
++# holds the same rowids.
++#
++reset_db
++do_execsql_test 27.0 {
++  CREATE TABLE t1(a);
++  CREATE TABLE t2(x);
++  INSERT INTO t1(rowid, a) VALUES
++    (-9223372036854775808, 1), (0, 1), (6, 1), (7, 1), (10, 1),
++    (9223372036854775807, 1);
++  CREATE VIRTUAL TABLE rt USING rtree(id, x0, x1);
++  INSERT INTO rt SELECT rowid, 0, 1 FROM t1;
++}
++set lTbl rt
++ifcapable geopoly {
++  do_execsql_test 27.0.1 {
++    CREATE VIRTUAL TABLE gp USING geopoly();
++    INSERT INTO gp(rowid, _shape) SELECT rowid, '[[0,0],[1,0],[0,1],[0,0]]'
++      FROM t1;
+   }
++  lappend lTbl gp
+ }
+ 
++foreach {vn val eqres} {
++  1  6                        6
++  2  6.0                      6
++  3  6.5                      {}
++  4  6.000000000000001        {}
++  5  '6'                      6
++  6  {' 6 '}                  6
++  7  '6.0'                    6
++  8  '6e0'                    6
++  9  '0.6e1'                  6
++  10 '1e1'                    10
++  11 '6abc'                   {}
++  12 'x'                      {}
++  13 '0x6'                    {}
++  14 x'36'                    {}
++  15 NULL                     {}
++  16 -0.0                     0
++  17 9223372036854775807      9223372036854775807
++  18 9223372036854775807.0    {}
++  19 '9223372036854775808'    {}
++  20 -9223372036854775808.0   -9223372036854775808
++  21 1e19                     {}
++  22 -1e19                    {}
++} {
++  execsql "DELETE FROM t2; INSERT INTO t2 VALUES($val)"
++  set inres [db eval "SELECT rowid FROM t1 WHERE rowid IN ($val, 7) ORDER BY 1"]
++  set joinres [db eval {
++    SELECT coalesce(t1.rowid, '-') FROM t2 LEFT JOIN t1 ON t1.rowid=t2.x
++  }]
++
++  do_execsql_test 27.$vn.0 "SELECT rowid FROM t1 WHERE rowid = $val" $eqres
++  foreach tbl $lTbl {
++    do_execsql_test 27.$vn.$tbl.1 "
++      SELECT rowid FROM $tbl WHERE rowid = $val
++    " $eqres
++    do_execsql_test 27.$vn.$tbl.2 "
++      SELECT rowid FROM $tbl WHERE rowid IN ($val, 7) ORDER BY 1
++    " $inres
++    do_execsql_test 27.$vn.$tbl.3 "
++      SELECT coalesce($tbl.rowid, '-') FROM t2
++        LEFT JOIN $tbl ON $tbl.rowid=t2.x
++    " $joinres
++  }
++}
++
++ifcapable geopoly {
++  do_execsql_test 27.100 {
++    UPDATE gp SET _shape='[[0,0],[2,0],[0,2],[0,0]]' WHERE rowid=6.5;
++    DELETE FROM gp WHERE rowid='7abc';
++    SELECT rowid, geopoly_area(_shape) FROM gp WHERE rowid IN (6, 7);
++  } {6 0.5 7 0.5}
++}
++
+ finish_test

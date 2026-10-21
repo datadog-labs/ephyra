@@ -1,0 +1,14 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: report.to_string()
+---
+ephyra: ok, 200 tests passed (138 distinct, 0 discarded) in [time], seed 24301
+  regressions: 1 stored input(s) replayed, 1 stale
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): []
+  sample (random, iteration 127, size 7): [6, 1, 7]
+  sample (random, iteration 7, size 3): [3]
+  sample (random, iteration 31, size 5): [8, 4, 6, 7]
+  sample (random, iteration 104, size 6): [9, 1, 0, 3, 4, 7]
+  warning [regressions]: stored input 1:0 no longer matches the generator (stored [999], regenerated []); delete the entry or rerun the property

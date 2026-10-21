@@ -1,0 +1,82 @@
+diff --git a/src/optimizer/statistics/operator/propagate_get.cpp b/src/optimizer/statistics/operator/propagate_get.cpp
+index d001d0964f..52b96a026e 100644
+--- a/src/optimizer/statistics/operator/propagate_get.cpp
++++ b/src/optimizer/statistics/operator/propagate_get.cpp
+@@ -1,4 +1,5 @@
+ #include "duckdb/common/helper.hpp"
++#include "duckdb/execution/expression_executor.hpp"
+ #include "duckdb/optimizer/statistics_propagator.hpp"
+ #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+ #include "duckdb/planner/expression_iterator.hpp"
+@@ -25,6 +26,13 @@ static void GetColumnIndex(const unique_ptr<Expression> &expr, idx_t &index, Ide
+ 	                                      [&](unique_ptr<Expression> &child) { GetColumnIndex(child, index, alias); });
+ }
+ 
++static bool ContainsColumnRef(const Expression &expr) {
++	bool found = false;
++	ExpressionIterator::VisitExpression<BoundColumnRefExpression>(
++	    expr, [&](const BoundColumnRefExpression &) { found = true; });
++	return found;
++}
++
+ FilterPropagateResult StatisticsPropagator::PropagateTableFilter(ColumnBinding stats_binding, BaseStatistics &stats,
+                                                                  TableFilter &filter) {
+ 	auto &expr_filter = ExpressionFilter::GetExpressionFilter(filter, "StatisticsPropagator::PropagateTableFilter");
+@@ -45,6 +53,18 @@ FilterPropagateResult StatisticsPropagator::PropagateTableFilter(ColumnBinding s
+ 	auto column_ref = make_uniq<BoundColumnRefExpression>(column_alias, stats.GetType(), stats_binding);
+ 	auto filter_expr = expr_filter.ToExpression(*column_ref);
+ 	auto propagate_result = HandleFilter(filter_expr);
++	if (propagate_result == FilterPropagateResult::NO_PRUNING_POSSIBLE && !ContainsColumnRef(*filter_expr)) {
++		// statistics simplified the column away: a table filter must reference its column, so fold it or keep it
++		Value result;
++		if (!filter_expr->IsFoldable() || !ExpressionExecutor::TryEvaluateScalar(context, *filter_expr, result)) {
++			return check_result;
++		}
++		propagate_result = !result.IsNull() && BooleanValue::Get(result.DefaultCastAs(LogicalType::BOOLEAN))
++		                       ? FilterPropagateResult::FILTER_ALWAYS_TRUE
++		                       : FilterPropagateResult::FILTER_ALWAYS_FALSE;
++		UpdateExpressionFilterStatistics(stats, *original_expr);
++		return propagate_result;
++	}
+ 	auto colref = make_uniq<BoundReferenceExpression>(column_alias, stats.GetType(), physical_index);
+ 
+ 	// replace BoundColumnRefs with BoundRefs
+diff --git a/test/optimizer/statistics/statistics_table_filter_folded_column.test b/test/optimizer/statistics/statistics_table_filter_folded_column.test
+new file mode 100644
+index 0000000000..7c11d24d36
+--- /dev/null
++++ b/test/optimizer/statistics/statistics_table_filter_folded_column.test
+@@ -0,0 +1,33 @@
++# name: test/optimizer/statistics/statistics_table_filter_folded_column.test
++# description: A table filter whose column is simplified away by statistics is folded instead of kept without a column
++# group: [statistics]
++
++statement ok
++CREATE TABLE t0(c0 INTEGER);
++
++# the mark join triggers a second statistics propagation pass over the same table filter
++query I
++SELECT count(*) FROM t0 WHERE (c0 IS NULL) IN (NULL, true) AND (c0 = 1 OR 0 IN (SELECT 0))
++----
++0
++
++statement ok
++INSERT INTO t0 VALUES (1), (2);
++
++query I
++SELECT count(*) FROM t0 WHERE (c0 IS NULL) IN (NULL, true) AND (c0 = 1 OR 0 IN (SELECT 0))
++----
++0
++
++query I
++SELECT count(*) FROM t0 WHERE (c0 IS NOT NULL) IN (NULL, true) AND (c0 = 1 OR 0 IN (SELECT 0))
++----
++2
++
++statement ok
++INSERT INTO t0 VALUES (NULL);
++
++query I
++SELECT count(*) FROM t0 WHERE (c0 IS NULL) IN (NULL, true) AND (c0 = 1 OR 0 IN (SELECT 0))
++----
++1

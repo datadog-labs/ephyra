@@ -1,0 +1,11 @@
+--- a/src/select.c	2026-10-09 20:11:38
++++ b/src/select.c	2026-10-10 00:03:06
+@@ -4124,7 +4124,7 @@
+   if( op==TK_COLUMN || op==TK_IF_NULL_ROW ){
+     renumberCursorDoMapping(pWalker, &pExpr->iTable);
+   }
+-  if( ExprHasProperty(pExpr, EP_OuterON) ){
++  if( ExprHasProperty(pExpr, EP_OuterON|EP_InnerON) ){
+     renumberCursorDoMapping(pWalker, &pExpr->w.iJoin);
+   }
+   return WRC_Continue;

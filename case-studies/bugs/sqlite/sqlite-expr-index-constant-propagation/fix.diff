@@ -1,0 +1,47 @@
+--- a/src/expr.c
++++ b/src/expr.c
+@@ -4856,6 +4856,29 @@
+ 
+ 
+ /*
++** Walker callback for exprHasFixedCol().
++*/
++static int exprNodeIsFixedCol(Walker *pWalker, Expr *pExpr){
++  if( pExpr->op==TK_COLUMN && ExprHasProperty(pExpr, EP_FixedCol) ){
++    pWalker->eCode = 1;
++    return WRC_Abort;
++  }
++  return WRC_Continue;
++}
++
++/*
++** Return true if pExpr contains a TK_COLUMN node that has been tagged
++** EP_FixedCol by the constant propagation optimization.
++*/
++static int exprHasFixedCol(Expr *pExpr){
++  Walker w;
++  memset(&w, 0, sizeof(w));
++  w.xExprCallback = exprNodeIsFixedCol;
++  sqlite3WalkExpr(&w, pExpr);
++  return w.eCode;
++}
++
++/*
+ ** Check to see if pExpr is one of the indexed expressions on pParse->pIdxEpr.
+ ** If it is, then resolve the expression by reading from the index and
+ ** return the register into which the value has been read.  If pExpr is
+@@ -4877,6 +4900,14 @@
+       iDataCur = -1;
+     }
+     if( sqlite3ExprCompare(0, pExpr, p->pExpr, iDataCur)!=0 ) continue;
++
++    /* If the constant propagation optimization has replaced a column
++    ** of pExpr with a constant (EP_FixedCol), then the WHERE term that
++    ** holds pExpr no longer depends on that table and might be evaluated
++    ** in an outer loop, before the index cursor has been positioned.
++    ** Compute the expression directly in that case. */
++    if( exprHasFixedCol(pExpr) ) continue;
++
+     assert( p->aff>=SQLITE_AFF_BLOB && p->aff<=SQLITE_AFF_NUMERIC );
+     exprAff = sqlite3ExprAffinity(pExpr);
+     if( (exprAff<=SQLITE_AFF_BLOB && p->aff!=SQLITE_AFF_BLOB)

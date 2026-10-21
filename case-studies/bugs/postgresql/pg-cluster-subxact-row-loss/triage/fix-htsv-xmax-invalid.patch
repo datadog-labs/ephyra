@@ -1,0 +1,23 @@
+diff --git a/src/backend/access/heap/heapam_visibility.c b/src/backend/access/heap/heapam_visibility.c
+index 361b76e5065..850e5f6a4f2 100644
+--- a/src/backend/access/heap/heapam_visibility.c
++++ b/src/backend/access/heap/heapam_visibility.c
+@@ -1177,7 +1177,17 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
+ 			/* inserted and then deleted by same xact */
+ 			if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetUpdateXid(tuple)))
+ 				return HEAPTUPLE_DELETE_IN_PROGRESS;
+-			/* deleting subtransaction must have aborted */
++			/*
++			 * Deleting subtransaction must have aborted.  Mark the xmax
++			 * invalid, like HeapTupleSatisfiesMVCC() does: callers such as
++			 * heapam_relation_copy_for_cluster() rely on HEAP_XMAX_INVALID to
++			 * tell that the tuple is not part of a live update chain, and
++			 * rewrite_heap_tuple() would otherwise wait for the aborted
++			 * newer version and drop this tuple along with it.
++			 */
++			if (!(tuple->t_infomask & HEAP_XMAX_IS_MULTI))
++				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
++							InvalidTransactionId);
+ 			return HEAPTUPLE_INSERT_IN_PROGRESS;
+ 		}
+ 		else if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmin(tuple)))

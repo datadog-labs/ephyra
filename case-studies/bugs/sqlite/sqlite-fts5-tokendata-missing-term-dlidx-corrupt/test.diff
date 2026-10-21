@@ -1,0 +1,46 @@
+--- a/ext/fts5/test/fts5tokendata.test
++++ b/ext/fts5/test/fts5tokendata.test
+@@ -101,5 +101,43 @@
+   }
+ }
+ 
++#-------------------------------------------------------------------------
++# Query a tokendata=1 table for a term that is not present in a segment,
++# where the next larger term in the segment is on a later leaf page than
++# the large doclist (one with a doclist-index) that precedes it.
++#
++reset_db
++do_execsql_test 2.0 {
++  CREATE VIRTUAL TABLE ft USING fts5(a, tokendata=1);
++  INSERT INTO ft(ft, rank) VALUES('pgsz', 64);
++  WITH s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<100)
++  INSERT INTO ft(rowid, a) SELECT i, iif(i<100, 'u0', 'v') FROM s;
++}
++
++do_execsql_test 2.1 {
++  INSERT INTO ft(ft) VALUES('integrity-check');
++}
++
++do_execsql_test 2.2 {
++  SELECT count(*) FROM ft('u1');
++} {0}
++
++do_execsql_test 2.3 {
++  SELECT count(*), max(rowid) FROM ft('u0');
++} {99 99}
++
++do_execsql_test 2.4 {
++  SELECT rowid FROM ft('v');
++} {100}
++
++do_execsql_test 2.5 {
++  INSERT INTO ft(rowid, a) VALUES(200, 'u1');
++  SELECT rowid FROM ft('u1');
++} {200}
++
++do_execsql_test 2.6 {
++  SELECT rowid FROM ft('u1') ORDER BY rowid DESC;
++} {200}
++
+ finish_test
+ 

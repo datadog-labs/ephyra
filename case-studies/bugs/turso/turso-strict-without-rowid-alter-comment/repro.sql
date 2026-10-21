@@ -1,0 +1,4 @@
+-- sqlite3 st.db 'CREATE TABLE t1(c0 ANY, c1 ANY, PRIMARY KEY(c1)) WITHOUT ROWID, STRICT; CREATE TABLE t2(a);'
+-- tursodb --experimental-without-rowid st.db 'ALTER TABLE t1 RENAME c0 TO r0;'
+-- tursodb --experimental-without-rowid st.db 'SELECT 1;'
+-- sqlite3 st.db 'SELECT 1;'

@@ -1,0 +1,86 @@
+--- a/ext/fts5/fts5_index.c
++++ b/ext/fts5/fts5_index.c
+@@ -557,6 +557,7 @@
+   i64 iRowid;                     /* Current rowid */
+   int nPos;                       /* Number of bytes in current position list */
+   u8 bDel;                        /* True if the delete flag is set */
++  u8 bDupDel;                     /* True if a skipped duplicate had bDel */
+ };
+ 
+ static int fts5IndexCorruptRowid(Fts5Index *pIdx, i64 iRowid){
+@@ -3105,6 +3106,11 @@
+       assert_nc( i2!=0 );
+       pRes->bTermEq = 1;
+       if( p1->iRowid==p2->iRowid ){
++        /* p2 is an older entry for the same term and rowid. It is about
++        ** to be skipped. If it, or an entry it superseded, has the delete
++        ** flag set, record this on p1. See fts5IndexMergeLevel(). */
++        p1->bDupDel |= (p2->bDel | p2->bDupDel);
++        p2->bDupDel = 0;
+         return i2;
+       }
+       res = ((p1->iRowid > p2->iRowid)==pIter->bRev) ? -1 : +1;
+@@ -3406,6 +3412,7 @@
+     int bNewTerm = 0;
+     Fts5SegIter *pSeg = &pIter->aSeg[iFirst];
+     assert( p->rc==SQLITE_OK );
++    pSeg->bDupDel = 0;
+     if( bUseFrom && pSeg->pDlidx ){
+       fts5SegIterNextFrom(p, pSeg, iFrom);
+     }else{
+@@ -4860,18 +4867,35 @@
+     int nPos;                     /* position-list size field value */
+     int nTerm;
+     const u8 *pTerm;
++    int bDel;                     /* Delete flag for output entry */
+ 
+     pTerm = fts5MultiIterTerm(pIter, &nTerm);
+     if( nTerm!=term.n || fts5Memcmp(pTerm, term.p, nTerm) ){
+       if( pnRem && writer.nLeafWritten>nRem ){
+-        break;
++        /* Do not stop here if an entry not yet written superseded an
++        ** entry with the delete flag set. fts5TrimSegments() may remove
++        ** the superseded entry from its input segment, while an entry
++        ** it hides remains in an older input segment or outside of the
++        ** merge.  */
++        int ii;
++        for(ii=0; ii<pIter->nSeg; ii++){
++          if( pIter->aSeg[ii].bDupDel ) break;
++        }
++        if( ii==pIter->nSeg ) break;
+       }
+       fts5BufferSet(&p->rc, &term, nTerm, pTerm);
+       bTermWritten =0;
+     }
+ 
++    /* If the output is not the oldest segment and this entry supersedes
++    ** an entry with the delete flag set, set the delete flag on the
++    ** output entry as well. Otherwise, the delete marker is lost, and
++    ** a secure-delete may later remove the entry outright, exposing an
++    ** entry for the same rowid in an older segment.  */
++    bDel = pSegIter->bDel || (bOldest==0 && pSegIter->bDupDel);
++
+     /* Check for key annihilation. */
+-    if( pSegIter->nPos==0 && (bOldest || pSegIter->bDel==0) ) continue;
++    if( pSegIter->nPos==0 && (bOldest || bDel==0) ) continue;
+ 
+     if( p->rc==SQLITE_OK && bTermWritten==0 ){
+       /* This is a new term. Append a term to the output segment. */
+@@ -4884,7 +4908,7 @@
+     fts5WriteAppendRowid(p, &writer, fts5MultiIterRowid(pIter));
+ 
+     if( eDetail==FTS5_DETAIL_NONE ){
+-      if( pSegIter->bDel ){
++      if( bDel ){
+         fts5BufferAppendVarint(&p->rc, &writer.writer.buf, 0);
+         if( pSegIter->nPos>0 ){
+           fts5BufferAppendVarint(&p->rc, &writer.writer.buf, 0);
+@@ -4892,7 +4916,7 @@
+       }
+     }else{
+       /* Append the position-list data to the output */
+-      nPos = pSegIter->nPos*2 + pSegIter->bDel;
++      nPos = pSegIter->nPos*2 + bDel;
+       fts5BufferAppendVarint(&p->rc, &writer.writer.buf, nPos);
+       fts5ChunkIterate(p, pSegIter, (void*)&writer, fts5MergeChunkCallback);
+     }

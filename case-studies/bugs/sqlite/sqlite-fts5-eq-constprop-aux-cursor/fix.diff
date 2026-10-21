@@ -1,0 +1,17 @@
+--- a/src/select.c
++++ b/src/select.c
+@@ -4856,6 +4856,14 @@
+   assert( pColumn->op==TK_COLUMN );
+   assert( sqlite3ExprIsConstant(pConst->pParse, pValue) );
+   if( ExprHasProperty(pColumn, EP_FixedCol) ) return;
++  if( ALWAYS(ExprUseYTab(pColumn)) && pColumn->y.pTab
++   && IsVirtual(pColumn->y.pTab)
++  ){
++    /* The meaning of "=" on a virtual table column is up to the virtual
++    ** table (for example, "fts5tbl = 'query'" is a full-text query), so
++    ** the column is not known to hold the value. */
++    return;
++  }
+   if( sqlite3ExprAffinity(pValue)!=0 ) return;
+   if( !sqlite3IsBinary(sqlite3ExprCompareCollSeq(pConst->pParse,pExpr)) ){
+     return;

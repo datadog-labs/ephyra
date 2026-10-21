@@ -1,0 +1,54 @@
+--- a/src/alter.c
++++ b/src/alter.c
+@@ -2476,6 +2476,10 @@
+   **
+   **   CONSTRAINT, PRIMARY, NOT, UNIQUE, CHECK, DEFAULT, 
+   **   COLLATE, REFERENCES, FOREIGN, GENERATED, AS, RP, or COMMA
++  **
++  ** or DEFERRABLE, unless this is a foreign key constraint. A deferral
++  ** clause that follows some other constraint is a column constraint of
++  ** its own, applying to the most recently defined foreign key.
+   **
+   ** Also exit the loop if ILLEGAL turns up.
+   */
+@@ -2485,6 +2489,7 @@
+      || t==TK_CHECK || t==TK_DEFAULT || t==TK_COLLATE || t==TK_REFERENCES
+      || t==TK_FOREIGN || t==TK_RP || t==TK_COMMA || t==TK_ILLEGAL
+      || t==TK_AS || t==TK_GENERATED
++     || (t==TK_DEFERRABLE && eTok!=TK_REFERENCES)
+     ){
+       break;
+     }
+@@ -2642,6 +2647,16 @@
+           t = TK_CHECK;
+         }else{
+           iOff += nTok;
++          if( t==TK_NOT ){
++            /* For "NOT DEFERRABLE", step over the DEFERRABLE as well. Such
++            ** a clause is not a NOT NULL constraint.  */
++            int t2 = 0;
++            nTok = getConstraintToken(&zSql[iOff], &t2);
++            if( t2==TK_DEFERRABLE ){
++              iOff += nTok;
++              if( iNotNull>=0 ) t = TK_DEFERRABLE;
++            }
++          }
+           iOff += getConstraint(&zSql[iOff], t);
+         }
+ 
+@@ -2655,8 +2670,13 @@
+         }
+ 
+       }else if( t==TK_NOT && iNotNull==ii ){
+-        iEnd = iOff + getConstraint(&zSql[iOff], 0);
+-        break;
++        /* Skip the NOT of a "NOT DEFERRABLE" clause */
++        int t2 = 0;
++        getConstraintToken(&zSql[iOff], &t2);
++        if( t2==TK_NULL ){
++          iEnd = iOff + getConstraint(&zSql[iOff], 0);
++          break;
++        }
+       }else if( t==TK_RP || t==TK_ILLEGAL ){
+         iEnd = -1;
+         break;

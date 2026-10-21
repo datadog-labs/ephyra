@@ -1,0 +1,9 @@
+-- NOT INDEXED is ignored on WITHOUT ROWID tables (secondary and implied UNIQUE indexes still used)
+CREATE TABLE t(a PRIMARY KEY, b, c) WITHOUT ROWID;
+CREATE INDEX ti ON t(b);
+CREATE TABLE u(a PRIMARY KEY, b UNIQUE) WITHOUT ROWID;
+EXPLAIN QUERY PLAN SELECT * FROM t NOT INDEXED WHERE b=1;   -- SEARCH t USING INDEX ti (b=?)
+EXPLAIN QUERY PLAN SELECT b FROM t NOT INDEXED;             -- SCAN t USING COVERING INDEX ti
+EXPLAIN QUERY PLAN SELECT * FROM t NOT INDEXED ORDER BY b;  -- SCAN t USING INDEX ti
+EXPLAIN QUERY PLAN SELECT * FROM u NOT INDEXED WHERE b=1;   -- SEARCH u USING INDEX sqlite_autoindex_u_2 (b=?)
+-- same schema as an ordinary rowid table: every one of these is a plain SCAN

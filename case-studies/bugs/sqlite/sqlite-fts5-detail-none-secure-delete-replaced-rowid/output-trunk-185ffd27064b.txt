@@ -1,0 +1,10 @@
+$ /tmp/trunk-185ffd/build/sqlite3 :memory: < repro.sql   # 3.55.0 2026-10-20 13:10:11 185ffd27064ba
+0
+1
+5
+6
+137438953473|000000080230610104
+274877906945|0000000C023061010000040104
+Error near line 9: fts5: checksum mismatch for table "t"
+$ /tmp/trunk-185ffd/build/sqlite3 :memory: < found-case.sql
+Error near line 6: fts5: corruption found reading blob 274877906945 from table "vt0"

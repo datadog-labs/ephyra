@@ -1,0 +1,18 @@
+--- a/src/where.c
++++ b/src/where.c
+@@ -334,6 +334,15 @@
+     assert( ExprUseXSelect(pX) );
+     inexpr.pRight = pX->x.pSelect->pEList->a[iField].pExpr;
+     pX = &inexpr;
++  }else if( ExprUseXSelect(pX) ){
++    /* "x IN (SELECT y ...)" compares as "x=y", so an explicit COLLATE
++    ** on y determines the collating sequence, as it does when the
++    ** IN operator is evaluated (see sqlite3CodeRhsOfIN()). */
++    inexpr.flags = 0;
++    inexpr.op = TK_EQ;
++    inexpr.pLeft = pX->pLeft;
++    inexpr.pRight = pX->x.pSelect->pEList->a[0].pExpr;
++    pX = &inexpr;
+   }
+ 
+   if( sqlite3IndexAffinityOk(pX, idxaff) ){

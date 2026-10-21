@@ -1,0 +1,17 @@
+--- a/src/backend/executor/nodeMaterial.c	2026-10-16 09:53:13
++++ b/src/backend/executor/nodeMaterial.c	2026-10-16 09:53:13
+@@ -429,6 +429,14 @@
+ 
+ 	/* don't need this if not instrumenting or no workers */
+ 	if (!node->ss.ps.instrument || pcxt->nworkers == 0)
++		return;
++
++	/*
++	 * A SubPlan referenced from several places (e.g. the children of a
++	 * Parallel Append) has one PlanState, which planstate_tree_walker visits
++	 * once per reference: initialize it once.
++	 */
++	if (shm_toc_lookup(pcxt->toc, node->ss.ps.plan->plan_node_id, true) != NULL)
+ 		return;
+ 
+ 	size = offsetof(SharedMaterialInfo, sinstrument)

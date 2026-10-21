@@ -1,0 +1,38 @@
+--- a/src/func.c	2026-10-16 13:35:50
++++ b/src/func.c	2026-10-16 13:36:55
+@@ -1713,6 +1713,9 @@
+   int bNotNull = 0;   /* True after at least NOT NULL argument seen */
+   char *z;
+   for(i=0; i<argc; i++){
++    /* Convert to text first: for a BLOB in a UTF-16 database the size of
++    ** the UTF-8 text is not the size of the BLOB. */
++    (void)sqlite3_value_text(argv[i]);
+     n += sqlite3_value_bytes(argv[i]);
+   }
+   n += (argc-1)*(i64)nSep;
+@@ -1724,9 +1727,14 @@
+   j = 0;
+   for(i=0; i<argc; i++){
+     if( sqlite3_value_type(argv[i])!=SQLITE_NULL ){
+-      int k = sqlite3_value_bytes(argv[i]);
+       const char *v = (const char*)sqlite3_value_text(argv[i]);
++      int k = sqlite3_value_bytes(argv[i]);
+       if( v!=0 ){
++        if( j + (bNotNull ? nSep : 0) + k > n ){
++          sqlite3_free(z);
++          sqlite3_result_error_nomem(context);
++          return;
++        }
+         if( bNotNull && nSep>0 ){
+           memcpy(&z[j], zSep, nSep);
+           j += nSep;
+@@ -1766,8 +1774,8 @@
+   int argc,
+   sqlite3_value **argv
+ ){
+-  int nSep = sqlite3_value_bytes(argv[0]);
+   const char *zSep = (const char*)sqlite3_value_text(argv[0]);
++  int nSep = sqlite3_value_bytes(argv[0]);
+   if( zSep==0 ) return;
+   concatFuncCore(context, argc-1, argv+1, nSep, zSep);
+ }

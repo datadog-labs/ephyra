@@ -1,0 +1,14 @@
+--- a/src/json.c	2026-10-11 00:10:59
++++ b/src/json.c	2026-10-11 00:10:59
+@@ -874,6 +874,11 @@
+         pParse->zJson = sqlite3RCStrRef(p->zBuf);
+         pParse->nJson = p->nUsed;
+         pParse->bJsonIsRCStr = 1;
++        /* The text just generated from the JSONB is canonical RFC-8259
++        ** JSON, even if the original input used JSON5 extensions.  Clear
++        ** hasNonstd so that json_valid() on this text, found via the
++        ** cache, is not misreported as non-standard. */
++        pParse->hasNonstd = 0;
+         rc = jsonCacheInsert(ctx, pParse);
+         if( rc==SQLITE_NOMEM ){
+           sqlite3_result_error_nomem(ctx);

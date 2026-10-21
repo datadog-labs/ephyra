@@ -1,0 +1,49 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: text
+---
+exit: 0
+--- stdout ---
+ephyra: ok, 1000 tests passed (806 distinct, 0 discarded) in [time], seed 7
+  labels: no shrink candidates 19%
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): Node(Leaf, 10, 2, Node(Node(Node(Leaf, 11, 0, Node(Leaf, 12, 8, Node(Leaf, 13, 5, Leaf))), 14, 8, Node(Leaf, 15, 3, Leaf)), 16, 3, Node(Leaf, 17, 7, Node(Leaf, 18, 0, Node(Leaf, 19, 4, Leaf)))))
+  sample (random, iteration 511, size 9): Node(Node(Leaf, -19, 9, Leaf), -15, 9, Node(Node(Leaf, -14, 4, Leaf), -10, 3, Node(Node(Node(Leaf, -7, 6, Node(Leaf, -6, 9, Leaf)), 18, 1, Leaf), 19, 4, Node(Leaf, 20, 4, Leaf))))
+  sample (random, iteration 74, size 6): Leaf
+  sample (random, iteration 972, size 9): Leaf
+  sample (random, iteration 86, size 6): Node(Node(Leaf, -20, 1, Leaf), -19, 2, Node(Node(Leaf, -18, 9, Node(Node(Leaf, -17, 5, Node(Leaf, -15, 7, Leaf)), -14, 7, Node(Node(Leaf, -13, 6, Leaf), -12, 9, Leaf))), -11, 0, Node(Node(Node(Node(Le…
+ephyra: ok, 1000 tests passed (974 distinct, 0 discarded) in [time], seed 7
+  labels: empty tree 19%, key present 19%
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): (Node(Leaf, 10, 2, Node(Node(Node(Leaf, 11, 0, Node(Leaf, 12, 8, Node(Leaf, 13, 5, Leaf))), 14, 8, Node(Leaf, 15, 3, Leaf)), 16, 3, Node(Leaf, 17, 7, Node(Leaf, 18, 0, Node(Leaf, 19, 4, Leaf))))), -7,…
+  sample (random, iteration 511, size 9): (Node(Node(Leaf, -19, 9, Leaf), -15, 9, Node(Node(Leaf, -14, 4, Leaf), -10, 3, Node(Node(Node(Leaf, -7, 6, Node(Leaf, -6, 9, Leaf)), 18, 1, Leaf), 19, 4, Node(Leaf, 20, 4, Leaf)))), 13, 2)
+  sample (random, iteration 74, size 6): (Leaf, 20, 5)
+  sample (random, iteration 972, size 9): (Leaf, 19, 1)
+  sample (random, iteration 86, size 6): (Node(Node(Leaf, -20, 1, Leaf), -19, 2, Node(Node(Leaf, -18, 9, Node(Node(Leaf, -17, 5, Node(Leaf, -15, 7, Leaf)), -14, 7, Node(Node(Leaf, -13, 6, Leaf), -12, 9, Leaf))), -11, 0, Node(Node(Node(Node(L…
+ephyra: ok, 1000 tests passed (999 distinct, 0 discarded) in [time], seed 7
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): (Node(Leaf, 10, 2, Node(Node(Node(Leaf, 11, 0, Node(Leaf, 12, 8, Node(Leaf, 13, 5, Leaf))), 14, 8, Node(Leaf, 15, 3, Leaf)), 16, 3, Node(Leaf, 17, 7, Node(Leaf, 18, 0, Node(Leaf, 19, 4, Leaf))))), -7,…
+  sample (random, iteration 511, size 9): (Node(Node(Leaf, -19, 9, Leaf), -15, 9, Node(Node(Leaf, -14, 4, Leaf), -10, 3, Node(Node(Node(Leaf, -7, 6, Node(Leaf, -6, 9, Leaf)), 18, 1, Leaf), 19, 4, Node(Leaf, 20, 4, Leaf)))), 13, -10, 1)
+  sample (random, iteration 74, size 6): (Leaf, 20, 1, 4)
+  sample (random, iteration 972, size 9): (Leaf, 19, -16, 0)
+  sample (random, iteration 86, size 6): (Node(Node(Leaf, -20, 1, Leaf), -19, 2, Node(Node(Leaf, -18, 9, Node(Node(Leaf, -17, 5, Node(Leaf, -15, 7, Leaf)), -14, 7, Node(Node(Leaf, -13, 6, Leaf), -12, 9, Leaf))), -11, 0, Node(Node(Node(Node(L…
+ephyra: ok, 1000 tests passed (855 distinct, 0 discarded) in [time], seed 7
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): (Node(Leaf, 10, 2, Node(Node(Node(Leaf, 11, 0, Node(Leaf, 12, 8, Node(Leaf, 13, 5, Leaf))), 14, 8, Node(Leaf, 15, 3, Leaf)), 16, 3, Node(Leaf, 17, 7, Node(Leaf, 18, 0, Node(Leaf, 19, 4, Leaf))))), -7)
+  sample (random, iteration 511, size 9): (Node(Node(Leaf, -19, 9, Leaf), -15, 9, Node(Node(Leaf, -14, 4, Leaf), -10, 3, Node(Node(Node(Leaf, -7, 6, Node(Leaf, -6, 9, Leaf)), 18, 1, Leaf), 19, 4, Node(Leaf, 20, 4, Leaf)))), 13)
+  sample (random, iteration 74, size 6): (Leaf, 20)
+  sample (random, iteration 972, size 9): (Leaf, 19)
+  sample (random, iteration 86, size 6): (Node(Node(Leaf, -20, 1, Leaf), -19, 2, Node(Node(Leaf, -18, 9, Node(Node(Leaf, -17, 5, Node(Leaf, -15, 7, Leaf)), -14, 7, Node(Node(Leaf, -13, 6, Leaf), -12, 9, Leaf))), -11, 0, Node(Node(Node(Node(L…
+ephyra: ok, 1000 tests passed (995 distinct, 0 discarded) in [time], seed 7
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): (Node(Leaf, 10, 2, Node(Node(Node(Leaf, 11, 0, Node(Leaf, 12, 8, Node(Leaf, 13, 5, Leaf))), 14, 8, Node(Leaf, 15, 3, Leaf)), 16, 3, Node(Leaf, 17, 7, Node(Leaf, 18, 0, Node(Leaf, 19, 4, Leaf))))), -7,…
+  sample (random, iteration 511, size 9): (Node(Node(Leaf, -19, 9, Leaf), -15, 9, Node(Node(Leaf, -14, 4, Leaf), -10, 3, Node(Node(Node(Leaf, -7, 6, Node(Leaf, -6, 9, Leaf)), 18, 1, Leaf), 19, 4, Node(Leaf, 20, 4, Leaf)))), 13, -10)
+  sample (random, iteration 74, size 6): (Leaf, 20, 1)
+  sample (random, iteration 972, size 9): (Leaf, 19, -16)
+  sample (random, iteration 86, size 6): (Node(Node(Leaf, -20, 1, Leaf), -19, 2, Node(Node(Leaf, -18, 9, Node(Node(Leaf, -17, 5, Node(Leaf, -15, 7, Leaf)), -14, 7, Node(Node(Leaf, -13, 6, Leaf), -12, 9, Leaf))), -11, 0, Node(Node(Node(Node(L…
+--- stderr ---

@@ -1,0 +1,18 @@
+--- a/ext/fts5/fts5_index.c
++++ b/ext/fts5/fts5_index.c
+@@ -3157,6 +3157,15 @@
+         }
+         break;
+       }
++      if( !fts5LeafIsTermless(pIter->pLeaf) ){
++        /* The page has a term but no rowid before it, so the doclist ends
++        ** on this page and has no more rowids. This happens if the last
++        ** rowids of the doclist were removed by secure-delete, which does
++        ** not update the doclist-index. The iterator is now at EOF.  */
++        fts5DataRelease(pIter->pLeaf);
++        pIter->pLeaf = 0;
++        break;
++      }
+     }
+   }
+ }

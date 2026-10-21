@@ -1,0 +1,2 @@
+- `repro.sh <uutils coreutils or comm binary> [gnu comm]`: standalone, exits 1 when the bug reproduces, 0 when it doesn't, 2 if the binary isn't usable.
+- `harness-case/`: the loop's minimal case. `harness-case/repro.sh <build-dir>` expects `<build-dir>/bin/comm`; same exit codes. It checks only the exit status against GNU 9.12's recorded one.

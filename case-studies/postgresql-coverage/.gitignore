@@ -1,0 +1,5 @@
+/target
+/.pg
+*.profraw
+*.profdata
+/functions.tsv

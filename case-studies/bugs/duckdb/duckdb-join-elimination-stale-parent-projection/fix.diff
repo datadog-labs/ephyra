@@ -1,0 +1,48 @@
+diff --git a/src/optimizer/join_elimination.cpp b/src/optimizer/join_elimination.cpp
+index 079f05fea4..7b3ab598fc 100644
+--- a/src/optimizer/join_elimination.cpp
++++ b/src/optimizer/join_elimination.cpp
+@@ -11,6 +11,7 @@
+ #include "duckdb/planner/column_binding.hpp"
+ #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+ #include "duckdb/planner/logical_operator.hpp"
++#include "duckdb/planner/logical_operator_visitor.hpp"
+ #include "duckdb/planner/operator/logical_aggregate.hpp"
+ #include "duckdb/planner/operator/logical_comparison_join.hpp"
+ #include "duckdb/planner/operator/logical_distinct.hpp"
+@@ -305,7 +306,14 @@ unique_ptr<LogicalOperator> JoinElimination::TryEliminateJoin() {
+ 	}
+ 
+ 	if (is_output_unique) {
++		auto join_bindings = join_op->GetColumnBindings();
+ 		join_parent->children[pipe_info.join_index] = std::move(join_op->children[outer_idx]);
++		// the parent may select columns of the join by position: point them at the outer child's columns
++		auto projection_map = LogicalOperatorVisitor::GetProjectionMap(*join_parent, pipe_info.join_index);
++		if (projection_map) {
++			LogicalOperatorVisitor::RemapProjectionMap(
++			    *projection_map, join_bindings, join_parent->children[pipe_info.join_index]->GetColumnBindings());
++		}
+ 	}
+ 	return std::move(pipe_info.root);
+ }
+diff --git a/test/optimizer/join_elimination_projection_map.test b/test/optimizer/join_elimination_projection_map.test
+new file mode 100644
+index 0000000000..1081b83488
+--- /dev/null
++++ b/test/optimizer/join_elimination_projection_map.test
+@@ -0,0 +1,15 @@
++# name: test/optimizer/join_elimination_projection_map.test
++# description: Join elimination keeps the projection map of the operator above the eliminated join valid
++# group: [optimizer]
++
++statement ok
++CREATE TABLE t0(c0 INTEGER);
++
++statement ok
++INSERT INTO t0 VALUES (1), (2);
++
++query I rowsort
++SELECT DISTINCT x1.c0 FROM t0 AS x1 LEFT JOIN t0 AS x2 USING (c0) LEFT JOIN t0 AS x3 ON ((SELECT true) AND false) WHERE true
++----
++1
++2

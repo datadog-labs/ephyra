@@ -1,0 +1,359 @@
+-- Extent of the failure. Each case: a partitioned table p (range on k: [0,500) -> p_lo, [500,..) -> p_hi)
+-- and, where useful, the same on a plain table t. \echo labels name the case.
+\set VERBOSITY default
+\pset footer off
+SET client_min_messages = warning;
+
+\echo '### A self-ref CASCADE, cross-partition (baseline)'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### B other row references the moved row (moved row has r NULL), CASCADE, cross-partition'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, NULL), (2, 1), (700, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### B2 other row references the moved row, and moved row references itself'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 1), (2, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### B3 moved row references ANOTHER row which stays (no key change of referenced)'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, NULL), (2, 1);
+UPDATE p SET k = 600 WHERE k = 2;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### B4 two rows referencing each other, both moved in one statement'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 2), (2, 1);
+UPDATE p SET k = k + 600;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+CREATE TABLE t (k int PRIMARY KEY, r int REFERENCES t (k) ON UPDATE CASCADE);
+INSERT INTO t VALUES (1, 2), (2, 1);
+UPDATE t SET k = k + 600;
+SELECT * FROM t ORDER BY k;
+DROP TABLE t;
+
+\echo '### C self-ref SET NULL, cross-partition'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE SET NULL;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+CREATE TABLE t (k int PRIMARY KEY, r int REFERENCES t (k) ON UPDATE SET NULL);
+INSERT INTO t VALUES (1, 1);
+UPDATE t SET k = 600 WHERE k = 1;
+SELECT * FROM t ORDER BY k;
+DROP TABLE t;
+
+\echo '### C2 self-ref SET DEFAULT (default NULL), cross-partition'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE SET DEFAULT;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### D self-ref NO ACTION, cross-partition, key only (error expected on both)'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k);
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+DROP TABLE p;
+CREATE TABLE t (k int PRIMARY KEY, r int REFERENCES t (k));
+INSERT INTO t VALUES (1, 1);
+UPDATE t SET k = 600 WHERE k = 1;
+DROP TABLE t;
+
+\echo '### D2 self-ref NO ACTION, cross-partition, key and reference updated together'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k);
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600, r = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### D3 self-ref RESTRICT, cross-partition, key and reference updated together'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE RESTRICT;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600, r = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+CREATE TABLE t (k int PRIMARY KEY, r int REFERENCES t (k) ON UPDATE RESTRICT);
+INSERT INTO t VALUES (1, 1);
+UPDATE t SET k = 600, r = 600 WHERE k = 1;
+SELECT * FROM t ORDER BY k;
+DROP TABLE t;
+
+\echo '### D4 self-ref CASCADE, cross-partition, key and reference updated together'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600, r = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### E multi-column key, self-ref CASCADE, cross-partition'
+CREATE TABLE p (a int, b int, ra int, rb int, PRIMARY KEY (a, b)) PARTITION BY RANGE (a);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (ra, rb) REFERENCES p (a, b) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 7, 1, 7);
+UPDATE p SET a = 600 WHERE a = 1;
+SELECT tableoid::regclass, * FROM p;
+DROP TABLE p;
+
+\echo '### E2 multi-column key, partition key not part of the moved column (update b only, partition by a: same partition)'
+CREATE TABLE p (a int, b int, ra int, rb int, PRIMARY KEY (a, b)) PARTITION BY RANGE (a);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (ra, rb) REFERENCES p (a, b) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 7, 1, 7);
+UPDATE p SET b = 8;
+SELECT tableoid::regclass, * FROM p;
+DROP TABLE p;
+
+\echo '### F self-ref CASCADE, key change within the same partition'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 2 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### G1 LIST partitioning, self-ref CASCADE, cross-partition'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY LIST (k);
+CREATE TABLE p_a PARTITION OF p FOR VALUES IN (1, 2, 3);
+CREATE TABLE p_b PARTITION OF p FOR VALUES IN (600);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### G2 HASH partitioning, self-ref CASCADE, key change across partitions'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY HASH (k);
+CREATE TABLE p_0 PARTITION OF p FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE TABLE p_1 PARTITION OF p FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 1);
+SELECT tableoid::regclass AS before, * FROM p;
+-- pick a target in the other partition
+SELECT v AS target FROM generate_series(2, 50) v
+  WHERE satisfies_hash_partition('p'::regclass, 2, (SELECT CASE WHEN tableoid = 'p_0'::regclass THEN 1 ELSE 0 END FROM p), v)
+  ORDER BY v LIMIT 1 \gset
+UPDATE p SET k = :target WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### G3 sub-partitioned (two levels), self-ref CASCADE, cross-partition'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500) PARTITION BY RANGE (k);
+CREATE TABLE p_lo_a PARTITION OF p_lo FOR VALUES FROM (0) TO (100);
+CREATE TABLE p_lo_b PARTITION OF p_lo FOR VALUES FROM (100) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 1);
+\echo '-- move between sub-partitions of p_lo, updating through p'
+UPDATE p SET k = 200 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+\echo '-- move between sub-partitions of p_lo, updating through p_lo'
+UPDATE p_lo SET k = 200 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### H1 FK declared on each partition (referencing a partition-level column, referenced = parent), CASCADE'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p_lo ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+ALTER TABLE p_hi ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### H2 FK declared in CREATE TABLE of the parent (column constraint), CASCADE'
+CREATE TABLE p (k int PRIMARY KEY, r int REFERENCES p (k) ON UPDATE CASCADE) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### H3 FK declared on the parent before partitions are attached (ATTACH PARTITION later), CASCADE'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+CREATE TABLE p_lo (k int NOT NULL, r int);
+CREATE TABLE p_hi (k int NOT NULL, r int);
+ALTER TABLE p ATTACH PARTITION p_lo FOR VALUES FROM (0) TO (500);
+ALTER TABLE p ATTACH PARTITION p_hi FOR VALUES FROM (500) TO (MAXVALUE);
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### I1 DEFERRABLE INITIALLY DEFERRED, self-ref CASCADE, cross-partition'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+INSERT INTO p VALUES (1, 1);
+BEGIN;
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+COMMIT;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### I2 DEFERRABLE INITIALLY IMMEDIATE, self-ref CASCADE, cross-partition'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE DEFERRABLE INITIALLY IMMEDIATE;
+INSERT INTO p VALUES (1, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### J separate referencing table, partitioned referenced table, CASCADE, cross-partition (control: v15+ fix)'
+CREATE TABLE p (k int PRIMARY KEY) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+CREATE TABLE c (r int REFERENCES p (k) ON UPDATE CASCADE ON DELETE CASCADE);
+INSERT INTO p VALUES (1);
+INSERT INTO c VALUES (1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT * FROM c;
+DROP TABLE c, p;
+
+\echo '### J2 two partitioned tables, each referencing the other (no self-ref), both CASCADE, cross-partition'
+CREATE TABLE q (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE q_lo PARTITION OF q FOR VALUES FROM (0) TO (500);
+CREATE TABLE q_hi PARTITION OF q FOR VALUES FROM (500) TO (MAXVALUE);
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE q ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, NULL);
+INSERT INTO q VALUES (1, 1);
+-- referenced row of p moves; q.r cascades; no self reference
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT 'q' t, tableoid::regclass, * FROM q;
+DROP TABLE q, p;
+
+\echo '### K self-ref ON DELETE CASCADE + ON UPDATE CASCADE, cross-partition (check no rows lost)'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE ON DELETE CASCADE;
+INSERT INTO p VALUES (1, 1), (2, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### K2 self-ref ON DELETE CASCADE + ON UPDATE NO ACTION, other row references moved row, key+ref together'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON DELETE CASCADE;
+INSERT INTO p VALUES (1, NULL), (2, 1);
+UPDATE p SET k = 600 WHERE k = 1;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### L chain: rows 1 <- 2 <- 3, UPDATE all keys across partitions, CASCADE'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_lo PARTITION OF p FOR VALUES FROM (0) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (1, NULL), (2, 1), (3, 2);
+UPDATE p SET k = k + 600;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+CREATE TABLE t (k int PRIMARY KEY, r int REFERENCES t (k) ON UPDATE CASCADE);
+INSERT INTO t VALUES (1, NULL), (2, 1), (3, 2);
+UPDATE t SET k = k + 600;
+SELECT * FROM t ORDER BY k;
+DROP TABLE t;
+
+\echo '### M no cycle: referencing row (50 -> 150) is scanned and moved before the row it references (150), CASCADE'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_a PARTITION OF p FOR VALUES FROM (0) TO (100);
+CREATE TABLE p_b PARTITION OF p FOR VALUES FROM (100) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (150, NULL), (50, 150);
+EXPLAIN (COSTS OFF) UPDATE p SET k = k + 600;
+UPDATE p SET k = k + 600;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+CREATE TABLE t (k int PRIMARY KEY, r int REFERENCES t (k) ON UPDATE CASCADE);
+INSERT INTO t VALUES (150, NULL), (50, 150);
+UPDATE t SET k = k + 600;
+SELECT * FROM t ORDER BY k;
+DROP TABLE t;
+
+\echo '### M2 same as M, but the referenced row is scanned first (p_a holds the referenced row)'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_a PARTITION OF p FOR VALUES FROM (0) TO (100);
+CREATE TABLE p_b PARTITION OF p FOR VALUES FROM (100) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (50, NULL), (150, 50);
+UPDATE p SET k = k + 600;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;
+
+\echo '### N referencing row moved, referenced key changed within its own partition, same statement'
+CREATE TABLE p (k int PRIMARY KEY, r int) PARTITION BY RANGE (k);
+CREATE TABLE p_a PARTITION OF p FOR VALUES FROM (0) TO (100);
+CREATE TABLE p_b PARTITION OF p FOR VALUES FROM (100) TO (500);
+CREATE TABLE p_hi PARTITION OF p FOR VALUES FROM (500) TO (MAXVALUE);
+ALTER TABLE p ADD FOREIGN KEY (r) REFERENCES p (k) ON UPDATE CASCADE;
+INSERT INTO p VALUES (150, NULL), (50, 150);
+UPDATE p SET k = CASE k WHEN 50 THEN 650 ELSE 160 END;
+SELECT tableoid::regclass, * FROM p ORDER BY k;
+DROP TABLE p;

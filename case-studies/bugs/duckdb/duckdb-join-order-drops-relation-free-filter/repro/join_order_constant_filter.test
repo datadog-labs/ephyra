@@ -1,0 +1,31 @@
+# name: test/optimizer/joins/join_order_constant_filter.test
+# description: Filters that reference no relation must survive join reordering
+# group: [joins]
+
+statement ok
+CREATE TABLE t0(c0 INTEGER);
+
+statement ok
+INSERT INTO t0 VALUES (1);
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query II
+SELECT (SELECT 1), (SELECT 2) FROM t0 WHERE NULL;
+----
+
+query I
+SELECT count(*) FROM (SELECT (SELECT 1), (SELECT 2) FROM t0 WHERE random() > 2);
+----
+0
+
+query II
+SELECT min((SELECT 0 FROM t0)), count((SELECT 0 FROM t0)) FROM t0 JOIN t0 AS x2 ON CAST(NULL AS BOOLEAN);
+----
+NULL	0
+
+query II
+SELECT (SELECT 1), (SELECT 2) FROM t0 WHERE true;
+----
+1	2

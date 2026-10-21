@@ -1,0 +1,18 @@
+--- a/src/where.c	2026-10-14 19:16:14
++++ b/src/where.c	2026-10-14 19:16:41
+@@ -5457,7 +5457,14 @@
+           }
+         }
+         if( isMatch && (pOrderBy->a[i].fg.sortFlags & KEYINFO_ORDER_BIGNULL) ){
+-          if( j==pLoop->u.btree.nEq ){
++          /* The big-null scan seeks on index column j.  Columns of a
++          ** WITHOUT ROWID PRIMARY KEY index past nKeyCol are not part of
++          ** the key and may be missing from records written before an
++          ** ALTER TABLE ADD COLUMN, so they cannot be used in a seek key. */
++          if( j==pLoop->u.btree.nEq
++           && (j<nKeyCol || pIndex==0
++               || pIndex->idxType!=SQLITE_IDXTYPE_PRIMARYKEY)
++          ){
+             pLoop->wsFlags |= WHERE_BIGNULL_SORT;
+           }else{
+             isMatch = 0;

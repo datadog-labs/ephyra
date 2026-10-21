@@ -1,0 +1,47 @@
+--- a/ext/fts5/test/fts5unindexed2.test
++++ b/ext/fts5/test/fts5unindexed2.test
+@@ -291,7 +291,44 @@
+   100 {} b1.1 c1.1 {}
+   200 {} b2.1 c2 {}
+   300 {} b3 c3.1 {}
++}
++
++#-------------------------------------------------------------------------
++# Test that rows may be written to a contentless_unindexed=1 table that
++# has an UNINDEXED column and is created with locale=1.
++#
++reset_db
++do_execsql_test 7.0 {
++  CREATE VIRTUAL TABLE ft1 USING fts5(a, b UNINDEXED, c,
++      locale=1, contentless_unindexed=1, content='', contentless_delete=1
++  );
+ }
+ 
++do_execsql_test 7.1 {
++  INSERT INTO ft1(rowid, a, b, c) VALUES (4, 'p q', 'r', 's');
++  SELECT rowid, a, b, c FROM ft1;
++} {4 {} r {}}
++
++do_execsql_test 7.2 {
++  INSERT INTO ft1(rowid, a, b, c) VALUES (
++      5, fts5_locale('en', 'x y'), fts5_locale('de', 'b5'), 'z'
++  );
++  SELECT rowid, b FROM ft1('y');
++} {5 b5}
++
++do_execsql_test 7.3 {
++  UPDATE ft1 SET b='r2' WHERE rowid=4;
++  SELECT rowid, b FROM ft1('p');
++} {4 r2}
++
++do_execsql_test 7.4 {
++  DELETE FROM ft1 WHERE rowid=5;
++  SELECT rowid, b FROM ft1;
++} {4 r2}
++
++do_execsql_test 7.5 {
++  INSERT INTO ft1(ft1) VALUES('integrity-check');
++}
++
+ finish_test
+ 

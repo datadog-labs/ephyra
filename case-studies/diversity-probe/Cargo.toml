@@ -1,0 +1,15 @@
+[package]
+name = "diversity-probe"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+ephyra = { path = "../../crates/ephyra", features = ["coverage-force"] }
+ephyra-sqlite = { path = "../ephyra-sqlite" }
+
+# SQLite trunk, as in ephyra-sqlite; made by ../vendor/fetch.sh, which must
+# run first.
+[patch.crates-io]
+libsqlite3-sys = { path = "../vendor/libsqlite3-sys-trunk" }
+
+[workspace]

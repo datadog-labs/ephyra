@@ -1,0 +1,172 @@
+//! In-process coverage: read the LLVM profile counters of an instrumented
+//! binary without writing profile files.
+//!
+//! Build the test binary with `-C instrument-coverage` (for example
+//! `RUSTFLAGS="-C instrument-coverage" cargo test`, or `[build] rustflags`
+//! in `.cargo/config.toml`) and enable the `coverage` feature. The build
+//! script detects the flag and links the profile runtime; without it every
+//! function here reports [`available`] as `false` and does nothing, so a
+//! test suite that opts into coverage still compiles and runs uninstrumented.
+//!
+//! Counters are process-global and incremented atomically by the compiled
+//! code, so a [`Snapshot`] taken with atomic loads is race-free, but other
+//! threads running the same code pollute the [`Delta`] between two
+//! snapshots. Coverage-using phases take the process-wide [`lock`] so that
+//! ephyra's own runs serialise; run the whole suite with
+//! `RUST_TEST_THREADS=1` for exact attribution.
+//!
+//! # Profile files
+//!
+//! Every instrumented process writes `default_<hash>_<pid>.profraw` into
+//! its working directory at exit, and with `-C instrument-coverage` in
+//! `RUSTFLAGS` or `[build] rustflags` that includes build scripts and
+//! proc-macro libraries, so each `rustc` invocation leaves a file too.
+//! Nothing here needs those files. Send them to the target directory with
+//! an `[env]` entry next to the flags in `.cargo/config.toml`:
+//!
+//! ```text
+//! [build]
+//! rustflags = ["-C", "instrument-coverage"]
+//!
+//! [env]
+//! LLVM_PROFILE_FILE = { value = "target/profraw/%m_%p.profraw", relative = true }
+//! ```
+//!
+//! `cargo llvm-cov` sets the variable itself. To get one profile per
+//! property instead, set `Config::coverage.profraw_dir`; to stop the
+//! process's own dump from a test, call [`suppress_default_dump`].
+//!
+//! # Targets
+//!
+//! A coverage target is a file and a line range the search should reach,
+//! given as `Config::coverage.targets` or in the file
+//! `.ephyra/targets.jsonl` (`EPHYRA_COVERAGE_TARGETS`), one JSON
+//! object per line in either of these shapes:
+//!
+//! ```text
+//! {"file": "src/parser.rs", "begin_line": 120, "end_line": 140}
+//! {"antithesis_targeted_coverage": {"locations": [{"file": "src/parser.rs", "begin_line": 120, "end_line": 140}]}}
+//! ```
+//!
+//! The runner resolves each target to the code regions overlapping it, adds
+//! their functions to the tracked set, and treats any input that executes
+//! a target region as novel for the guided search, which then runs even
+//! without `Config::coverage.guided`. The report lists every target with
+//! how many inputs hit it, or, when none did, whether its function was
+//! entered at all, so an agent knows whether to widen the generator or to
+//! change the shape of its inputs.
+//!
+//! # The coverage grid
+//!
+//! `Config::coverage.html` (`EPHYRA_COVERAGE_HTML=dir`) writes
+//! `<dir>/<property>.html`: a page with no external resources over the
+//! tracked functions, how many inputs entered each, the number of inputs
+//! that executed every line, the targets and the sampled inputs. The
+//! functions form a hierarchy read from their demangled names (crate,
+//! modules, types, functions, closures under the function that owns them),
+//! or directories and files when grouped by file. Two views share it: the
+//! *map*, a treemap whose cells are sized by instrumented lines and coloured
+//! red through yellow to green by the share executed, zooming from the crate through modules to a
+//! function, whose lines stack in source order; and the *source* view, the
+//! function's code with per-line input and execution counts. Clicking a
+//! line (a strip in the map, a line number in the source) selects it and
+//! shift-click extends the selection; the panel on the right then shows
+//! the `targets.jsonl` line
+//! for the selection and a brief describing the target, its current
+//! coverage and what the generator produces, to hand to whoever rewrites
+//! the generator. The property's own function is pinned at the top of the
+//! tree. Needs the `json` feature. `ephyra visualize`, from the
+//! `ephyra-cli` package, shows these pages live, adds the selection to
+//! `targets.jsonl` with one click and runs the property again.
+//!
+//! # Regions and branches
+//!
+//! Stable Rust instruments *code regions*: every `if` and `match` arm,
+//! every closure body and every short-circuit operand is a region with its
+//! own counter, so the coverage report, the novelty signal of guided search
+//! and the fault-localization spectrum already work at arm granularity.
+//! Nightly adds true *branch regions* with a count for each outcome of a
+//! condition:
+//!
+//! ```text
+//! RUSTFLAGS="-C instrument-coverage -Z coverage-options=branch" cargo +nightly test
+//! ```
+//!
+//! The mapping reader understands branch regions (and MC/DC regions, which
+//! it skips), and the spectrum then scores the true and the false arm of
+//! every condition separately; nothing else changes. Use it when a bug hides
+//! in a condition that is evaluated on every run but decided differently.
+
+pub(crate) mod counters;
+#[cfg(feature = "json")]
+pub(crate) mod grid;
+pub(crate) mod locate;
+pub(crate) mod mapping;
+#[cfg_attr(not(ephyra_instrumented), allow(dead_code))]
+mod names;
+pub(crate) mod targets;
+pub(crate) mod tracker;
+
+pub(crate) use locate::{
+    display_path,
+    lines_hit,
+};
+
+/// Whether a tracked function is the property itself: the function named
+/// by its `type_name`, a closure of that path (`type_name` says
+/// `{{closure}}` without the index), or the body `#[ephyra::test]`
+/// nests inside the test function.
+pub(crate) fn is_property_fn(name: &str, property_type: &str) -> bool {
+    let Some(prefix) = property_type.strip_suffix("::{{closure}}") else {
+        return name == property_type;
+    };
+    let Some(rest) = name.strip_prefix(prefix).and_then(|rest| rest.strip_prefix("::")) else {
+        return false;
+    };
+    rest == "__ephyra_property"
+        || (rest.starts_with("{closure#") && rest.ends_with('}') && !rest.contains("::"))
+}
+
+pub use {
+    counters::{
+        Delta,
+        Function,
+        Functions,
+        Lease,
+        Snapshot,
+        available,
+        hits_by_function,
+        lock,
+        profraw_image,
+        snapshot,
+        snapshot_range,
+        suppress_default_dump,
+    },
+    locate::{
+        Confidence,
+        Locate,
+        Scores,
+        Suspect,
+    },
+    targets::TargetOutcome,
+    tracker::Summary,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::is_property_fn;
+
+    #[test]
+    fn the_property_function_is_recognised() {
+        let closure = "bst::main::{{closure}}";
+        assert!(is_property_fn("bst::main::{closure#4}", closure));
+        assert!(!is_property_fn("bst::main::{closure#4}::{closure#0}", closure));
+        assert!(!is_property_fn("bst::main", closure));
+        assert!(!is_property_fn("bst::main_2::{closure#0}", closure));
+        let test = "my_crate::tests::sorted::{{closure}}";
+        assert!(is_property_fn("my_crate::tests::sorted::__ephyra_property", test));
+        assert!(is_property_fn("my_crate::tests::sorted::{closure#0}", test));
+        assert!(is_property_fn("my_crate::props::sorted", "my_crate::props::sorted"));
+        assert!(!is_property_fn("my_crate::props::sorted_by", "my_crate::props::sorted"));
+    }
+}

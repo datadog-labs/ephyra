@@ -1,0 +1,211 @@
+--- a/ext/rtree/rtree3.test
++++ b/ext/rtree/rtree3.test
+@@ -52,6 +52,8 @@
+ #   rtree3-8: Test OOM while registering the r-tree module with sqlite.
+ #
+ #   rtree3-11: OOM following a constraint failure
++#
++#   rtree3-12: OOM while changing the rowid of a geopoly row.
+ #
+ do_faultsim_test rtree3-1 -faults oom* -prep {
+   faultsim_delete_and_reopen
+@@ -265,6 +267,36 @@
+ } -test {
+   faultsim_test_result {1 {rtree constraint failed: rt.(y1<=y2)}} \
+                        {1 {constraint failed}}
++}
++
++
++ifcapable geopoly {
++  do_test rtree3-12.prep {
++    faultsim_delete_and_reopen
++    execsql {
++      CREATE VIRTUAL TABLE g USING geopoly(a);
++      INSERT INTO g(rowid, _shape, a) VALUES
++        (1, '[[0,0],[1,0],[0,1],[0,0]]', 'x'),
++        (2, '[[5,5],[6,5],[5,6],[5,5]]', 'y');
++    }
++    faultsim_save_and_close
++  } {}
++  do_faultsim_test rtree3-12 -faults oom-* -prep {
++    faultsim_restore_and_reopen
++    execsql { SELECT * FROM g }
++  } -body {
++    execsql { UPDATE g SET rowid = 7 WHERE rowid = 1 }
++  } -test {
++    faultsim_test_result {0 {}}
++    if {$testrc==0} {
++      set res [execsql {
++        SELECT rowid, a, geopoly_area(_shape) FROM g ORDER BY rowid;
++        SELECT rowid FROM g
++         WHERE geopoly_overlap(_shape, geopoly_regular(0, 0, 0.1, 4));
++      }]
++      if {$res!="2 y 0.5 7 x 0.5 7"} { error "got: $res" }
++    }
++  }
+ }
+ 
+ finish_test
+--- /dev/null
++++ b/ext/rtree/rtreeK.test
+@@ -0,0 +1,160 @@
++# 2026-10-21
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++#***********************************************************************
++#
++# UPDATE statements that change the rowid of a geopoly table but do
++# not set the _shape column. In this case the xUpdate method sees the
++# _shape value as "unchanged" (sqlite3_value_nochange()), so it must
++# take the shape from the existing row.
++#
++if {![info exists testdir]} {
++  set testdir [file join [file dirname [info script]] .. .. test]
++}
++source $testdir/tester.tcl
++set testprefix rtreeK
++ifcapable !rtree||!geopoly { finish_test ; return }
++
++# Create geopoly table g(a, b) holding rows 1 and 2, and an ordinary
++# table t1 holding copies of the shapes.
++#
++proc setup_g {} {
++  db eval {
++    DROP TABLE IF EXISTS g;
++    DROP TABLE IF EXISTS t1;
++    CREATE VIRTUAL TABLE g USING geopoly(a, b);
++    INSERT INTO g(rowid, _shape, a, b) VALUES
++      (1, geopoly_regular(0, 0, 2, 4), 'x', 10),
++      (2, geopoly_regular(10, 10, 1, 3), 'y', 20);
++    CREATE TABLE t1(id INTEGER PRIMARY KEY, shape);
++    INSERT INTO t1 SELECT rowid, _shape FROM g;
++  }
++}
++
++# Return the contents of table g, plus the rowids found by a search
++# of the r-tree index for each of the two shapes.
++#
++proc g_contents {} {
++  db eval {
++    SELECT rowid, a, b, (SELECT id FROM t1 WHERE shape=_shape) FROM g
++      ORDER BY rowid;
++    SELECT 'idx', group_concat(rowid) FROM g
++      WHERE geopoly_overlap(_shape, geopoly_regular(0, 0, 1, 4));
++    SELECT 'idx', group_concat(rowid) FROM g
++      WHERE geopoly_overlap(_shape, geopoly_regular(10, 10, 1, 4));
++    SELECT 'map', group_concat(rowid) FROM g_rowid WHERE a0 IS NOT NULL;
++  }
++}
++
++foreach {tn sql res} {
++  1 { UPDATE g SET rowid = 7 WHERE rowid = 1 }
++    {2 y 20 2   7 x 10 1   idx 7 idx 2 map 2,7}
++  2 { UPDATE g SET rowid = 7, a = 'z' WHERE rowid = 1 }
++    {2 y 20 2   7 z 10 1   idx 7 idx 2 map 2,7}
++  3 { UPDATE g SET a = 'z' WHERE rowid = 1 }
++    {1 z 10 1   2 y 20 2   idx 1 idx 2 map 1,2}
++  4 { UPDATE g SET rowid = 1 WHERE rowid = 1 }
++    {1 x 10 1   2 y 20 2   idx 1 idx 2 map 1,2}
++  5 { UPDATE g SET rowid = rowid + 100 }
++    {101 x 10 1   102 y 20 2   idx 101 idx 102 map 101,102}
++  6 { UPDATE OR REPLACE g SET rowid = 2 WHERE rowid = 1 }
++    {2 x 10 1   idx 2 idx {} map 2}
++  7 { UPDATE g SET rowid = 3 WHERE rowid = 1;
++      UPDATE g SET rowid = 1 WHERE rowid = 2;
++      UPDATE g SET rowid = 2 WHERE rowid = 3; }
++    {1 y 20 2   2 x 10 1   idx 2 idx 1 map 1,2}
++  8 { CREATE TABLE t2(o, n);
++      INSERT INTO t2 VALUES(1, 7);
++      UPDATE g SET rowid = t2.n FROM t2 WHERE g.rowid = t2.o; }
++    {2 y 20 2   7 x 10 1   idx 7 idx 2 map 2,7}
++  9 { CREATE TABLE t3(x);
++      CREATE TRIGGER t3i AFTER INSERT ON t3 BEGIN
++        UPDATE g SET rowid = new.x WHERE rowid = 1;
++      END;
++      INSERT INTO t3 VALUES(7); }
++    {2 y 20 2   7 x 10 1   idx 7 idx 2 map 2,7}
++  10 { UPDATE g SET rowid = 7, _shape = _shape WHERE rowid = 1 }
++    {2 y 20 2   7 x 10 1   idx 7 idx 2 map 2,7}
++  11 { UPDATE g SET rowid = NULL WHERE rowid = 1 }
++    {2 y 20 2   3 x 10 1   idx 3 idx 2 map 2,3}
++  12 { BEGIN;
++       UPDATE g SET rowid = rowid + 100;
++       ROLLBACK; }
++    {1 x 10 1   2 y 20 2   idx 1 idx 2 map 1,2}
++} {
++  setup_g
++  do_execsql_test 1.$tn.1 $sql
++  do_test 1.$tn.2 { g_contents } $res
++  do_execsql_test 1.$tn.3 { PRAGMA integrity_check } ok
++}
++
++# A rowid change that conflicts with an existing row fails and leaves
++# the table as it was.
++#
++setup_g
++do_test 2.1 {
++  catchsql { UPDATE g SET rowid = 2 WHERE rowid = 1 }
++  sqlite3_errcode db
++} SQLITE_CONSTRAINT
++do_test 2.2 { g_contents } {1 x 10 1   2 y 20 2   idx 1 idx 2 map 1,2}
++do_execsql_test 2.3 {
++  UPDATE OR IGNORE g SET rowid = 2 WHERE rowid = 1;
++} {}
++do_test 2.4 { g_contents } {1 x 10 1   2 y 20 2   idx 1 idx 2 map 1,2}
++
++# Change the rowids of many rows, so that the r-tree has more than one
++# level, and compare the results of r-tree searches with those of a scan
++# of an ordinary table holding the same shapes.
++#
++do_execsql_test 3.0 {
++  DROP TABLE IF EXISTS g;
++  DROP TABLE IF EXISTS t1;
++  CREATE VIRTUAL TABLE g USING geopoly(a);
++  WITH c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<300)
++  INSERT INTO g(rowid, _shape, a)
++    SELECT i, geopoly_regular((i*37)%100, (i*53)%100, 1+(i%5), 3+(i%4)), i
++    FROM c;
++  CREATE TABLE t1(id INTEGER PRIMARY KEY, shape, a);
++  INSERT INTO t1 SELECT rowid, _shape, a FROM g;
++}
++do_execsql_test 3.1 {
++  UPDATE g SET rowid = rowid + 1000 WHERE rowid % 3 = 0;
++  UPDATE g SET rowid = 5000 - rowid WHERE rowid < 200;
++  UPDATE t1 SET id = id + 1000 WHERE id % 3 = 0;
++  UPDATE t1 SET id = 5000 - id WHERE id < 200;
++}
++do_execsql_test 3.2 {
++  SELECT count(*) FROM g JOIN t1 ON g.rowid=t1.id
++   WHERE g._shape=t1.shape AND g.a=t1.a;
++} 300
++for {set i 0} {$i < 10} {incr i} {
++  set p "geopoly_regular([expr $i*10], [expr 100-$i*10], 7, 5)"
++  set expect [db eval "
++    SELECT id FROM t1 WHERE geopoly_overlap(shape, $p) ORDER BY id
++  "]
++  do_execsql_test 3.3.$i "
++    SELECT rowid FROM g WHERE geopoly_overlap(_shape, $p) ORDER BY rowid
++  " $expect
++}
++do_execsql_test 3.4 { PRAGMA integrity_check } ok
++
++# A geopoly table with no columns other than _shape.
++#
++do_execsql_test 4.0 {
++  CREATE VIRTUAL TABLE h USING geopoly;
++  INSERT INTO h(rowid, _shape) VALUES(1, '[[0,0],[2,0],[2,2],[0,2],[0,0]]');
++  UPDATE h SET rowid = 5;
++  SELECT rowid, geopoly_area(_shape) FROM h;
++} {5 4.0}
++do_execsql_test 4.1 {
++  SELECT rowid FROM h
++   WHERE geopoly_overlap(_shape, geopoly_regular(0, 0, 1, 4));
++} 5
++
++finish_test

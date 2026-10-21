@@ -1,0 +1,30 @@
+--- where.c.orig	2026-10-10 10:21:41
++++ where.c	2026-10-10 10:21:41
+@@ -5085,7 +5085,8 @@
+   int iCur,               /* Cursor used by the this loop */
+   ExprList *pOrderBy,     /* The ORDER BY clause on the whole query */
+   Bitmask *pRevMask,      /* When loops need to go in reverse order */
+-  Bitmask *pOBSat         /* Which terms of pOrderBy are satisfied so far */
++  Bitmask *pOBSat,        /* Which terms of pOrderBy are satisfied so far */
++  u16 wctrlFlags          /* WHERE_GROUPBY or _DISTINCTBY or _ORDERBY_LIMIT */
+ ){
+   int iOB;                /* Index into pOrderBy->a[] */
+   int jSub;               /* Index into pSubOB->a[] */
+@@ -5103,7 +5104,7 @@
+     if( pOBExpr->op!=TK_COLUMN && pOBExpr->op!=TK_AGG_COLUMN ) break;
+     if( pOBExpr->iTable!=iCur ) break;
+     if( pOBExpr->iColumn!=pSubOB->a[jSub].u.x.iOrderByCol-1 ) break;
+-    if( (pWInfo->wctrlFlags & WHERE_GROUPBY)==0 ){
++    if( (wctrlFlags & WHERE_GROUPBY)==0 ){
+       u8 sfOB = pOrderBy->a[iOB].fg.sortFlags;   /* sortFlags for iOB */
+       u8 sfSub = pSubOB->a[jSub].fg.sortFlags;   /* sortFlags for jSub */
+       if( (sfSub & KEYINFO_ORDER_BIGNULL) != (sfOB & KEYINFO_ORDER_BIGNULL) ){
+@@ -5286,7 +5287,7 @@
+         if( pLoop->u.btree.pOrderBy
+          && OptimizationEnabled(db, SQLITE_OrderBySubq)
+          &&  wherePathMatchSubqueryOB(pWInfo,pLoop,iLoop,iCur,
+-                                     pOrderBy,pRevMask, &obSat)
++                                     pOrderBy,pRevMask, &obSat, wctrlFlags)
+         ){
+           nColumn = 0;
+           isOrderDistinct = 0;

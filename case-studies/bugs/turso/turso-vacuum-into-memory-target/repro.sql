@@ -1,0 +1,5 @@
+CREATE TABLE t(a);
+INSERT INTO t VALUES (1);
+VACUUM INTO ':memory:';
+VACUUM INTO ':memory:';
+VACUUM INTO '';

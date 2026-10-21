@@ -1,0 +1,45 @@
+diff --git a/src/url_pattern_helpers.cpp b/src/url_pattern_helpers.cpp
+index 8c11f05f..d5cc7b64 100644
+--- a/src/url_pattern_helpers.cpp
++++ b/src/url_pattern_helpers.cpp
+@@ -511,7 +511,10 @@ tl::expected<std::string, errors> canonicalize_pathname(
+   // query/fragment, so the pathname was silently truncated at the first literal
+   // '?' or '#'. set_pathname runs the parser in path state override, matching
+   // how canonicalize_hostname uses set_hostname.
+-  auto url = ada::parse<url_aggregator>("fake://fake-url", nullptr);
++  // The spec's "create a dummy URL" is "https://dummy.invalid/": a special
++  // URL, so the path parser turns "\\" into "/" as it does in a special URL.
++  // A non-special dummy kept a literal backslash.
++  auto url = ada::parse<url_aggregator>("https://dummy.invalid/", nullptr);
+   ADA_ASSERT_TRUE(url);
+   if (!url->set_pathname(modified_value)) {
+     // If parseResult is failure, then throw a TypeError.
+diff --git a/tests/wpt_urlpattern_tests.cpp b/tests/wpt_urlpattern_tests.cpp
+index a1d953f5..d8b15b30 100644
+--- a/tests/wpt_urlpattern_tests.cpp
++++ b/tests/wpt_urlpattern_tests.cpp
+@@ -1372,3 +1372,24 @@ TEST(wpt_urlpattern_tests, urlpattern_test_data) {
+   }
+   SUCCEED();
+ }
++
++TEST(wpt_urlpattern_tests, special_scheme_pathname_converts_backslash) {
++  // canonicalize_pathname (used for a special protocol) must canonicalize
++  // the pathname as a special-scheme URL path: a literal backslash becomes
++  // "/". A non-special dummy scheme kept it literal. The pattern text of
++  // "/a\\b" is "/a\b" (one literal backslash after escape processing).
++  auto compile = [](std::string_view protocol, std::string_view pathname) {
++    ada::url_pattern_init init{};
++    init.protocol = protocol;
++    init.hostname = "h";
++    init.pathname = pathname;
++    auto p = ada::parse_url_pattern<regex_provider>(init);
++    EXPECT_TRUE(p) << pathname;
++    return p ? std::string(p->get_pathname()) : std::string("(error)");
++  };
++  // Two source backslashes -> one literal backslash -> "/" for a special scheme.
++  EXPECT_EQ(compile("https", "/a\\\\b"), "/a/b");
++  EXPECT_EQ(compile("ftp", "/a\\\\b"), "/a/b");
++  // Dot segments are normalized as a special path.
++  EXPECT_EQ(compile("https", "/a/../b"), "/b");
++}

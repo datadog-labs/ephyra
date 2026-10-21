@@ -1,0 +1,24 @@
+--- a/ext/fts5/fts5_index.c
++++ b/ext/fts5/fts5_index.c
+@@ -5331,7 +5331,11 @@
+     assert_nc( iSOP<=pSeg->iLeafOffset );
+ 
+     if( bDetailNone ){
+-      while( iSOP<pSeg->iLeafOffset ){
++      /* In detail=none mode, pSeg->iLeafOffset is the offset following
++      ** the 0x00 flag bytes, if any, that follow the rowid of the entry
++      ** being removed. Set iEnd to the offset just after its rowid. */
++      const int iEnd = pSeg->iLeafOffset - (pSeg->bDel ? 1+pSeg->nPos : 0);
++      while( iSOP<iEnd ){
+         if( aPg[iSOP]==0x00 ) iSOP++;
+         if( aPg[iSOP]==0x00 ) iSOP++;
+         iStart = iSOP;
+@@ -5396,7 +5400,7 @@
+ 
+   if( pSeg->bDel ){
+     iOff += sqlite3Fts5PutVarint(&aPg[iOff], iDelta);
+-    aPg[iOff++] = 0x01;
++    aPg[iOff++] = (bDetailNone ? 0x00 : 0x01);
+   }else if( bLastInDoclist==0 ){
+     if( iNextOff!=iPgIdx ){
+       u64 iNextDelta = 0;

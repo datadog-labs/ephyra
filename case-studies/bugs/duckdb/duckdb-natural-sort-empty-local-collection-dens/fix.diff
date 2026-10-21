@@ -1,0 +1,41 @@
+diff --git a/src/common/sort/natural_sort.cpp b/src/common/sort/natural_sort.cpp
+index 6f94b06827..9f413b44cc 100644
+--- a/src/common/sort/natural_sort.cpp
++++ b/src/common/sort/natural_sort.cpp
+@@ -101,6 +101,12 @@ SinkCombineResultType NaturalSort::Combine(ExecutionContext &context, OperatorSi
+ 	auto &gstate = combine.global_state.Cast<NaturalSortGlobalSinkState>();
+ 	auto &lstate = combine.local_state.Cast<NaturalSortLocalSinkState>();
+ 
++	// Skip empty local collections: they still hold an (empty) chunk, which would become a zero-row block
++	// of the hash group if used as the base collection.
++	if (!lstate.unsorted || !lstate.unsorted->Count()) {
++		return SinkCombineResultType::FINISHED;
++	}
++
+ 	// Only one partition, so need a global lock.
+ 	annotated_lock_guard<annotated_mutex> glock(gstate.lock);
+ 	auto &hash_group = gstate.hash_group;
+diff --git a/test/sql/window/test_natural_sort_empty_combine.test b/test/sql/window/test_natural_sort_empty_combine.test
+new file mode 100644
+index 0000000000..ed9ae49b61
+--- /dev/null
++++ b/test/sql/window/test_natural_sort_empty_combine.test
+@@ -0,0 +1,18 @@
++# name: test/sql/window/test_natural_sort_empty_combine.test
++# description: OVER () must not see a zero-row block when an empty thread-local collection is combined first
++# group: [window]
++
++statement ok
++PRAGMA enable_verification
++
++foreach threads 1 2 4
++
++statement ok
++SET threads=${threads};
++
++query II
++SELECT x, dense_rank() OVER () FROM (VALUES (7), (NULL)) t(x) ANTI JOIN (VALUES (7), (2), (1)) s(y) ON x = y AND NULL::BOOLEAN WHERE x IS NULL;
++----
++NULL	1
++
++endloop

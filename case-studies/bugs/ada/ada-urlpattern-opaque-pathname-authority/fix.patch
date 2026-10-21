@@ -1,0 +1,50 @@
+diff --git a/src/url_pattern_helpers.cpp b/src/url_pattern_helpers.cpp
+index 8c11f05f..e3efee0e 100644
+--- a/src/url_pattern_helpers.cpp
++++ b/src/url_pattern_helpers.cpp
+@@ -541,8 +541,14 @@ tl::expected<std::string, errors> canonicalize_opaque_pathname(
+   // Set dummyURL's path to the empty string.
+   // Let parseResult be the result of running URL parsing given value with
+   // dummyURL as url and opaque path state as state override.
++  // A value starting with "//" would make "fake:" + value start an authority,
++  // dropping it ("//x/y" became "/y"). The opaque path state appends those
++  // slashes like any other code point, so keep the parser in the path: "/."
++  // before "//" is how a path that starts with an empty segment is written,
++  // and the pathname getter leaves it out.
++  const std::string prefix = input.starts_with("//") ? "fake:/." : "fake:";
+   if (auto url =
+-          ada::parse<url_aggregator>("fake:" + std::string(input), nullptr)) {
++          ada::parse<url_aggregator>(prefix + std::string(input), nullptr)) {
+     // Return the result of URL path serializing dummyURL.
+     return std::string(url->get_pathname());
+   }
+diff --git a/tests/wpt_urlpattern_tests.cpp b/tests/wpt_urlpattern_tests.cpp
+index a1d953f5..094304f4 100644
+--- a/tests/wpt_urlpattern_tests.cpp
++++ b/tests/wpt_urlpattern_tests.cpp
+@@ -1372,3 +1372,25 @@ TEST(wpt_urlpattern_tests, urlpattern_test_data) {
+   }
+   SUCCEED();
+ }
++
++TEST(wpt_urlpattern_tests, opaque_pathname_keeps_leading_slashes) {
++  // canonicalize an opaque pathname runs the opaque path state, which
++  // appends a leading "//" like any other code points: it must not start an
++  // authority and drop the text that follows.
++  auto pathname = [](std::string_view value) {
++    ada::url_pattern_init init{};
++    init.protocol = "foo";
++    init.pathname = value;
++    auto p = ada::parse_url_pattern<regex_provider>(init);
++    EXPECT_TRUE(p) << value;
++    return p ? std::string(p->get_pathname()) : std::string("(error)");
++  };
++  EXPECT_EQ(pathname("//x/y"), "//x/y");
++  EXPECT_EQ(pathname("//x"), "//x");
++  // A pattern made from a non-special URL matches that URL, and only it.
++  auto p = ada::parse_url_pattern<regex_provider>("foo://h//x/y");
++  ASSERT_TRUE(p);
++  ASSERT_EQ(p->get_pathname(), "//x/y");
++  ASSERT_TRUE(*p->test(std::string_view("foo://h//x/y")));
++  ASSERT_FALSE(*p->test(std::string_view("foo://h/y")));
++}

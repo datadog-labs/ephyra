@@ -1,0 +1,15 @@
+# name: test/optimizer/join_elimination_projection_map.test
+# description: Join elimination keeps the projection map of the operator above the eliminated join valid
+# group: [optimizer]
+
+statement ok
+CREATE TABLE t0(c0 INTEGER);
+
+statement ok
+INSERT INTO t0 VALUES (1), (2);
+
+query I rowsort
+SELECT DISTINCT x1.c0 FROM t0 AS x1 LEFT JOIN t0 AS x2 USING (c0) LEFT JOIN t0 AS x3 ON ((SELECT true) AND false) WHERE true
+----
+1
+2

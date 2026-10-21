@@ -1,0 +1,25 @@
+--- a/ext/fts5/fts5_storage.c
++++ b/ext/fts5/fts5_storage.c
+@@ -264,7 +264,10 @@
+         pConfig->zDb, pConfig->zName
+     );
+   }
+-  if( rc==SQLITE_OK && pConfig->eContent==FTS5_CONTENT_NORMAL ){
++  if( rc==SQLITE_OK
++   && (pConfig->eContent==FTS5_CONTENT_NORMAL
++    || pConfig->eContent==FTS5_CONTENT_UNINDEXED)
++  ){
+     rc = fts5ExecPrintf(pConfig->db, 0, 
+         "DROP TABLE IF EXISTS %Q.'%q_content';",
+         pConfig->zDb, pConfig->zName
+@@ -297,7 +300,9 @@
+   if( pConfig->bColumnsize ){
+     fts5StorageRenameOne(pConfig, &rc, "docsize", zName);
+   }
+-  if( pConfig->eContent==FTS5_CONTENT_NORMAL ){
++  if( pConfig->eContent==FTS5_CONTENT_NORMAL
++   || pConfig->eContent==FTS5_CONTENT_UNINDEXED
++  ){
+     fts5StorageRenameOne(pConfig, &rc, "content", zName);
+   }
+   return rc;

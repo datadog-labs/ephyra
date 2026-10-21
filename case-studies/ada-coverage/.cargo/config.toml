@@ -1,0 +1,9 @@
+# The bundled ada (ada-url's ada.cpp, built by the cc crate) is compiled with
+# clang's coverage instrumentation, and clang's profile runtime is linked in.
+# Rust code is not instrumented: the counters are ada's alone.
+[env]
+CXXFLAGS = "-fprofile-instr-generate -fcoverage-mapping"
+LLVM_PROFILE_FILE = { value = "target/profraw/%m_%p.profraw", relative = true }
+
+[build]
+rustflags = ["-C", "link-arg=/Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin/libclang_rt.profile_osx.a"]

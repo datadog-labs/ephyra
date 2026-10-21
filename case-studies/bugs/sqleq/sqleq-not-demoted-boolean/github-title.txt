@@ -1,0 +1,1 @@
+frontend: `NOT` over a demoted boolean operator (`<@`, `@>`, `&&`, `~`, `!~`) outside a WHERE reaches the prover applied to a VARBINARY term (QED panics)

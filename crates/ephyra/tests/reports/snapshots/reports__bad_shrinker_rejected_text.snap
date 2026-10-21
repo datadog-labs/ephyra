@@ -1,0 +1,13 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: report.to_string()
+---
+ephyra: FAILED, property failed: shrink candidate not smaller: size 10 >= 9: 10
+  counterexample: 9
+  original:       10 (size 0, iteration 0)
+  shrinking: 99 of 99 candidates accepted in [time]
+  after 0 passing tests (0 distinct, 0 discarded) in [time]
+  reproduce: EPHYRA_REPLAY=24301:0
+  or rerun the whole search: Config::default().seed(24301)
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]

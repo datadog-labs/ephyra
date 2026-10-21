@@ -1,0 +1,77 @@
+--- src/where.c	2026-10-11 09:58:49
++++ src/where.c	2026-10-11 09:59:16
+@@ -3886,6 +3886,34 @@
+     sqlite3ExprDelete(db, p->pExpr);
+     sqlite3DbFreeNN(db, p);
+   }
++}
++
++/*
++** Return true if constant expression pExpr, with affinity aff applied, might
++** be -9223372036854775808, either as an INTEGER or as a REAL. Also return true
++** if the value of pExpr cannot be determined here. A helper for
++** wherePartIdxExpr().
++*/
++static int wherePartIdxMaybeMinInt(sqlite3 *db, Expr *pExpr, u8 aff){
++  sqlite3_value *pVal = 0;
++  int bRet = 1;                   /* Assume the worst if value is unknown */
++  if( sqlite3ValueFromExpr(db, pExpr, ENC(db), aff, &pVal)==SQLITE_OK
++   && pVal!=0
++  ){
++    switch( sqlite3_value_type(pVal) ){
++      case SQLITE_INTEGER:
++        bRet = sqlite3_value_int64(pVal)==SMALLEST_INT64;
++        break;
++      case SQLITE_FLOAT:
++        bRet = sqlite3_value_double(pVal)==-9223372036854775808.0;
++        break;
++      default:
++        bRet = 0;
++        break;
++    }
++  }
++  sqlite3ValueFree(pVal);
++  return bRet;
+ }
+ 
+ /*
+@@ -3902,7 +3930,18 @@
+ **
+ **    (a) <expr> is a constant expression, and
+ **    (b) The (a=<expr>) comparison uses the BINARY collation sequence, and
+-**    (c) Column "a" has an affinity other than NONE or BLOB.
++**    (c) Column "a" has an affinity other than NONE or BLOB, and
++**    (d) The comparison does not convert the value of "a": if "a" has
++**        TEXT affinity, <expr> must not have a numeric affinity, and
++**    (e) If "a" has a numeric affinity, <expr> is known not to be
++**        -9223372036854775808 (as an INTEGER or as a REAL).
++**
++** Conditions (d) and (e) ensure that a=<expr> implies that the value of
++** "a" is exactly <expr> with the affinity of "a" applied. Otherwise, a TEXT
++** column holding '5.0' would read back as '5' given a=CAST(5 AS INT), and an
++** INTEGER -9223372036854775808 would read back as a REAL given
++** a=-9223372036854775808.0 (sqlite3VdbeIntegerAffinity() does not convert
++** that value), or vice versa.
+ **
+ ** If argument pItem is NULL, then pMask must not be NULL. In this case this 
+ ** function is being called as part of determining whether or not pIdx
+@@ -3941,7 +3980,18 @@
+     if( !sqlite3IsBinary(sqlite3ExprCompareCollSeq(pParse, pPart)) ) return;
+     if( pLeft->iColumn<0 ) return;
+     aff = pIdx->pTable->aCol[pLeft->iColumn].affinity;
+-    if( aff>=SQLITE_AFF_TEXT ){
++    if( aff<SQLITE_AFF_TEXT ) return;
++    if( aff==SQLITE_AFF_TEXT
++     && sqlite3IsNumericAffinity(sqlite3ExprAffinity(pRight))
++    ){
++      return;
++    }
++    if( sqlite3IsNumericAffinity(aff)
++     && wherePartIdxMaybeMinInt(pParse->db, pRight, aff)
++    ){
++      return;
++    }
++    {
+       if( pItem ){
+         sqlite3 *db = pParse->db;
+         IndexedExpr *p = (IndexedExpr*)sqlite3DbMallocRaw(db, sizeof(*p));

@@ -1,0 +1,174 @@
+--- /dev/null
++++ b/ext/rtree/rtreeL.test
+@@ -0,0 +1,171 @@
++# 2026-10-21
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++#***********************************************************************
++#
++# INSERT and UPDATE statements that set the rowid of an r-tree table
++# using the name "rowid", "oid" or "_rowid_" instead of the name of the
++# first column. The first column of an r-tree table is an alias for the
++# rowid, so these statements must behave as they do on an ordinary table
++# with an INTEGER PRIMARY KEY column.
++#
++if {![info exists testdir]} {
++  set testdir [file join [file dirname [info script]] .. .. test]
++}
++source $testdir/tester.tcl
++set testprefix rtreeL
++ifcapable !rtree { finish_test ; return }
++
++# Create r-tree table r and ordinary table t, each holding rows 1, 2
++# and 3, and tables m and tr used by some of the test cases.
++#
++proc setup_rt {module} {
++  db eval {
++    DROP TABLE IF EXISTS r;
++    DROP TABLE IF EXISTS t;
++    DROP TABLE IF EXISTS m;
++    DROP TABLE IF EXISTS tr;
++  }
++  db eval "CREATE VIRTUAL TABLE r USING $module (id, x1, x2, +aux)"
++  db eval {
++    CREATE TABLE t(id INTEGER PRIMARY KEY, x1, x2, aux);
++    CREATE TABLE m(o, n);
++    INSERT INTO m VALUES(2, 9);
++    CREATE TABLE tr(x);
++    INSERT INTO r VALUES(1, 0, 1, 'a'), (2, 2, 3, 'b'), (3, 4, 5, 'c');
++    INSERT INTO t VALUES(1, 0, 1, 'a'), (2, 2, 3, 'b'), (3, 4, 5, 'c');
++  }
++}
++
++# Return the contents of table $tbl, and the ids of the rows that
++# contain the points 2.5 and 4.5 (found by searching the r-tree if
++# $tbl is the r-tree table).
++#
++proc contents_rt {tbl} {
++  db eval "
++    SELECT id, printf('%g', x1), printf('%g', x2), aux FROM $tbl
++      ORDER BY id;
++    SELECT 'hit', group_concat(id) FROM (
++      SELECT id FROM $tbl WHERE x1<=2.5 AND x2>=2.5 ORDER BY id
++    );
++    SELECT 'hit', group_concat(id) FROM (
++      SELECT id FROM $tbl WHERE x1<=4.5 AND x2>=4.5 ORDER BY id
++    );
++  "
++}
++
++set mi 0
++foreach module {rtree rtree_i32} {
++  incr mi
++  foreach {tn sql res} {
++    1  { UPDATE %T SET rowid = 9 WHERE id = 2 }
++       {1 0 1 a   3 4 5 c   9 2 3 b   hit 9 hit 3}
++    2  { UPDATE %T SET _rowid_ = 9 WHERE id = 2 }
++       {1 0 1 a   3 4 5 c   9 2 3 b   hit 9 hit 3}
++    3  { UPDATE %T SET oid = 9 WHERE id = 2 }
++       {1 0 1 a   3 4 5 c   9 2 3 b   hit 9 hit 3}
++    4  { UPDATE %T SET rowid = 9, x2 = 7 WHERE id = 2 }
++       {1 0 1 a   3 4 5 c   9 2 7 b   hit 9 hit 3,9}
++    5  { UPDATE %T SET aux = 'z', rowid = 9 WHERE id = 2 }
++       {1 0 1 a   3 4 5 c   9 2 3 z   hit 9 hit 3}
++    6  { UPDATE %T SET rowid = id + 100 }
++       {101 0 1 a   102 2 3 b   103 4 5 c   hit 102 hit 103}
++    7  { UPDATE %T SET rowid = 9, id = 9 WHERE id = 2 }
++       {1 0 1 a   3 4 5 c   9 2 3 b   hit 9 hit 3}
++    8  { UPDATE %T SET rowid = 9, id = 10 WHERE id = 2 }
++       {1 0 1 a   3 4 5 c   10 2 3 b   hit 10 hit 3}
++    9  { UPDATE %T SET id = 9 WHERE id = 2 }
++       {1 0 1 a   3 4 5 c   9 2 3 b   hit 9 hit 3}
++    10 { UPDATE %T SET rowid = 2 WHERE id = 2 }
++       {1 0 1 a   2 2 3 b   3 4 5 c   hit 2 hit 3}
++    11 { UPDATE OR REPLACE %T SET rowid = 3 WHERE id = 2 }
++       {1 0 1 a   3 2 3 b   hit 3 hit {}}
++    12 { UPDATE %T SET rowid = m.n FROM m WHERE %T.id = m.o }
++       {1 0 1 a   3 4 5 c   9 2 3 b   hit 9 hit 3}
++    13 { CREATE TRIGGER tri AFTER INSERT ON tr BEGIN
++           UPDATE %T SET rowid = new.x WHERE id = 2;
++         END;
++         INSERT INTO tr VALUES(9); }
++       {1 0 1 a   3 4 5 c   9 2 3 b   hit 9 hit 3}
++    14 { UPDATE %T SET rowid = -5 WHERE rowid = 2 }
++       {-5 2 3 b   1 0 1 a   3 4 5 c   hit -5 hit 3}
++    15 { INSERT INTO %T(rowid, x1, x2, aux) VALUES(9, 2, 3, 'd') }
++       {1 0 1 a   2 2 3 b   3 4 5 c   9 2 3 d   hit 2,9 hit 3}
++    16 { INSERT OR REPLACE INTO %T(rowid, x1, x2, aux) VALUES(2, 4, 5, 'd') }
++       {1 0 1 a   2 4 5 d   3 4 5 c   hit {} hit 2,3}
++    17 { INSERT INTO %T(x1, x2, aux) VALUES(2, 3, 'd') }
++       {1 0 1 a   2 2 3 b   3 4 5 c   4 2 3 d   hit 2,4 hit 3}
++  } {
++    # Check that the ordinary table gives the expected result, then that
++    # the r-tree table gives the same.
++    setup_rt $module
++    do_test $mi.$tn.1 {
++      execsql [string map {%T t} $sql]
++      contents_rt t
++    } $res
++    setup_rt $module
++    do_test $mi.$tn.2 {
++      execsql [string map {%T r} $sql]
++      contents_rt r
++    } $res
++    do_execsql_test $mi.$tn.3 { PRAGMA integrity_check } ok
++  }
++
++  # A new rowid that is already in use is a constraint error, unless
++  # the conflict handling mode is IGNORE.
++  #
++  setup_rt $module
++  do_test $mi.20.1 {
++    lindex [catchsql { UPDATE r SET rowid = 1 WHERE id = 2 }] 0
++  } 1
++  do_test $mi.20.2 {
++    lindex [catchsql { INSERT INTO r(rowid, x1, x2) VALUES(3, 0, 0) }] 0
++  } 1
++  do_execsql_test $mi.20.3 {
++    UPDATE OR IGNORE r SET rowid = 1 WHERE id = 2;
++    INSERT OR IGNORE INTO r(rowid, x1, x2) VALUES(3, 0, 0);
++  } {}
++  do_test $mi.20.4 {
++    contents_rt r
++  } {1 0 1 a   2 2 3 b   3 4 5 c   hit 2 hit 3}
++}
++
++# Change the rowids of many rows, so that the r-tree has more than one
++# level, and compare the results of r-tree searches with those of the
++# same searches on an ordinary table.
++#
++do_execsql_test 3.0 {
++  DROP TABLE IF EXISTS r;
++  DROP TABLE IF EXISTS t;
++  CREATE VIRTUAL TABLE r USING rtree(id, x1, x2, y1, y2, +aux);
++  WITH c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<300)
++  INSERT INTO r SELECT i, (i*37)%100, (i*37)%100+1+(i%5),
++                          (i*53)%100, (i*53)%100+1+(i%3), i FROM c;
++  CREATE TABLE t(id INTEGER PRIMARY KEY, x1, x2, y1, y2, aux);
++  INSERT INTO t SELECT * FROM r;
++}
++do_execsql_test 3.1 {
++  UPDATE r SET rowid = rowid + 1000 WHERE id % 3 = 0;
++  UPDATE r SET oid = 5000 - oid WHERE id < 200;
++  UPDATE t SET rowid = rowid + 1000 WHERE id % 3 = 0;
++  UPDATE t SET oid = 5000 - oid WHERE id < 200;
++}
++do_execsql_test 3.2 {
++  SELECT count(*) FROM r JOIN t USING(id, x1, x2, y1, y2, aux);
++} 300
++for {set i 0} {$i < 10} {incr i} {
++  set x [expr {$i*10}]
++  set y [expr {85-$i*10}]
++  set w "x1<=$x+15 AND x2>=$x AND y1<=$y+15 AND y2>=$y"
++  set expect [db eval "SELECT id FROM t WHERE $w ORDER BY id"]
++  do_execsql_test 3.3.$i "SELECT id FROM r WHERE $w ORDER BY id" $expect
++}
++do_execsql_test 3.4 { PRAGMA integrity_check } ok
++
++finish_test

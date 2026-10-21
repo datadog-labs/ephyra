@@ -1,0 +1,18 @@
+--- a/src/backend/access/heap/heapam_handler.c
++++ b/src/backend/access/heap/heapam_handler.c
+@@ -990,10 +990,13 @@
+ 											  values, isnull, rwstate,
+ 											  recently_dead))
+ 				{
+-					Assert(recently_dead);
+ 					/*
+ 					 * Missing TOAST chunks for a recently-dead tuple. Treat
+-					 * it as dead.
++					 * it as dead.  That tuple need not be this one: when this
++					 * tuple completes an update pair, rewrite_heap_tuple()
++					 * also writes the older, recently-dead version waiting
++					 * for it, and returns false if that one's TOAST is gone.
++					 * Either way, exactly one recently-dead tuple was dropped.
+ 					 */
+ 					*tups_vacuumed += 1;
+ 					*num_tuples -= 1;

@@ -1,0 +1,221 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")"
+---
+{
+  "name": "small_sums",
+  "status": "Failed",
+  "seed": 24301,
+  "tests": 31,
+  "unique_tests": 22,
+  "discarded": 0,
+  "iterations": 32,
+  "stopped_by_budget": false,
+  "max_size": 100,
+  "duration": "[duration]",
+  "gen_time": "[duration]",
+  "prop_time": "[duration]",
+  "distinct_inputs_ratio": 0.71875,
+  "distinct_growth": {
+    "points": [
+      [
+        1,
+        1
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        3,
+        3
+      ],
+      [
+        4,
+        4
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        6,
+        6
+      ],
+      [
+        8,
+        7
+      ],
+      [
+        9,
+        8
+      ],
+      [
+        12,
+        9
+      ],
+      [
+        13,
+        10
+      ],
+      [
+        15,
+        11
+      ],
+      [
+        17,
+        12
+      ],
+      [
+        18,
+        13
+      ],
+      [
+        20,
+        14
+      ],
+      [
+        21,
+        15
+      ],
+      [
+        23,
+        16
+      ],
+      [
+        24,
+        17
+      ],
+      [
+        27,
+        18
+      ],
+      [
+        28,
+        19
+      ],
+      [
+        29,
+        20
+      ],
+      [
+        30,
+        21
+      ],
+      [
+        31,
+        22
+      ],
+      [
+        32,
+        23
+      ]
+    ]
+  },
+  "features": {},
+  "timing": {
+    "prop": {
+      "median": "[duration]",
+      "p90": "[duration]",
+      "max": "[duration]"
+    },
+    "generation": {
+      "median": "[duration]",
+      "p90": "[duration]",
+      "max": "[duration]"
+    },
+    "slowest": "[input]"
+  },
+  "samples": [
+    {
+      "debug": "[]",
+      "origin": "random",
+      "size": 0,
+      "iteration": 0
+    },
+    {
+      "debug": "[]",
+      "origin": "random",
+      "size": 4,
+      "iteration": 15
+    },
+    {
+      "debug": "[16]",
+      "origin": "random",
+      "size": 3,
+      "iteration": 7
+    },
+    {
+      "debug": "[21]",
+      "origin": "random",
+      "size": 2,
+      "iteration": 5
+    },
+    {
+      "debug": "[36]",
+      "origin": "random",
+      "size": 4,
+      "iteration": 26
+    }
+  ],
+  "failure": {
+    "kind": "Panic",
+    "message": "sum too large: 101",
+    "location": {
+      "file": "crates/ephyra/tests/reports/main.rs",
+      "line": "[L]",
+      "column": "[C]"
+    },
+    "original": {
+      "debug": "[35, 16, 26, 30]",
+      "truncated": false
+    },
+    "size": 5,
+    "iteration": 31,
+    "shrunk": {
+      "debug": "[29, 16, 26, 30]",
+      "truncated": false
+    },
+    "replay": {
+      "seed": 24301,
+      "iteration": 31
+    },
+    "flaky": false,
+    "shrink": {
+      "steps": 51,
+      "accepted": 3,
+      "rejected_not_smaller": 0,
+      "rejected_seen": 15,
+      "budget_exhausted": false,
+      "duration": "[duration]"
+    }
+  },
+  "abort": null,
+  "replay": null,
+  "regressions": {
+    "file": null,
+    "replayed": 0,
+    "stale": 0,
+    "saved": false
+  },
+  "target": null,
+  "profraw": null,
+  "coverage_html": null,
+  "run": {
+    "package": "ephyra",
+    "kind": "test",
+    "target": "reports",
+    "test": "panicking_property"
+  },
+  "covers": {},
+  "labels": {},
+  "sizes": {
+    "0": 1,
+    "1": 2,
+    "2": 4,
+    "3": 8,
+    "4": 16
+  },
+  "discard_reasons": {},
+  "health": []
+}

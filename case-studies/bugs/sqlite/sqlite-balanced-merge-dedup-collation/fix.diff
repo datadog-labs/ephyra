@@ -1,0 +1,30 @@
+--- a/src/select.c
++++ b/src/select.c
+@@ -3607,9 +3607,25 @@
+     pKeyDup = sqlite3KeyInfoAlloc(db, nExpr, 1);
+     if( pKeyDup ){
+       assert( sqlite3KeyInfoIsWriteable(pKeyDup) );
+-      for(i=0; i<nExpr; i++){
+-        pKeyDup->aColl[i] = multiSelectCollSeq(pParse, p, i);
++      /* Use the collation of the ORDER BY term on each column: it is the
++      ** collation of the whole compound, also when p is only a part of
++      ** it (one half of a balanced merge, or the left operand of a merge),
++      ** whose ORDER BY was copied from the enclosing compound with the
++      ** compound's collation attached by multiSelectByMergeKeyInfo(). */
++      for(i=0; i<nExpr; i++){
++        pKeyDup->aColl[i] = 0;
+         pKeyDup->aSortFlags[i] = 0;
++      }
++      for(i=0; pKeyMerge && i<nOrderBy; i++){
++        int iCol = pOrderBy->a[i].u.x.iOrderByCol - 1;
++        if( iCol<nExpr && pKeyDup->aColl[iCol]==0 ){
++          pKeyDup->aColl[iCol] = pKeyMerge->aColl[i];
++        }
++      }
++      for(i=0; i<nExpr; i++){
++        if( pKeyDup->aColl[i]==0 ){
++          pKeyDup->aColl[i] = multiSelectCollSeq(pParse, p, i);
++        }
+       }
+     }
+   }

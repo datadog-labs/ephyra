@@ -1,0 +1,4 @@
+# Instrumented builds (`ephyra check`, `ephyra test`) write a profile file per
+# process; keep them out of the tree.
+[env]
+LLVM_PROFILE_FILE = { value = "target/profraw/%m_%p.profraw", relative = true }

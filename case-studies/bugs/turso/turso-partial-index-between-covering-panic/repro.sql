@@ -1,0 +1,4 @@
+CREATE TABLE t(a INT, b);
+CREATE INDEX i ON t(b) WHERE a >= 2;
+INSERT INTO t VALUES (3, 'x'), (1, 'y');
+SELECT count(*) FROM t WHERE a BETWEEN 2 AND 4;

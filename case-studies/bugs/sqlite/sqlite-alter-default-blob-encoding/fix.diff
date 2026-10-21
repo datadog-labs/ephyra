@@ -1,0 +1,10 @@
+--- a/src/vdbemem.c	2026-10-14 12:32:26
++++ b/src/vdbemem.c	2026-10-14 12:32:33
+@@ -1930,6 +1930,7 @@
+     assert( zVal[nVal]=='\'' );
+     sqlite3VdbeMemSetStr(pVal, sqlite3HexToBlob(db, zVal, nVal), nVal/2,
+                          0, SQLITE_DYNAMIC);
++    pVal->enc = enc;
+   }
+ #endif
+ #ifdef SQLITE_ENABLE_STAT4

@@ -1,0 +1,14 @@
+diff --git a/src/backend/parser/parse_expr.c b/src/backend/parser/parse_expr.c
+index 05a6b72d4c9..1a114ddf6ac 100644
+--- a/src/backend/parser/parse_expr.c
++++ b/src/backend/parser/parse_expr.c
+@@ -145,6 +145,9 @@ transformExprRecurse(ParseState *pstate, Node *expr)
+ 	/* Guard against stack overflow due to overly complex expressions */
+ 	check_stack_depth();
+ 
++	/* Also allow complex expressions to be cancelled */
++	CHECK_FOR_INTERRUPTS();
++
+ 	switch (nodeTag(expr))
+ 	{
+ 		case T_ColumnRef:

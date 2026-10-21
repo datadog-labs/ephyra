@@ -1,0 +1,43 @@
+diff --git a/src/optimizer/statistics/operator/propagate_aggregate.cpp b/src/optimizer/statistics/operator/propagate_aggregate.cpp
+index 4de83ed3ce..da5dc83220 100644
+--- a/src/optimizer/statistics/operator/propagate_aggregate.cpp
++++ b/src/optimizer/statistics/operator/propagate_aggregate.cpp
+@@ -178,6 +178,10 @@ void StatisticsPropagator::TryExecuteAggregates(LogicalAggregate &aggr, unique_p
+ 		// not possible with groups
+ 		return;
+ 	}
++	if (aggr.expressions.empty()) {
++		// no aggregates (e.g. HAVING without aggregates): an expression get cannot represent a row without columns
++		return;
++	}
+ 	// check if all aggregates are COUNT(*), MIN or MAX
+ 	vector<idx_t> count_star_idxs;
+ 	vector<MinMaxColumnInfo> min_max_columns;
+diff --git a/test/optimizer/statistics/statistics_aggregate_without_expressions.test b/test/optimizer/statistics/statistics_aggregate_without_expressions.test
+new file mode 100644
+index 0000000000..33e3898f55
+--- /dev/null
++++ b/test/optimizer/statistics/statistics_aggregate_without_expressions.test
+@@ -0,0 +1,22 @@
++# name: test/optimizer/statistics/statistics_aggregate_without_expressions.test
++# description: Ungrouped aggregate without aggregate expressions is not folded into a zero-column expression get
++# group: [statistics]
++
++statement ok
++CREATE TABLE t0(c0 INTEGER);
++
++statement ok
++INSERT INTO t0 VALUES (1);
++
++query I
++SELECT (SELECT 1 FROM (SELECT 1 AS a FROM t0 HAVING true) WHERE a = (SELECT x.a1)) FROM (SELECT 1 AS a1) x;
++----
++1
++
++statement ok
++SET disabled_optimizers='unused_columns';
++
++query I
++SELECT 1 FROM t0 HAVING true;
++----
++1

@@ -1,0 +1,125 @@
+--- a/test/altercons3.test
++++ b/test/altercons3.test
+@@ -97,5 +97,121 @@
+   SELECT sql FROM sqlite_schema
+ } {{CREATE TABLE x1(a, b }}
+ 
+-finish_test
++#-------------------------------------------------------------------------
++# The DEFAULT of "SET DEFAULT", the NOT of "NOT DEFERRABLE" and the
++# name following MATCH (which may be the fallback token GENERATED, or
++# MATCH itself) are part of a foreign key constraint.
++#
++reset_db
++foreach {tn before after} {
++  1 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1(a)
++       ON DELETE SET DEFAULT ON UPDATE CASCADE, c)"
++    "CREATE TABLE c1(b, c)"
+ 
++  2 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1(a) ON UPDATE SET DEFAULT)"
++    "CREATE TABLE c1(b)"
++
++  3 "CREATE TABLE c1(b, CONSTRAINT fk FOREIGN KEY(b) REFERENCES p1(a)
++       ON DELETE SET DEFAULT)"
++    "CREATE TABLE c1(b)"
++
++  4 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1(a) NOT DEFERRABLE, c)"
++    "CREATE TABLE c1(b, c)"
++
++  5 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1(a) NOT DEFERRABLE NOT NULL)"
++    "CREATE TABLE c1(b NOT NULL)"
++
++  6 "CREATE TABLE c1(b, CONSTRAINT fk FOREIGN KEY(b) REFERENCES p1
++       NOT DEFERRABLE INITIALLY IMMEDIATE)"
++    "CREATE TABLE c1(b)"
++
++  7 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1 MATCH generated, c)"
++    "CREATE TABLE c1(b, c)"
++
++  8 "CREATE TABLE c1(b, c, CONSTRAINT fk FOREIGN KEY(b)
++       REFERENCES p1 MATCH generated)"
++    "CREATE TABLE c1(b, c)"
++
++  9 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES match, c)"
++    "CREATE TABLE c1(b, c)"
++
++  10 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1 MATCH match, c)"
++     "CREATE TABLE c1(b, c)"
++
++  11 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES match MATCH match)"
++     "CREATE TABLE c1(b)"
++
++  12 "CREATE TABLE c1(b, CONSTRAINT fk FOREIGN KEY(b) REFERENCES p1
++       MATCH match, CHECK(b>0))"
++     "CREATE TABLE c1(b, CHECK(b>0))"
++
++  13 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES generated(a)
++       MATCH \"generated\" ON INSERT SET DEFAULT ON DELETE SET DEFAULT
++       ON UPDATE SET NULL NOT DEFERRABLE INITIALLY DEFERRED, c)"
++     "CREATE TABLE c1(b, c)"
++
++  14 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1 ON DELETE SET /* x */
++       DEFAULT NOT -- y
++       DEFERRABLE CONSTRAINT nn NOT NULL)"
++     "CREATE TABLE c1(b CONSTRAINT nn NOT NULL)"
++
++  15 "CREATE TABLE c1(b CONSTRAINT fk REFERENCES p1 DEFERRABLE
++       INITIALLY DEFERRED DEFAULT 1)"
++     "CREATE TABLE c1(b DEFAULT 1)"
++} {
++  do_execsql_test 6.$tn.1 { DROP TABLE IF EXISTS c1 }
++  do_execsql_test 6.$tn.2 $before
++  do_execsql_test 6.$tn.3 { ALTER TABLE c1 DROP CONSTRAINT fk }
++  do_execsql_test 6.$tn.4 {
++    SELECT sql FROM sqlite_schema WHERE name='c1'
++  } [list $after]
++}
++
++# Constraint names in each quoting style.
++#
++reset_db
++foreach {tn name} {
++  1 {"fk"}  2 {'fk'}  3 {[fk]}  4 {`fk`}
++} {
++  do_execsql_test 7.$tn.1 { DROP TABLE IF EXISTS c1 }
++  do_execsql_test 7.$tn.2 "
++    CREATE TABLE c1(b CONSTRAINT $name REFERENCES p1 ON DELETE SET DEFAULT, c,
++      CONSTRAINT $name FOREIGN KEY(c) REFERENCES p1 NOT DEFERRABLE);
++  "
++  do_execsql_test 7.$tn.3 {
++    ALTER TABLE c1 DROP CONSTRAINT fk;
++    ALTER TABLE c1 DROP CONSTRAINT fk;
++    SELECT sql FROM sqlite_schema WHERE name='c1'
++  } {{CREATE TABLE c1(b, c)}}
++}
++
++# Removing "x ... NOT DEFERRABLE" does not leave a bare "NOT DEFERRABLE"
++# behind that would apply to the foreign key on column b.
++#
++reset_db
++do_execsql_test 8.0 {
++  CREATE TABLE p1(a PRIMARY KEY);
++  CREATE TABLE c1(b REFERENCES p1 DEFERRABLE INITIALLY DEFERRED,
++                  c CONSTRAINT fk REFERENCES p1 NOT DEFERRABLE);
++  ALTER TABLE c1 DROP CONSTRAINT fk;
++  PRAGMA foreign_keys = 1;
++}
++do_execsql_test 8.1 {
++  BEGIN;
++    INSERT INTO c1(b) VALUES(1);
++    INSERT INTO p1 VALUES(1);
++  COMMIT;
++  SELECT * FROM c1;
++} {1 {}}
++
++# Removing "MATCH generated" does not leave "b generated" behind, which
++# would give b the declared type "generated" and NUMERIC affinity.
++#
++do_execsql_test 8.2 {
++  CREATE TABLE c2(b CONSTRAINT fk REFERENCES p1 MATCH generated);
++  ALTER TABLE c2 DROP CONSTRAINT fk;
++  INSERT INTO c2 VALUES('1');
++  SELECT typeof(b) FROM c2;
++} {text}
++
++finish_test

@@ -1,0 +1,186 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main, "release/*"]
+    tags: ["v*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+  # Snapshot drift fails the build; accept changes locally with `cargo insta review`.
+  INSTA_UPDATE: "no"
+
+jobs:
+  fmt:
+    name: Format (nightly rustfmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Pinned: the repository is formatted with this nightly's rustfmt, and
+      # rustfmt's output drifts between nightlies.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly-2026-03-26
+          components: rustfmt
+      # Named explicitly: the installed toolchain is not the default.
+      - run: cargo +nightly-2026-03-26 fmt --all --check
+      - name: Format the standalone generator exercises
+        run: |
+          for project in positive ordered-pair sorted-vec; do
+            cargo +nightly-2026-03-26 fmt --manifest-path "examples/synthesis/$project/Cargo.toml" --check
+          done
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p ephyra --all-targets --no-default-features -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo build --workspace --all-targets
+      - run: cargo test --workspace
+
+  features:
+    name: Feature matrix (ephyra)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo build -p ephyra --no-default-features
+      - run: cargo build -p ephyra --no-default-features --features json
+      - run: cargo build -p ephyra --no-default-features --features derive
+      # The library builds with every feature; test binaries do not link
+      # uninstrumented, since coverage-force assumes instrumentation. They
+      # are tested under instrumentation in the coverage job.
+      - run: cargo build -p ephyra --all-features
+      - run: cargo test -p ephyra --no-default-features
+      - run: cargo test -p ephyra --no-default-features --features coverage
+      - run: cargo test -p ephyra --no-default-features --features derive
+
+  coverage:
+    name: Coverage feature (instrumented and not)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Uninstrumented build still compiles and runs
+        run: cargo test -p ephyra --features coverage
+      - name: Instrumented build reads counters in-process
+        run: cargo test -p ephyra --features coverage
+        env:
+          RUSTFLAGS: -C instrument-coverage
+          RUST_TEST_THREADS: 1
+      - name: Every feature at once, instrumented (coverage-force links here)
+        run: cargo test -p ephyra --all-features
+        env:
+          RUSTFLAGS: -C instrument-coverage
+          RUST_TEST_THREADS: 1
+
+  msrv:
+    name: MSRV (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@360a4e93673de6630fac2478bc9e35244b01a759 # 1.88
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo build --workspace --all-targets
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo doc --workspace --no-deps
+
+  package:
+    name: Package contents guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Only source, manifest, README, CHANGELOG and LICENSE may ship
+        run: |
+          cargo package -p ephyra --list --allow-dirty | tee package.txt
+          if grep -vE '^(src/|tests/|build\.rs$|Cargo\.toml$|Cargo\.toml\.orig$|Cargo\.lock$|\.cargo_vcs_info\.json$|README\.md$|CHANGELOG\.md$|LICENSE$)' package.txt; then
+            echo "::error::unexpected files in package (see above)"; exit 1
+          fi
+      - name: Build and test a consumer against the packaged crates
+        run: ci/package-smoke.sh
+
+  locate-demo:
+    name: locate-demo (coverage-instrumented)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: examples/locate-demo
+      # The demo's .cargo/config.toml supplies -C instrument-coverage, but
+      # any RUSTFLAGS in the environment, even an empty one, replaces the
+      # config's flags, and the workflow sets RUSTFLAGS globally; so the
+      # flag is repeated here.
+      - run: cargo test
+        working-directory: examples/locate-demo
+        env:
+          RUSTFLAGS: -D warnings -C instrument-coverage
+          RUST_TEST_THREADS: "1"
+      - run: cargo run
+        working-directory: examples/locate-demo
+        env:
+          RUSTFLAGS: -D warnings -C instrument-coverage
+
+  synthesis-examples:
+    name: Generator exercise projects compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # The exercises have no generators yet; CI only keeps them building.
+      - run: |
+          for project in positive ordered-pair sorted-vec; do
+            cargo test --no-run --locked --manifest-path "examples/synthesis/$project/Cargo.toml"
+          done
+
+  publish:
+    name: Publish ephyra
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [fmt, clippy, test, features, coverage, msrv, docs, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # ephyra depends on ephyra-macros by exact version, so the
+      # macros crate goes first; cargo waits for it to be indexed.
+      - run: cargo publish -p ephyra-macros --token ${{ secrets.REGISTRY_TOKEN }}
+      - run: cargo publish -p ephyra --token ${{ secrets.REGISTRY_TOKEN }}
+      # Both depend on ephyra by exact version, so they go after it.
+      - run: cargo publish -p ephyra-datadog --token ${{ secrets.REGISTRY_TOKEN }}
+      - run: cargo publish -p ephyra-cli --token ${{ secrets.REGISTRY_TOKEN }}

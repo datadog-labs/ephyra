@@ -1,0 +1,217 @@
+diff --git a/src/uu/csplit/src/csplit.rs b/src/uu/csplit/src/csplit.rs
+index d5b1a728c..74dd63e97 100644
+--- a/src/uu/csplit/src/csplit.rs
++++ b/src/uu/csplit/src/csplit.rs
+@@ -386,15 +386,9 @@ impl SplitWriter<'_> {
+         while let Some((ln, line)) = input_iter.next() {
+             let line = line?;
+             match n.cmp(&(&ln + 1)) {
+-                Ordering::Less => {
+-                    assert!(
+-                        input_iter.add_line_to_buffer(ln, line).is_none(),
+-                        "the buffer is big enough to contain 1 line"
+-                    );
+-                    ret = Ok(());
+-                    break;
+-                }
+-                Ordering::Equal => {
++                // the line number was already passed: the split is empty and starts at the
++                // current line, which is the boundary line to suppress
++                Ordering::Less | Ordering::Equal => {
+                     assert!(
+                         self.options.suppress_matched
+                             || input_iter.add_line_to_buffer(ln, line).is_none(),
+@@ -432,6 +426,9 @@ impl SplitWriter<'_> {
+     where
+         I: Iterator<Item = (usize, UResult<Vec<u8>>)>,
+     {
++        // The search starts after the last line a previous regex looked at, so lines held back
++        // by a line-number pattern are searched too.
++        input_iter.queue_unexamined();
+         if offset >= 0 {
+             // The offset is zero or positive, no need for a buffer on the lines read.
+             // NOTE: drain the buffer of input_iter, no match should be done within.
+@@ -441,13 +438,14 @@ impl SplitWriter<'_> {
+             // retain the matching line
+             input_iter.set_size_of_buffer(1);
+ 
+-            while let Some((ln, line)) = input_iter.next() {
++            while let Some((ln, line)) = input_iter.next_examined() {
+                 let line = line?;
+                 let l = line
+                     .strip_suffix(b"\r\n")
+                     .unwrap_or_else(|| line.strip_suffix(b"\n").unwrap_or(&line));
+                 if regex.is_match(l) {
+                     let mut next_line_suppress_matched = false;
++                    let positive_offset = offset > 0;
+                     match (self.options.suppress_matched, offset) {
+                         // no offset, add the line to the next split
+                         (false, 0) => {
+@@ -469,7 +467,7 @@ impl SplitWriter<'_> {
+ 
+                     // write the extra lines required by the offset
+                     while offset > 0 {
+-                        if let Some((_, line)) = input_iter.next() {
++                        if let Some((_, line)) = input_iter.next_examined() {
+                             self.writeln(&line?)?;
+                         } else {
+                             self.finish_split()?;
+@@ -481,7 +479,16 @@ impl SplitWriter<'_> {
+ 
+                     // if we have to suppress one line after we take the next and do nothing
+                     if next_line_suppress_matched {
+-                        input_iter.next();
++                        input_iter.next_examined();
++                    } else if positive_offset {
++                        // the line the split stops at was read to find it, so a later regex
++                        // starts after it
++                        if let Some((ln, line)) = input_iter.next_examined() {
++                            assert!(
++                                input_iter.add_line_to_buffer(ln, line?).is_none(),
++                                "the buffer is big enough to contain 1 line"
++                            );
++                        }
+                     }
+                     return Ok(());
+                 }
+@@ -497,7 +504,7 @@ impl SplitWriter<'_> {
+             // lines of the current split before the match; a negative offset may not go past them
+             let mut lines_in_split = input_iter.buffer_len();
+             input_iter.set_size_of_buffer(offset_usize);
+-            while let Some((ln, line)) = input_iter.next() {
++            while let Some((ln, line)) = input_iter.next_examined() {
+                 let line = line?;
+                 let l = line
+                     .strip_suffix(b"\r\n")
+@@ -556,6 +563,10 @@ where
+     /// flag to indicate content off the buffer should be returned instead of off the wrapped
+     /// iterator
+     rewind: bool,
++    /// lines taken out of the buffer to be searched before reading the wrapped iterator
++    unexamined: Vec<<I as Iterator>::Item>,
++    /// the number of input lines a regex has already looked at
++    examined: usize,
+ }
+ 
+ impl<I> InputSplitter<I>
+@@ -568,7 +579,34 @@ where
+             buffer: Vec::new(),
+             rewind: false,
+             size: 1,
++            unexamined: Vec::new(),
++            examined: 0,
++        }
++    }
++
++    /// Move the buffered lines that no regex looked at yet out of the buffer, so that the next
++    /// calls to [`Self::next_examined`] return them first.
++    fn queue_unexamined(&mut self) {
++        self.rewind = false;
++        let first = self
++            .buffer
++            .iter()
++            .position(|(ln, _)| *ln >= self.examined)
++            .unwrap_or(self.buffer.len());
++        self.unexamined = self.buffer.split_off(first);
++    }
++
++    /// Return the next line to be searched by a regex and record that it was looked at.
++    fn next_examined(&mut self) -> Option<<I as Iterator>::Item> {
++        let item = if self.unexamined.is_empty() {
++            self.next()
++        } else {
++            Some(self.unexamined.remove(0))
++        };
++        if let Some((ln, _)) = &item {
++            self.examined = self.examined.max(ln + 1);
+         }
++        item
+     }
+ 
+     /// Rewind the iteration by outputting the buffer's content.
+diff --git a/tests/by-util/test_csplit.rs b/tests/by-util/test_csplit.rs
+index 3812aaf1d..4efe50f98 100644
+--- a/tests/by-util/test_csplit.rs
++++ b/tests/by-util/test_csplit.rs
+@@ -1585,21 +1585,21 @@ fn test_line_num_range_with_up_to_match2() {
+     assert_eq!(at.read("xx01"), "");
+ }
+ 
+-// NOTE: output different than gnu's: the pattern /10/ is matched but should not
+ #[test]
+ fn test_line_num_range_with_up_to_match3() {
++    // line 10 is the current line when /10/ is searched, so it matches at once
+     let (at, mut ucmd) = at_and_ucmd!();
+     ucmd.args(&["numbers50.txt", "10", "/10/", "-k"])
+-        .fails()
+-        .stderr_is("csplit: '/10/': match not found\n")
+-        .stdout_is("18\n123\n");
++        .succeeds()
++        .stdout_only("18\n0\n123\n");
+ 
+     let count = glob(&at.plus_as_string("xx*"))
+         .expect("there should be splits created")
+         .count();
+-    assert_eq!(count, 2);
++    assert_eq!(count, 3);
+     assert_eq!(at.read("xx00"), generate(1, 10));
+-    assert_eq!(at.read("xx01"), generate(10, 51));
++    assert_eq!(at.read("xx01"), "");
++    assert_eq!(at.read("xx02"), generate(10, 51));
+ 
+     let (at, mut ucmd) = at_and_ucmd!();
+     ucmd.args(&["numbers50.txt", "/10/", "10"])
+@@ -1706,7 +1706,7 @@ fn repeat_everything() {
+         .count();
+     assert_eq!(count, 6);
+     assert_eq!(at.read("xxz_000"), generate(1, 12 + 1));
+-    assert_eq!(at.read("xxz_001"), generate(14, 17 + 1)); // FIXME: GNU starts at 15
++    assert_eq!(at.read("xxz_001"), generate(15, 17 + 1));
+     assert_eq!(at.read("xxz_002"), generate(19, 26 + 1));
+     assert_eq!(at.read("xxz_003"), generate(28, 35 + 1));
+     assert_eq!(at.read("xxz_004"), generate(37, 44 + 1));
+@@ -1870,3 +1870,44 @@ fn test_empty_skip_to_regex_is_accepted() {
+     ucmd.args(&["letters", "%%"]).succeeds().stdout_only("19\n");
+     assert_eq!(at.read("xx00"), "delta\necho\nfoxtrot\n");
+ }
++
++#[test]
++fn test_up_to_match_searches_line_after_line_number() {
++    // the line a line-number pattern stops at is the first one the next regex looks at
++    new_ucmd!()
++        .args(&["-", "2", "/[0-9]/"])
++        .pipe_in("a\n1\n2\n")
++        .succeeds()
++        .stdout_only("2\n0\n4\n");
++    new_ucmd!()
++        .args(&["-", "3", "/3/"])
++        .pipe_in("1\n2\n3\n4\n")
++        .succeeds()
++        .stdout_only("4\n0\n4\n");
++}
++
++#[test]
++fn test_up_to_match_starts_after_offset_split_line() {
++    // with a positive offset the line the split stops at was read, so it is not searched again
++    new_ucmd!()
++        .args(&["-", "/2/+1", "/[0-9]/"])
++        .pipe_in("1\n2\n3\n4\n5\n6\n")
++        .succeeds()
++        .stdout_only("4\n2\n6\n");
++    new_ucmd!()
++        .args(&["-", "/5/+1", "/[0-9]/"])
++        .pipe_in("1\n2\n3\n4\n5\n6\n")
++        .fails_with_code(1)
++        .stdout_is("10\n2\n")
++        .stderr_is("csplit: '/[0-9]/': match not found\n");
++}
++
++#[test]
++fn test_suppress_matched_line_number_already_passed() {
++    // the empty split still starts at a boundary line, which is suppressed
++    new_ucmd!()
++        .args(&["--suppress-matched", "-", "/2/+2", "3"])
++        .pipe_in("1\n2\n3\n4\n5\n6\n")
++        .succeeds()
++        .stdout_only("6\n0\n2\n");
++}

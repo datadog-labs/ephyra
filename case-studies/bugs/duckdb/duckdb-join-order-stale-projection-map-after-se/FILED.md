@@ -1,0 +1,1 @@
+Filed 2026-10-19 by the owner as https://github.com/duckdb/duckdb/issues/27452. Note: the body reuses prose from report.agent.md near-verbatim; DuckDB's AI_POLICY asks for the reporter's own words (owner to reword).

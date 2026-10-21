@@ -1,0 +1,66 @@
+--- a/src/where.c	2026-10-15 23:49:36
++++ b/src/where.c	2026-10-15 23:50:12
+@@ -3889,7 +3889,38 @@
+     *pp = p->pIENext;
+     sqlite3ExprDelete(db, p->pExpr);
+     sqlite3DbFreeNN(db, p);
++  }
++}
++
++/*
++** Return true if constant expression pExpr, with affinity aff applied, might
++** be -9223372036854775808, either as an INTEGER or as a REAL. Also return
++** true if the value of pExpr cannot be determined here. A helper for
++** wherePartIdxExpr(): an INT or NUMERIC column can hold both the INTEGER
++** and the REAL -9223372036854775808, which compare equal, and
++** sqlite3VdbeIntegerAffinity() does not convert one into the other, so the
++** constant cannot stand in for the column's value.
++*/
++static int wherePartIdxMaybeMinInt(sqlite3 *db, Expr *pExpr, u8 aff){
++  sqlite3_value *pVal = 0;
++  int bRet = 1;                   /* Assume the worst if value is unknown */
++  if( sqlite3ValueFromExpr(db, pExpr, ENC(db), aff, &pVal)==SQLITE_OK
++   && pVal!=0
++  ){
++    switch( sqlite3_value_type(pVal) ){
++      case SQLITE_INTEGER:
++        bRet = sqlite3_value_int64(pVal)==SMALLEST_INT64;
++        break;
++      case SQLITE_FLOAT:
++        bRet = sqlite3_value_double(pVal)==-9223372036854775808.0;
++        break;
++      default:
++        bRet = 0;
++        break;
++    }
+   }
++  sqlite3ValueFree(pVal);
++  return bRet;
+ }
+ 
+ /*
+@@ -3906,7 +3937,9 @@
+ **
+ **    (a) <expr> is a constant expression, and
+ **    (b) The (a=<expr>) comparison uses the BINARY collation sequence, and
+-**    (c) Column "a" has an affinity other than NONE or BLOB.
++**    (c) Column "a" has an affinity other than NONE or BLOB, and
++**    (d) If "a" has INT or NUMERIC affinity (and the table is not STRICT),
++**        <expr> is known not to be -9223372036854775808.
+ **
+ ** If argument pItem is NULL, then pMask must not be NULL. In this case this 
+ ** function is being called as part of determining whether or not pIdx
+@@ -3953,6 +3986,13 @@
+     if( affLeft<SQLITE_AFF_TEXT ) return;
+     affRight = sqlite3ExprAffinity(pRight);
+     if( affRight!=0 && affRight!=affLeft ) return;
++    if( (affLeft==SQLITE_AFF_INTEGER || affLeft==SQLITE_AFF_NUMERIC)
++     && (pLeftTab->tabFlags & TF_Strict)==0
++     && wherePartIdxMaybeMinInt(pParse->db, pRight, affLeft)
++    ){
++      /* INTEGER and REAL -9223372036854775808 both satisfy a=<expr> */
++      return;
++    }
+     if( pItem ){
+       sqlite3 *db = pParse->db;
+       IndexedExpr *p = (IndexedExpr*)sqlite3DbMallocRaw(db, sizeof(*p));

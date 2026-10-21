@@ -1,0 +1,44 @@
+diff --git a/src/parser.cpp b/src/parser.cpp
+index 9ee19617..5ef6be91 100644
+--- a/src/parser.cpp
++++ b/src/parser.cpp
+@@ -2821,7 +2821,6 @@ result_type parse_url_impl(std::string_view user_input,
+             else {
+               // Set url's path to an empty list.
+               url.clear_pathname();
+-              url.has_opaque_path = true;
+             }
+ 
+             // Set state to path state and decrease pointer by 1.
+diff --git a/tests/basic_tests.cpp b/tests/basic_tests.cpp
+index 5ce551db..0159bba5 100644
+--- a/tests/basic_tests.cpp
++++ b/tests/basic_tests.cpp
+@@ -2294,3 +2294,27 @@ TYPED_TEST(basic_tests,
+   // a byte that legitimately needs encoding is still encoded
+   check("http://ab?x y", "http://ab/?x%20y");
+ }
++
++TYPED_TEST(basic_tests, file_relative_windows_drive_letter_path_is_not_opaque) {
++  // Resolving a reference that starts with a Windows drive letter against a
++  // file: base sets url's path to an empty list, not an opaque path; the
++  // drive letter is then a path segment. The URL must behave as the URL its
++  // href parses to: its host and path setters work, and it is a usable base.
++  auto file = ada::parse<TypeParam>("file:");
++  ASSERT_TRUE(file);
++  auto url = ada::parse<TypeParam>("C|", &*file);
++  ASSERT_TRUE(url);
++  ASSERT_EQ(url->get_href(), "file:///C:");
++  ASSERT_FALSE(url->has_opaque_path);
++
++  auto relative = ada::parse<TypeParam>("x", &*url);
++  ASSERT_TRUE(relative);
++  ASSERT_EQ(relative->get_href(), "file:///C:/x");
++
++  auto host = *url;
++  ASSERT_TRUE(host.set_hostname("h"));
++  ASSERT_EQ(host.get_href(), "file://h/C:");
++  auto path = *url;
++  ASSERT_TRUE(path.set_pathname("/D:/y"));
++  ASSERT_EQ(path.get_href(), "file:///D:/y");
++}

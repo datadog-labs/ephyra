@@ -1,0 +1,22 @@
+--- a/src/where.c	2026-10-13 14:46:54
++++ b/src/where.c	2026-10-13 14:46:54
+@@ -4036,7 +4036,9 @@
+     /* An INDEXED BY clause specifies a particular index to use */
+     pProbe = pSrc->u2.pIBIndex;
+   }else if( !HasRowid(pTab) ){
+-    pProbe = pTab->pIndex;
++    /* For a WITHOUT ROWID table, NOT INDEXED restricts the search to the
++    ** PRIMARY KEY b-tree, which is the table itself */
++    pProbe = pSrc->fg.notIndexed ? sqlite3PrimaryKeyIndex(pTab) : pTab->pIndex;
+   }else{
+     /* There is no INDEXED BY clause.  Create a fake Index object in local
+     ** variable sPk to represent the rowid primary key index.  Make this
+@@ -4122,7 +4124,7 @@
+   /* Loop over all indices. If there was an INDEXED BY clause, then only
+   ** consider index pProbe.  */
+   for(; rc==SQLITE_OK && pProbe;
+-      pProbe=(pSrc->fg.isIndexedBy ? 0 : pProbe->pNext), iSortIdx++
++      pProbe=((pSrc->fg.isIndexedBy || pSrc->fg.notIndexed) ? 0 : pProbe->pNext), iSortIdx++
+   ){
+     if( pProbe->pPartIdxWhere!=0
+      && !whereUsablePartialIndex(pSrc->iCursor, pSrc->fg.jointype, pWC,

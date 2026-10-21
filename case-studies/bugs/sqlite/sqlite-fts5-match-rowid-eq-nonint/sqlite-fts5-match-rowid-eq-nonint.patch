@@ -1,0 +1,170 @@
+--- a/ext/fts5/fts5_main.c
++++ b/ext/fts5/fts5_main.c
+@@ -1298,6 +1298,31 @@
+ }
+ 
+ /*
++** Argument pVal is the right-hand side of a "rowid = ?" constraint. If
++** there is an integer that compares equal to pVal, set *piRowid to it and
++** return 1. Otherwise - pVal is NULL, a blob, a non-numeric text value or
++** a real value that is not an integer - return 0.
++*/
++static int fts5RowidEqValue(sqlite3_value *pVal, i64 *piRowid){
++  int eType = sqlite3_value_numeric_type(pVal);
++  if( eType==SQLITE_INTEGER ){
++    *piRowid = sqlite3_value_int64(pVal);
++    return 1;
++  }
++  if( eType==SQLITE_FLOAT ){
++    double r = sqlite3_value_double(pVal);
++    if( r>=-9223372036854775808.0 && r<9223372036854775808.0 ){
++      i64 iVal = (i64)r;
++      if( (double)iVal==r ){
++        *piRowid = iVal;
++        return 1;
++      }
++    }
++  }
++  return 0;
++}
++
++/*
+ ** Set the error message on the virtual table passed as the first argument.
+ */
+ static void fts5SetVtabError(Fts5FullTable *p, const char *zFormat, ...){
+@@ -1572,11 +1597,18 @@
+   /* Set the cursor upper and lower rowid limits. Only some strategies 
+   ** actually use them. This is ok, as the xBestIndex() method leaves the
+   ** sqlite3_index_constraint.omit flag clear for range constraints
+-  ** on the rowid field.  */
++  ** on the rowid field. It sets the omit flag for "rowid = ?" though, so
++  ** in that case the limits must select exactly the rowid equal to the
++  ** value, or no rowid at all if no integer is equal to it.  */
+   if( pRowidEq ){
+-    pRowidLe = pRowidGe = pRowidEq;
+-  }
+-  if( bDesc ){
++    i64 iEq;
++    if( fts5RowidEqValue(pRowidEq, &iEq) ){
++      pCsr->iFirstRowid = pCsr->iLastRowid = iEq;
++    }else{
++      pCsr->iFirstRowid = bDesc ? SMALLEST_INT64 : LARGEST_INT64;
++      pCsr->iLastRowid = bDesc ? LARGEST_INT64 : SMALLEST_INT64;
++    }
++  }else if( bDesc ){
+     pCsr->iFirstRowid = fts5GetRowidLimit(pRowidLe, LARGEST_INT64);
+     pCsr->iLastRowid = fts5GetRowidLimit(pRowidGe, SMALLEST_INT64);
+   }else{
+--- a/ext/fts5/test/fts5plan.test
++++ b/ext/fts5/test/fts5plan.test
+@@ -62,4 +62,110 @@
+   SELECT * FROM f1 WHERE rank MATCH ?
+ } {SCAN f1 VIRTUAL TABLE INDEX 0:r}
+ 
++#-------------------------------------------------------------------------
++# The "rowid = ?" constraint is consumed by xBestIndex (omit flag set). With
++# a MATCH, xFilter applies it as a range of rowids, so the range must hold
++# exactly the rowids SQLite considers equal to the value: none for a value
++# that is not equal to any integer. Results are compared with those of an
++# ordinary table holding the same rows.
++#
++reset_db
++do_execsql_test 2.0 {
++  CREATE TABLE t1(a);
++  CREATE TABLE t2(x);
++  INSERT INTO t1(rowid, a) VALUES
++    (-9223372036854775808, 'apple'), (1, 'apple'), (2, 'apple'),
++    (3, 'apple pie'), (9223372036854775807, 'apple');
++}
++
++foreach {tn create} {
++  1 { CREATE VIRTUAL TABLE ft USING fts5(a) }
++  2 { CREATE VIRTUAL TABLE ft USING fts5(a, content='') }
++  3 { CREATE VIRTUAL TABLE ft USING fts5(a, detail=none) }
++  4 { CREATE VIRTUAL TABLE ft USING fts5(a, content=t1) }
++} {
++  execsql { DROP TABLE IF EXISTS ft }
++  do_execsql_test 2.$tn.0 "
++    $create;
++    INSERT INTO ft(rowid, a) SELECT rowid, a FROM t1;
++  "
++
++  foreach {vn val res} {
++    1  2                       2
++    2  2.0                     2
++    3  2.5                     {}
++    4  '2'                     2
++    5  {' 2 '}                 2
++    6  '2.0'                   2
++    7  '2e0'                   2
++    8  '0x2'                   {}
++    9  'x'                     {}
++    10 x'32'                   {}
++    11 NULL                    {}
++    12 9223372036854775807     9223372036854775807
++    13 9223372036854775807.0   {}
++    14 -9223372036854775808.0  -9223372036854775808
++    15 1e19                    {}
++    16 -1e19                   {}
++  } {
++    execsql "DELETE FROM t2; INSERT INTO t2 VALUES($val)"
++    set inres [db eval "
++      SELECT rowid FROM t1 WHERE rowid IN ($val, 3) ORDER BY 1
++    "]
++    set joinres [db eval {
++      SELECT coalesce(t1.rowid, '-') FROM t2
++        LEFT JOIN t1 ON t1.rowid=t2.x AND t1.a='apple pie'
++    }]
++
++    do_execsql_test 2.$tn.$vn.1 "
++      SELECT rowid FROM t1 WHERE rowid = $val
++    " $res
++    do_execsql_test 2.$tn.$vn.2 "
++      SELECT rowid FROM ft WHERE ft MATCH 'apple' AND rowid = $val
++    " $res
++    do_execsql_test 2.$tn.$vn.3 "
++      SELECT rowid FROM ft WHERE ft MATCH 'apple' AND rowid = $val
++      ORDER BY rowid DESC
++    " $res
++    do_execsql_test 2.$tn.$vn.4 "
++      SELECT rowid FROM ft WHERE ft MATCH 'apple' AND rowid = $val
++      ORDER BY rank
++    " $res
++    do_execsql_test 2.$tn.$vn.5 "
++      SELECT rowid FROM ft WHERE ft MATCH 'apple' AND rowid IN ($val, 3)
++      ORDER BY 1
++    " $inres
++    do_execsql_test 2.$tn.$vn.6 {
++      SELECT coalesce(ft.rowid, '-') FROM t2
++        LEFT JOIN ft ON ft.rowid=t2.x AND ft MATCH 'pie'
++    } $joinres
++  }
++}
++
++reset_db
++do_execsql_test 3.0 {
++  CREATE VIRTUAL TABLE ft USING fts5(a);
++  INSERT INTO ft(rowid, a) VALUES (1, 'apple'), (2, 'apple'), (3, 'apple pie');
++  CREATE TABLE t1(x);
++  INSERT INTO t1 VALUES (3), (2.5), ('x');
++}
++do_execsql_test 3.1 {
++  SELECT count(*) FROM ft WHERE ft MATCH 'apple' AND rowid = 2.5;
++} {0}
++do_execsql_test 3.2 {
++  SELECT count(*) FROM ft WHERE ft MATCH 'apple' AND rowid = 'x';
++} {0}
++do_execsql_test 3.3 {
++  SELECT rowid FROM ft WHERE ft MATCH 'apple' AND rowid = 2.0;
++} {2}
++do_execsql_test 3.4 {
++  SELECT t1.x, ft.rowid FROM t1 LEFT JOIN ft ON ft.rowid=t1.x AND ft MATCH 'pie';
++} {3 3 2.5 {} x {}}
++do_execsql_test 3.5 {
++  SELECT count(*) FROM ft WHERE ft MATCH 'apple' AND rowid IN (2.5, 'x');
++} {0}
++do_execsql_test 3.6 {
++  SELECT rowid FROM ft WHERE ft MATCH 'apple' AND rowid IN (2.5, 'x', 3.0);
++} {3}
++
+ finish_test

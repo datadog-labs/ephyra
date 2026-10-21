@@ -1,0 +1,14 @@
+--- a/ext/fts5/fts5_index.c
++++ b/ext/fts5/fts5_index.c
+@@ -2756,7 +2756,10 @@
+       if( flags & FTS5INDEX_QUERY_DESC ){
+         pIter->flags |= FTS5_SEGITER_REVERSE;
+       }
+-      if( bDlidx ){
++      /* The bDlidx flag applies to the last term on page iPg. If this is
++      ** a >= search and fts5LeafSeek() has moved the iterator to a term on
++      ** a later page, it does not apply to the current term.  */
++      if( bDlidx && pIter->iTermLeafPgno==iPg ){
+         fts5SegIterLoadDlidx(p, pIter);
+       }
+       if( flags & FTS5INDEX_QUERY_DESC ){

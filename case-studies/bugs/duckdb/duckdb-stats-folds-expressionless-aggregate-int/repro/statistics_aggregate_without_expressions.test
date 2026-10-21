@@ -1,0 +1,22 @@
+# name: test/optimizer/statistics/statistics_aggregate_without_expressions.test
+# description: Ungrouped aggregate without aggregate expressions is not folded into a zero-column expression get
+# group: [statistics]
+
+statement ok
+CREATE TABLE t0(c0 INTEGER);
+
+statement ok
+INSERT INTO t0 VALUES (1);
+
+query I
+SELECT (SELECT 1 FROM (SELECT 1 AS a FROM t0 HAVING true) WHERE a = (SELECT x.a1)) FROM (SELECT 1 AS a1) x;
+----
+1
+
+statement ok
+SET disabled_optimizers='unused_columns';
+
+query I
+SELECT 1 FROM t0 HAVING true;
+----
+1

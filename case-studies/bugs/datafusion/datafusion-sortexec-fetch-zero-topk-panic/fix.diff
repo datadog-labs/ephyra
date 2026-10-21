@@ -1,0 +1,64 @@
+diff --git a/datafusion/physical-plan/src/sorts/sort.rs b/datafusion/physical-plan/src/sorts/sort.rs
+index 13065bed0..e9b089487 100644
+--- a/datafusion/physical-plan/src/sorts/sort.rs
++++ b/datafusion/physical-plan/src/sorts/sort.rs
+@@ -1614,6 +1614,12 @@ impl ExecutionPlan for SortExec {
+                 BaselineMetrics::new(&self.metrics_set, partition),
+             ))),
+             (true, None) => Ok(input),
++            // TopK requires k > 0; a fetch of zero produces no rows
++            (false, Some(0)) => {
++                let filter = self.filter.as_ref();
++                unwrap_or_internal_err!(filter).read().mark_topk_emitted();
++                Ok(Box::pin(EmptyRecordBatchStream::new(self.schema())))
++            }
+             (false, Some(fetch)) => {
+                 let filter = self.filter.clone();
+                 let mut topk = TopK::try_new(
+@@ -3378,6 +3384,33 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[tokio::test]
++    async fn topk_fetch_zero() -> Result<()> {
++        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
++        let batch = RecordBatch::try_new(
++            Arc::clone(&schema),
++            vec![Arc::new(Int32Array::from(vec![3, 1, 2]))],
++        )?;
++        let input =
++            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
++        let sort = SortExec::new(
++            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
++            input,
++        )
++        .with_fetch(Some(0));
++        let dynamic_filter = dynamic_filter_produced(&sort);
++
++        let batches = collect(Arc::new(sort), Arc::new(TaskContext::default())).await?;
++        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 0);
++        tokio::time::timeout(
++            std::time::Duration::from_secs(1),
++            dynamic_filter.wait_complete(),
++        )
++        .await
++        .expect("SortExec with fetch 0 should complete the filter");
++        Ok(())
++    }
++
+     #[tokio::test]
+     async fn should_return_stream_with_batches_in_the_requested_size_and_update_metrics()
+     -> Result<()> {
+diff --git a/datafusion/physical-plan/src/topk/mod.rs b/datafusion/physical-plan/src/topk/mod.rs
+index ef275b301..90c6f44e1 100644
+--- a/datafusion/physical-plan/src/topk/mod.rs
++++ b/datafusion/physical-plan/src/topk/mod.rs
+@@ -324,7 +324,7 @@ impl TopKDynamicFilters {
+         Arc::clone(&self.expr)
+     }
+ 
+-    fn mark_topk_emitted(&self) {
++    pub(crate) fn mark_topk_emitted(&self) {
+         let previous = self
+             .remaining_topk_emitters
+             .try_update(

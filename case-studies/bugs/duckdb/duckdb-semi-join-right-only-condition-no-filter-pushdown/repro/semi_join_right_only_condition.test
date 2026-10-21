@@ -1,0 +1,28 @@
+# name: test/optimizer/joins/semi_join_right_only_condition.test
+# description: SEMI JOIN whose condition references only the right side keeps its rows without filter_pushdown
+# group: [joins]
+
+statement ok
+CREATE TABLE t1(c0 INTEGER);
+
+statement ok
+INSERT INTO t1 VALUES (1);
+
+statement ok
+CREATE TABLE t2(c3 BOOLEAN);
+
+statement ok
+INSERT INTO t2 VALUES (NULL), (true);
+
+query I
+SELECT 2 AS a0 FROM t1 AS a JOIN t1 AS b ON a.c0 = b.c0 SEMI JOIN t2 ON t2.c3;
+----
+2
+
+statement ok
+SET disabled_optimizers='filter_pushdown';
+
+query I
+SELECT 2 AS a0 FROM t1 AS a JOIN t1 AS b ON a.c0 = b.c0 SEMI JOIN t2 ON t2.c3;
+----
+2

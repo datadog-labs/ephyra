@@ -1,0 +1,18 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: text
+---
+exit: 0
+--- stdout ---
+ephyra: ok, 400 tests passed (357 distinct, 0 discarded) in [time], seed 7
+  feature target: 400 values, min 0, median 619, p90 3868, max 5000
+    histogram: 0-625 51%, 626-1251 12%, 1252-1877 10%, 1878-2503 7%, 2504-3129 6%, 3130-3755 4%, 3756-4381 5%, 4382-5000 6%
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): []
+  sample (mutation, iteration 255, size 8): [40, 34, 85, 30, 75, 87, 21, 48, 40, 38, 40, 71, 51, 87, 46, 47, 55, 69, 54, 86, 52, 85, 61, 3, 59, 80, 10, 23, 21, 56, 87, 7, 7, 7, 85, 46, 45, 45, 45, 84, 40, 68, 37, 12, 12, 10, 64, 60, 40, 53, 40,…
+  sample (mutation, iteration 74, size 6): [99]
+  sample (mutation, iteration 140, size 7): [7, 48, 40, 71, 51, 87, 46, 54, 87, 87, 87, 22, 40, 5, 37, 64, 40, 24, 40, 40]
+  sample (mutation, iteration 86, size 6): []
+  most moves: 5000 by [18, 49, 32, 41, 44, 41, 34, 85, 53, 98, 30, 97, 41, 75, 75, 75, 68, 74, 75, 87, 21, 59, 48, 84, 71, 94, 85, 2, 40, 71, 62, 51, 99, 87, 87, 87, 53, 46, 47, 31, 64, 69, 54, 86, 4, 58, 52, 40, 61, 3, 40, 80, 10, 13, 77, 23, 40, 56, 87, 51, 7, 7, 7, 7, 30, 46, 46, 59, 45, 87, 45, 41, 45, 45, 93, 83, 42, 43, 77, 52, 68, 68, 84, 29, 38, 64, 12, 12, 9, 12, 60, 40, 51, 26, 51, 40, 40, 40, 48, 41, 38, 90, 96, 40, 22, 24, 24, 23, 24, 37, 63, 24, 71, 59, 44, 44, 44, 21, 43, 40, 24, 6, 29, 17, 25, 55, 53, 5, 6]
+--- stderr ---

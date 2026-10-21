@@ -1,0 +1,15 @@
+--- a/src/wherecode.c	2026-10-16 10:31:53
++++ b/src/wherecode.c	2026-10-16 14:00:55
+@@ -617,6 +617,12 @@
+           }
+           nRhs++;
+         }
++      }
++      if( nRhs<pOrigRhs->nExpr ){
++        /* Some RHS columns were removed.  Rows of the original RHS that
++        ** differ only in the removed columns become duplicates, so the
++        ** original materialization cannot be reused for the reduced IN. */
++        ExprClearProperty(pNew, EP_Subrtn);
+       }
+       sqlite3ExprListDelete(db, pOrigRhs);
+       if( pOrigLhs ){

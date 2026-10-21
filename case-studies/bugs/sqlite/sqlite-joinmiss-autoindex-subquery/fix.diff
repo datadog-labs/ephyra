@@ -1,0 +1,38 @@
+--- a/src/wherecode.c	2026-10-12 21:52:15
++++ b/src/wherecode.c	2026-10-12 21:52:15
+@@ -1616,15 +1616,32 @@
+   ** is controlled by an automatic index and if the automatic index is
+   ** the only outer loop that influences the key, then arrange to delete
+   ** the automatic index entry if there is no match on the key.
++  **
++  ** The automatic index is filled only once per statement (OP_Once), but
++  ** this WHERE loop might be run many times, for example as part of a
++  ** correlated subquery.  mKey does not show references to columns of an
++  ** outer query, so also check that every key value depends on nothing
++  ** but the current row of the automatic index.  Otherwise an entry that
++  ** finds no match on one run might find a match on a later run.
+   */
+   pParent = &pWInfo->a[iParent];
+   if( (pParent->pWLoop->wsFlags & WHERE_AUTO_INDEX)!=0
+    && (mKey & (mKey-1))==0
+   ){
+-    if( pParent->addrDeleteCont==0 ){
+-      pParent->addrDeleteCont = sqlite3VdbeMakeLabel(pWInfo->pParse);
++    for(i=0; i<pLoop->nLTerm; i++){
++      Expr *pX = pLoop->aLTerm[i]->pExpr;
++      assert( pX->op==TK_EQ || pX->op==TK_IS );
++      if( !sqlite3ExprIsSingleTableConstraint(pX->pRight, pTabList,
++                                              pParent->iFrom, 0) ){
++        break;
++      }
+     }
+-    return pParent->addrDeleteCont;
++    if( i>=pLoop->nLTerm ){
++      if( pParent->addrDeleteCont==0 ){
++        pParent->addrDeleteCont = sqlite3VdbeMakeLabel(pWInfo->pParse);
++      }
++      return pParent->addrDeleteCont;
++    }
+   }
+ 
+   testcase( iParent<iLevel-1 );

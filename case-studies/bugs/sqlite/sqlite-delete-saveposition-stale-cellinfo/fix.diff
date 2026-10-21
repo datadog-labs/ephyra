@@ -1,0 +1,16 @@
+--- a/src/btree.c	2026-10-18 11:55:59
++++ b/src/btree.c	2026-10-18 11:56:01
+@@ -10063,6 +10063,13 @@
+       }else{
+         pCur->skipNext = 1;
+       }
++      /* The cursor now points at a different cell.  Discard the cached
++      ** CellInfo and overflow page list of the deleted cell, so that a
++      ** later saveCursorPosition() saves the key of the cell at pCur->ix
++      ** rather than reading the freed space and overflow pages of the
++      ** deleted one. */
++      pCur->info.nSize = 0;
++      pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_ValidOvfl);
+     }else{
+       rc = moveToRoot(pCur);
+       if( bPreserve ){

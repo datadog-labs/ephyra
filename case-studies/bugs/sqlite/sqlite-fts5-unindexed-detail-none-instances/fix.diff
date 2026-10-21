@@ -1,0 +1,10 @@
+--- a/ext/fts5/fts5_main.c
++++ b/ext/fts5/fts5_main.c
+@@ -2340,6 +2340,7 @@
+       for(i=0; i<pConfig->nCol && rc==SQLITE_OK; i++){
+         const char *z = 0;
+         int n = 0; 
++        if( pConfig->abUnindexed[i] ) continue;
+         rc = fts5TextFromStmt(pConfig, pCsr->pStmt, i, &z, &n);
+         if( rc==SQLITE_OK ){
+           rc = sqlite3Fts5ExprPopulatePoslists(

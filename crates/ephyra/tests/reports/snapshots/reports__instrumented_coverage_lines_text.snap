@@ -1,0 +1,13 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: report.to_string()
+---
+ephyra: ok, 200 tests passed (127 distinct, 0 discarded) in [time], seed 24301
+  coverage: 2 of 2 functions in `reports::planted` reached, 5 of 5 counters
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): -80
+  sample (random, iteration 127, size 7): -7
+  sample (random, iteration 7, size 3): -19
+  sample (random, iteration 31, size 5): 61
+  sample (random, iteration 104, size 6): 94

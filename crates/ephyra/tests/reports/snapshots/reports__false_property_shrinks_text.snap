@@ -1,0 +1,17 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: report.to_string()
+---
+ephyra: FAILED, property returned false
+  counterexample: [0, 0, 0]
+  original:       [5, 4, 2] (size 3, iteration 8)
+  shrinking: 3 of 12 candidates accepted in [time]
+  after 8 passing tests (6 distinct, 0 discarded) in [time]
+  reproduce: EPHYRA_REPLAY=24301:8
+  or rerun the whole search: Config::default().seed(24301)
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): []
+  sample (random, iteration 7, size 3): [3]
+  sample (random, iteration 5, size 2): [5]
+  sample (random, iteration 3, size 2): [1, 8]

@@ -1,0 +1,5 @@
+# Instrumented processes (test binaries, build scripts, and rustc loading an
+# instrumented proc macro) write a profile at exit. Keep those files out of
+# the source tree; ephyra reads counters in process and never needs them.
+[env]
+LLVM_PROFILE_FILE = { value = "target/profraw/%m_%p.profraw", relative = true }

@@ -1,0 +1,38 @@
+diff --git a/src/optimizer/join_elimination.cpp b/src/optimizer/join_elimination.cpp
+index 079f05fea4..15dfb4f5ec 100644
+--- a/src/optimizer/join_elimination.cpp
++++ b/src/optimizer/join_elimination.cpp
+@@ -311,7 +311,10 @@ unique_ptr<LogicalOperator> JoinElimination::TryEliminateJoin() {
+ }
+ 
+ bool JoinElimination::ContainDistinctGroup(vector<ColumnBinding> &column_bindings) {
+-	D_ASSERT(!column_bindings.empty());
++	if (column_bindings.empty()) {
++		// e.g. a join without conditions
++		return false;
++	}
+ 	auto &column_binding = column_bindings[0];
+ 	auto it = pipe_info.distinct_groups.find(column_binding.table_index);
+ 	if (it == pipe_info.distinct_groups.end()) {
+diff --git a/test/optimizer/join_elimination.test b/test/optimizer/join_elimination.test
+index c6ade6bfa1..d286024dee 100644
+--- a/test/optimizer/join_elimination.test
++++ b/test/optimizer/join_elimination.test
+@@ -363,3 +363,17 @@ query II
+ explain select distinct pg from (select p.g as pg from p left join (select distinct a from k) s on p.id = s.a order by pg desc limit 3) order by pg;
+ ----
+ physical_plan	<!REGEX>:.*JOIN.*
++
++# a decorrelated subquery can yield a join without conditions
++statement ok
++create table t_noconds(c int);
++
++statement ok
++insert into t_noconds values (1), (-1), (NULL);
++
++query I
++select (select case when true then 0 else count(distinct 1) end from t_noconds x where t_noconds.c > 0) from t_noconds;
++----
++0
++0
++0

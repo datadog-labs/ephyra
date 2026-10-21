@@ -1,0 +1,9 @@
+# crontab -e, with <checkout> replaced by the path to this repository's
+# checkout. The watchdog keeps the current run alive (a host restart kills
+# every process); the refresh builds PostgreSQL master's newest commit
+# nightly and, when ephyra-postgresql's tests pass on it, moves the run to
+# it; pre-triage judges new findings.
+@reboot     <checkout>/case-studies/postgresql-coverage/deploy/watchdog.sh
+*/5 * * * * <checkout>/case-studies/postgresql-coverage/deploy/watchdog.sh
+30 5 * * *  <checkout>/case-studies/postgresql-coverage/deploy/refresh-master.sh
+*/30 * * * * <checkout>/case-studies/postgresql-coverage/deploy/pretriage.sh

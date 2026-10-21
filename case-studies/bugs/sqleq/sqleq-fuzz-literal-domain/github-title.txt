@@ -1,0 +1,1 @@
+sqleq-fuzz: a literal outside the generated value domain hides a boundary difference (`334 <= c` vs `334 < c` is NO-COUNTEREXAMPLE)
