@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Build the sqlite3 CLIs pre-triage replays findings with: from a SQLite
 # source tree (SRC_TREE, or else the tarball of the vendored check-in,
 # downloaded), RUN_ROOT/clis/<check-in>/trunk/sqlite3 and, for every open

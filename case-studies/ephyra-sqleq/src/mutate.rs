@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! One-operator mutants of a query, which most likely mean something else:
 //! a comparison changed to its neighbour, AND for OR, a NULL test, IN or
 //! EXISTS negated, DISTINCT dropped, a LEFT JOIN made inner. Whether a

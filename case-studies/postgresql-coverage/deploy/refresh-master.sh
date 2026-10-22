@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Nightly: move the run to PostgreSQL master's newest commit.
 #
 # 1. build-pg.sh fetches master and builds it (PG_BUILDS/<commit12>/); when

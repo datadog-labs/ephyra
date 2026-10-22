@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! For the unproved one-step pairs of a run, whether sqleq proves the seed
 //! equal to itself: `cargo run --release --example selfcheck -- <run dir>`.
 //! Prints, per rule, unproved pairs whose seed is self-proved (the rule's

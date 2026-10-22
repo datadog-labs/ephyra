@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Procedural macros for [ephyra](https://crates.io/crates/ephyra).
 //! Use them through the `ephyra` crate (`ephyra::Arbitrary`,
 //! `#[ephyra::shrinker]`, and `#[ephyra::test]`); this crate is an

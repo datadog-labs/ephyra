@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Nightly: move to SQLite trunk's newest check-in. Builds trunk's
 # amalgamation and stops when its check-in is the vendored one (FORCE=1
 # goes on anyway). Else re-vendors it (the old files kept in

@@ -1,0 +1,4 @@
+# Overrides for dd-rust-license-tool, which writes LICENSE-3rdparty.csv.
+[overrides]
+# Declares its license only as a file (Apache License 2.0, Copyright 2022 Trevor Gross).
+"cfg_block-0.1.1" = { license = "Apache-2.0" }

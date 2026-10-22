@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Buckets URLPatternInit-input differences: where urlpattern-polyfill and
 //! Deno agree and ada differs, by the first differing component, with the
 //! smallest example per bucket.

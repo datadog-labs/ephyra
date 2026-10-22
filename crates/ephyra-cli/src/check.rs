@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! `ephyra check`: find the workspace's generators and strategies in a
 //! static index of its source, and run each one's check test over
 //! thousands of inputs, with reports, coverage pages and observations routed

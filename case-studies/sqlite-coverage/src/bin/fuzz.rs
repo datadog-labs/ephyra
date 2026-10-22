@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Does mutation pay? One arm of a coverage-guided loop over the oracle
 //! inputs (a case and its queries), against the instrumented SQLite, for a
 //! fixed wall-clock time:

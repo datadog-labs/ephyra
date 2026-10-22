@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Minimal reproductions of near-miss pairs sqleq-fuzz misses: the seed
 //! shrunk keeping an anti-rule variant that PostgreSQL refutes (a witness
 //! exists) and sqleq-fuzz does not, then the witness data shrunk to the

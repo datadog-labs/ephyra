@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Cases run on whatwg-url, the standard's reference implementation (a
 //! JavaScript transcription of its algorithms), through one long-lived
 //! `node reference/run.js` process. `npm install` in `reference/` first.

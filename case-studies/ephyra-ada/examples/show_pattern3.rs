@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A URLPattern (and inputs) in ada, the polyfill and Deno's urlpattern:
 //! components and exec per input, for triage.
 //!

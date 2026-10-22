@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! [`Source`]: the seeded random source a generator draws from.
 //!
 //! A `Source` is a deterministic pseudo-random generator (ChaCha8) seeded by

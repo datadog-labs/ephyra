@@ -1,4 +1,7 @@
 #!/bin/bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Bug benchmark: for each variant in bench/mutants/ and each seed, builds the
 # harness against it (EA_VENDOR, own CARGO_TARGET_DIR), runs all properties at
 # TESTS cases, and appends one row per property to results/<stamp>.tsv:

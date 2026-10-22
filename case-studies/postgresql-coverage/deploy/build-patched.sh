@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Build the PostgreSQLs pre-triage replays findings with: plain master and,
 # for every open bug of known-bugs.json, master with that bug's fix applied.
 #

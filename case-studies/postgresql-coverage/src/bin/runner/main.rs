@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The PostgreSQL fuzz runner: a supervisor, its worker processes and one
 //! PostgreSQL cluster they share, for unattended runs of hours or days. The
 //! port of `../sqlite-coverage`'s runner (same records, same layout, metrics

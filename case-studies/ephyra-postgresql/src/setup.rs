@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The generated database a case starts from ([`Setup`]): a [`Model`] and a
 //! [`Layout`], the physical choices it is loaded with, none of which
 //! changes a row. The analogue of `ephyra-sqlite`'s file generator, whose

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 use ephyra::{Config, Gen, Run, Source, Trace, loops};
 use ephyra_sql::engine::{Outcome, Sqlite, Value};
 use ephyra_sql::script::{self, Script, ScriptGen, scripts};

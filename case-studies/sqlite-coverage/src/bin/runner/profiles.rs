@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Loop profiles: how a worker tests, the generator (`case_queries`) the
 //! same for all. A profile ([`Profile`], the table [`PROFILES`]) says which
 //! inputs are mutants and of what, which pool of seeds they come from, how

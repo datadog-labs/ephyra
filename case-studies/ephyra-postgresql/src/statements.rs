@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A small typed SQL statement language over the tables of a [`Model`]
 //! (`t{id}`, columns `c{id}`, indexes `t{t}_i{id}`), rendered by `Display`
 //! as SQL that PostgreSQL runs as written. Every name is an id, so a

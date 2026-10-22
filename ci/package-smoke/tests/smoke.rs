@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Exercises the derive, the test attribute, a failing check with replay,
 //! a checker and coverage, all through the packaged crates.
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 """Pre-triage of the fuzz runner's findings, against the known SQLite bugs of
 known-bugs.json (python3, standard library only).
 

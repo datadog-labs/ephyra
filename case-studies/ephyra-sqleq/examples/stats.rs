@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! What the e-graph gives for generated seeds: `cargo run --release
 //! --example stats -- <seeds> [out dir]`. Invalid draws are written to the
 //! out dir (one file each) for diagnosis.

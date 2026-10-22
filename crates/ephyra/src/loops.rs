@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Testing loops shipped with the library, written on the steps of [`Run`]
 //! the way Etna's PropLang ships its loops: a *seed pool* policy decides
 //! whether the next input is generated afresh or mutated from a seed, and

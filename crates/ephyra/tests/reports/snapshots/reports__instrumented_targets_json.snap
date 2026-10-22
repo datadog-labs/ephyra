@@ -789,8 +789,8 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
       {
         "target": {
           "file": "tests/reports/planted.rs",
-          "begin_line": 11,
-          "end_line": 11
+          "begin_line": 14,
+          "end_line": 14
         },
         "functions": [
           "reports::planted::classify"
@@ -802,8 +802,8 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
       {
         "target": {
           "file": "tests/reports/planted.rs",
-          "begin_line": 6,
-          "end_line": 7
+          "begin_line": 9,
+          "end_line": 10
         },
         "functions": [
           "reports::planted::classify"
@@ -839,7 +839,7 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
   "health": [
     {
       "kind": "coverage_target_missed",
-      "message": "target tests/reports/planted.rs:11 was never reached: `reports::planted::classify` was entered by 456 inputs that took other branches"
+      "message": "target tests/reports/planted.rs:14 was never reached: `reports::planted::classify` was entered by 456 inputs that took other branches"
     },
     {
       "kind": "low_distinct_inputs",

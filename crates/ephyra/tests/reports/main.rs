@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Snapshot tests of what ephyra reports. Every scenario runs with a fixed
 //! seed and an explicit config, and the rendered report (and its JSON) is
 //! compared with the snapshot under `snapshots/`. Review a change with
@@ -334,8 +337,8 @@ mod instrumented {
         }
         let mut config = instrumented("classify_targets");
         config.coverage.targets = vec![
-            ephyra::config::CoverageTarget::new("tests/reports/planted.rs", 11..=11),
-            ephyra::config::CoverageTarget::new("tests/reports/planted.rs", 6..=7),
+            ephyra::config::CoverageTarget::new("tests/reports/planted.rs", 14..=14),
+            ephyra::config::CoverageTarget::new("tests/reports/planted.rs", 9..=10),
         ];
         config.coverage.targets_file = None;
         let report = check(&config, gens::int(-100i32..=100), |x| !planted::classify(x).is_empty());

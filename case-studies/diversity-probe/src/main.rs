@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! How diverse are the runner's inputs? 20000 fresh draws exactly as fresh
 //! workers make them (worker seed `mix(run, id)`, input `n` from seed
 //! `mix(worker_seed, n)` at size `n % 101`, under oracle `n % 7`), and:

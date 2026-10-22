@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Build and test a consumer against the packaged .crate contents, the way a
 # crates.io user sees them: no path dependencies, only what `include` ships.
 # The macros crate is supplied through [patch.crates-io] because the packaged

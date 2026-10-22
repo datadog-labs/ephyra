@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Model-checked statements and SQLancer-style oracles for PostgreSQL, the
 //! port of `../ephyra-sqlite`: a generated database ([`setup::Setup`], a
 //! model and the physical choices it is loaded with) and statements over

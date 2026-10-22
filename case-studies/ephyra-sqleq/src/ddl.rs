@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A model's schema as the plain DDL sqleq reads: column types, NOT NULL,
 //! the primary key and plain UNIQUE indexes (as UNIQUE constraints), none
 //! of the physical choices (storage, compression, identity, partitioning,

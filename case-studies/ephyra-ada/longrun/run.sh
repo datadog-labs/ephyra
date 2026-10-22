@@ -1,4 +1,7 @@
 #!/bin/bash
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Long bug-hunting run on vendor/ (ada main + open fixes): all properties,
 # fresh seeds, saved counterexamples on. One log per seed and size. Runs a
 # frozen copy of the test binary (longrun/oracles.bin, from `cargo test

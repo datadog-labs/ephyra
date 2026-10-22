@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Differential testing of Turso against SQLite 3.50.4, the version Turso
 //! tracks (COMPAT.md: any undocumented deviation from it is a bug), on the
 //! cases and queries of ephyra-sqlite's generator.

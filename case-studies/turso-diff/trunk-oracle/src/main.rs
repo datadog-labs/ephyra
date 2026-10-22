@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! `trunk-oracle DB SQL`: the database file DB opened in memory by SQLite
 //! trunk (a WAL header read as rollback mode, as turso-diff does), each
 //! statement of the file SQL run in turn (errors before the last one are

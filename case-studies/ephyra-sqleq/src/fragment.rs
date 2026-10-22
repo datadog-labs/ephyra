@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The seeds: ephyra-postgresql's queries, inside what sqleq's frontend
 //! takes. sqleq refuses window functions, INTERSECT/EXCEPT ALL and
 //! aggregates with an ORDER BY (`string_agg(DISTINCT x, ',' ORDER BY x)`) by

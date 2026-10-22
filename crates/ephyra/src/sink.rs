@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Where evaluated inputs go besides the report: every input the runner
 //! runs (random, targeted, shrink candidates, the minimal failure) reaches
 //! each sink open for the run as a [`TestCase`], and the finished

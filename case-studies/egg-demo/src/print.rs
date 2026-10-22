@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A term back to SQL. Top-level filters become WHERE, except one right above
 //! an inner join, which becomes its ON; a filter over one table becomes a
 //! derived table that keeps the table's alias, so every `alias.column` still

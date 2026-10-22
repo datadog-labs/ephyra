@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 // Runs one case on ada::url or ada::url_aggregator and writes a transcript.
 //
 // A case, as bytes: the input, an optional base, then setter calls, every

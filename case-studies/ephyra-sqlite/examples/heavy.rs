@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Memory probe: inputs drawn as the nightly runner draws them
 //! (`--queries LO-HI` extension, `--mutate K` mutations, as examples/sqlancer.rs),
 //! each run under an oracle with the runner's deadline (10 s + 0.1 s a

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A small typed SQL statement language over the schema the writer creates
 //! (tables `t{k}`, columns `c{k}`, see [`crate::writer::create_table`]),
 //! rendered by `Display` as SQL that SQLite runs as written.

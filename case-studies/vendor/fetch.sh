@@ -1,4 +1,7 @@
 #!/bin/sh
+# Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 # Creates the libsqlite3-sys crates the SQLite case studies patch in
 # through [patch.crates-io]: libsqlite3-sys 0.35.0 (the version rusqlite
 # 0.37 uses) from crates.io, with its bundled amalgamation (sqlite3.c,

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! How often the URLPattern list oracle has something to check.
 use ephyra::{Gen, Source};
 use ephyra_ada::pattern_list::{plain_kinds, run, ListCases};

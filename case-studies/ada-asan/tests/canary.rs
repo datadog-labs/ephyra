@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The sanitized build catches errors in C++ and saves the case: a child
 //! process reads past a heap buffer inside the shim, while a known case
 //! stands as the current one.

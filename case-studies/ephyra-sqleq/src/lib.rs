@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Equivalent PostgreSQL queries for sqleq: seeds (a schema and a query)
 //! from ephyra-postgresql, equivalent variants from an e-graph, and the
 //! pair files and verdicts of sqleq's frontend, provers and fuzzer.

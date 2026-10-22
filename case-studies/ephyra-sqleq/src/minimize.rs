@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Smaller pairs that sqleq still fails to prove. Every rule is a pointwise
 //! equality of expressions, so a seed and a variant stay equivalent under
 //! any change made to both alike, and a variant stays equivalent with any

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A static index of a workspace's `#[ephyra::test]` and
 //! `#[ephyra::generator]` functions, read from source with `syn` (no
 //! build): what each one is, where it lives, and which generator serves which

@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Binary search trees with an invariant-preserving generator. Run with
 //! `cargo run -p ephyra --example bst` (add `--bug` to plant a bug in
 //! `insert` and watch the property fail).

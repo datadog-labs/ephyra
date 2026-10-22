@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! The SQLancer-style metamorphic oracles, each a property over a case and
 //! queries on the state it leaves: NoREC, TLP, differential query plans,
 //! and in-memory against WAL-file storage. Their formulations and

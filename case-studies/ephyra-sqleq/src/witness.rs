@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! Witnesses: data on which PostgreSQL gives two queries different results.
 //! A near-miss pair counts as non-equivalent only with a witness.
 //!

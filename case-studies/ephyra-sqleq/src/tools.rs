@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! sqleq's tools, found from `$SQLEQ_BIN` (a directory with
 //! `sqleq-frontend`, `sqleq-fuzz`, `sqleq-solver`; default: PATH) and
 //! `$QED_PROVER` (the `qed-prover` binary; default: `qed-prover` on PATH).

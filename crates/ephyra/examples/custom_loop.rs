@@ -1,3 +1,6 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the MIT License.
+// This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
+
 //! A testing loop written by hand from the same steps `check` is made of.
 //! Random tests first, exactly as `check` runs them; then, instead of the
 //! built-in targeted phase, climb the score by mutating the best seeds and
