@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # The library workspace. The case studies are separate crates with their
+  # own lock files and are updated by hand.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+  # Actions are pinned to commit SHAs; this keeps the pins current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
