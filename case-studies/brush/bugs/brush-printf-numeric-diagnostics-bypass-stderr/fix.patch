@@ -1,0 +1,491 @@
+From de2a24cea1f2a4b6a1aedf580b885006a042c8a8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 09:16:19 -0400
+Subject: [PATCH] fix(builtins): report printf's invalid numbers through the
+ shell's stderr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+printf left the parsing of numeric arguments to uucore, which reports a
+bad one with `show_error!` on the process's fd 2 and records the failure in
+its own global exit code. So `printf '%d\n' x 2>/dev/null` still printed
+the message, and the status was 0 where bash returns 1.
+
+Write the diagnostic to the builtin's stderr and return a failing status.
+
+Signed-off-by: Alperen Keleş <alpkeles99@gmail.com>
+Assisted-by: Claude Code:claude-opus-5-5
+---
+ brush-builtins/src/printf.rs                  | 353 +++++++++++++++++-
+ .../tests/cases/compat/builtins/printf.yaml   |  15 +-
+ 2 files changed, 352 insertions(+), 16 deletions(-)
+
+diff --git a/brush-builtins/src/printf.rs b/brush-builtins/src/printf.rs
+index 5e482b2d..59487707 100644
+--- a/brush-builtins/src/printf.rs
++++ b/brush-builtins/src/printf.rs
+@@ -1,6 +1,10 @@
+ use clap::Parser;
+ use std::{ffi::OsString, io::Write, ops::ControlFlow};
+-use uucore::format;
++use uucore::{
++    extendedbigdecimal::ExtendedBigDecimal,
++    format,
++    parser::num_parser::{ExtendedParser, ExtendedParserError},
++};
+ 
+ use brush_core::{Error, ErrorKind, ExecutionResult, builtins, escape, expansion};
+ 
+@@ -34,7 +38,11 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PrintfCommand {
+         if let Some(variable_name) = &self.output_variable {
+             // Format to a u8 vector.
+             let mut result: Vec<u8> = vec![];
+-            format(self.format_and_args.as_slice(), &mut result)?;
++            let conversions_ok = format(
++                self.format_and_args.as_slice(),
++                &mut result,
++                context.stderr(),
++            )?;
+ 
+             // Convert to a string.
+             let result_str = String::from_utf8(result).map_err(|_| {
+@@ -49,19 +57,41 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PrintfCommand {
+                 result_str,
+             )
+             .await?;
++
++            Ok(conversion_result(conversions_ok))
+         } else {
+-            format(self.format_and_args.as_slice(), context.stdout())?;
++            let conversions_ok = format(
++                self.format_and_args.as_slice(),
++                context.stdout(),
++                context.stderr(),
++            )?;
+             context.stdout().flush()?;
++
++            Ok(conversion_result(conversions_ok))
+         }
++    }
++}
+ 
+-        Ok(ExecutionResult::success())
++/// Like bash, printf still prints everything after an argument that is not a valid number,
++/// but then exits with status 1.
++const fn conversion_result(conversions_ok: bool) -> ExecutionResult {
++    if conversions_ok {
++        ExecutionResult::success()
++    } else {
++        ExecutionResult::general_error()
+     }
+ }
+ 
+-fn format(format_and_args: &[String], writer: impl Write) -> Result<(), brush_core::Error> {
++/// Formats `format_and_args` to `writer`, reporting invalid numeric arguments to `stderr`.
++/// Returns whether all numeric arguments were valid.
++fn format(
++    format_and_args: &[String],
++    writer: impl Write,
++    stderr: impl Write,
++) -> Result<bool, brush_core::Error> {
+     match format_and_args {
+         // Handle format string with arguments using uucore
+-        [fmt, args @ ..] => format_via_uucore(fmt, args.iter(), writer),
++        [fmt, args @ ..] => format_via_uucore(fmt, args, writer, stderr),
+         // Handle case with no format string (we shouldn't be able to get here since clap will
+         // fail parsing when the format string is missing)
+         [] => Err(ErrorKind::PrintfInvalidUsage("missing operand".into()).into()),
+@@ -70,17 +100,22 @@ fn format(format_and_args: &[String], writer: impl Write) -> Result<(), brush_co
+ 
+ fn format_via_uucore(
+     format_string: &str,
+-    args: impl Iterator<Item = impl Into<OsString>>,
++    args: &[impl AsRef<str>],
+     mut writer: impl Write,
+-) -> Result<(), brush_core::Error> {
+-    // Convert string arguments to FormatArgument::Unparsed
+-    let format_args: Vec<_> = args
+-        .map(|s| format::FormatArgument::Unparsed(s.into()))
+-        .collect();
+-
++    mut stderr: impl Write,
++) -> Result<bool, brush_core::Error> {
+     // Parse format string once.
+     let format_items = parse_format_string(format_string)?;
+ 
++    // uucore parses numeric arguments lazily and reports invalid ones by writing straight to the
++    // process's stderr, which would bypass any redirection of the builtin's stderr. We therefore
++    // convert numeric arguments ourselves up front and hand them to uucore already typed; the
++    // diagnostics are reported below, when the directive consuming the argument is reached.
++    let arg_uses = directive_arg_uses(format_string.as_bytes());
++    let (format_args, conversion_errors) = convert_args(args, &format_items, &arg_uses);
++    let mut conversions_ok = true;
++    let mut cursor = ArgCursor::default();
++
+     // Wrap the format arguments.
+     let mut format_args_wrapper = format::FormatArguments::new(&format_args);
+ 
+@@ -95,8 +130,23 @@ fn format_via_uucore(
+     // Keep going until we've exhausted all format arguments. Also make sure to run at least once
+     // even if there's no format arguments.
+     while format_args.is_empty() || !format_args_wrapper.is_exhausted() {
++        let mut directive_uses = arg_uses.iter();
++
+         // Process all format items, in order. We'll bail when we're told to stop.
+         for (item, backslash_quote) in &format_items {
++            if matches!(item, format::FormatItem::Spec(_)) {
++                let uses = directive_uses.next().map_or(&[][..], |d| &d.uses);
++                for (position, _) in uses {
++                    let index = cursor.take(*position);
++                    if let (Some(arg), Some(Some(message))) =
++                        (args.get(index), conversion_errors.get(index))
++                    {
++                        writeln!(stderr, "printf: {}: {message}", arg.as_ref())?;
++                        conversions_ok = false;
++                    }
++                }
++            }
++
+             if let (format::FormatItem::Spec(format::Spec::QuotedString { position }), true) =
+                 (item, *backslash_quote)
+             {
+@@ -131,6 +181,7 @@ fn format_via_uucore(
+         // Start next batch if not exhausted
+         if !format_args_wrapper.is_exhausted() {
+             format_args_wrapper.start_next_batch();
++            cursor.start_next_batch();
+         }
+ 
+         if format_args.is_empty() {
+@@ -138,7 +189,256 @@ fn format_via_uucore(
+         }
+     }
+ 
+-    Ok(())
++    Ok(conversions_ok)
++}
++
++/// How a directive interprets an argument it consumes.
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum ArgKind {
++    Text,
++    SignedInt,
++    UnsignedInt,
++    Float,
++}
++
++/// The arguments one directive consumes.
++struct DirectiveArgUses {
++    /// The arguments, in the order uucore consumes them (`*` width, `*` precision, then the
++    /// value), each with its explicit 1-based position (`N$`), if any.
++    uses: Vec<(Option<usize>, ArgKind)>,
++    /// Whether this is a `%b` directive, whose argument may contain a `\c` that stops output.
++    escaped_string: bool,
++}
++
++/// Returns the argument uses of each directive in the format string, in the order in which
++/// `parse_format_string` yields its `Spec` items.
++fn directive_arg_uses(format_string: &[u8]) -> Vec<DirectiveArgUses> {
++    let mut uses = vec![];
++    let mut rest = format_string;
++
++    // This walks the format string the same way `format::parse_spec_and_escape` does.
++    while let Some((c, tail)) = rest.split_first() {
++        match (c, tail.first()) {
++            // An escape consumes at least the following byte, and never a '%'.
++            (b'\\', Some(_)) => rest = &tail[1..],
++            (b'%', Some(b'%')) => rest = &tail[1..],
++            (b'%', _) => {
++                let mut spec_rest = tail;
++                if format::Spec::parse(&mut spec_rest).is_ok() {
++                    uses.push(spec_arg_uses(&tail[..tail.len() - spec_rest.len()]));
++                } else {
++                    // Only the q/Q directives that `parse_format_string` replaces with a bare
++                    // `%q` get here without failing the whole format string.
++                    uses.push(DirectiveArgUses {
++                        uses: vec![(None, ArgKind::Text)],
++                        escaped_string: false,
++                    });
++                }
++                rest = spec_rest;
++            }
++            _ => rest = tail,
++        }
++    }
++
++    uses
++}
++
++/// Returns the argument uses of a directive, given its text after the '%' (which uucore has
++/// already validated).
++fn spec_arg_uses(spec: &[u8]) -> DirectiveArgUses {
++    let (value_position, mut index) = eat_arg_position(spec, 0);
++
++    // Every '*' before the conversion character consumes a width or precision argument.
++    let mut uses = vec![];
++    while index + 1 < spec.len() {
++        if spec[index] == b'*' {
++            let (position, next) = eat_arg_position(spec, index + 1);
++            uses.push((position, ArgKind::SignedInt));
++            index = next;
++        } else {
++            index += 1;
++        }
++    }
++
++    let kind = match spec.last() {
++        Some(b'd' | b'i') => ArgKind::SignedInt,
++        Some(b'u' | b'o' | b'x' | b'X') => ArgKind::UnsignedInt,
++        Some(b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A') => ArgKind::Float,
++        _ => ArgKind::Text,
++    };
++    uses.push((value_position, kind));
++
++    DirectiveArgUses {
++        uses,
++        escaped_string: spec.last() == Some(&b'b'),
++    }
++}
++
++/// Parses an `N$` argument position at `start`, returning it and the index after it.
++fn eat_arg_position(spec: &[u8], start: usize) -> (Option<usize>, usize) {
++    let digits = spec[start..]
++        .iter()
++        .take_while(|b| b.is_ascii_digit())
++        .count();
++    if digits > 0 && spec.get(start + digits) == Some(&b'$') {
++        let position = std::str::from_utf8(&spec[start..start + digits])
++            .ok()
++            .and_then(|s| s.parse().ok())
++            .unwrap_or(usize::MAX);
++        (Some(position), start + digits + 1)
++    } else {
++        (None, start)
++    }
++}
++
++/// Mirrors how `format::FormatArguments` selects the argument each directive consumes.
++#[derive(Default)]
++struct ArgCursor {
++    next_position: usize,
++    highest_position: Option<usize>,
++    offset: usize,
++}
++
++impl ArgCursor {
++    fn take(&mut self, position: Option<usize>) -> usize {
++        match position {
++            None => {
++                let index = self.next_position;
++                self.next_position += 1;
++                index
++            }
++            Some(position) => {
++                let index = position.saturating_sub(1).saturating_add(self.offset);
++                self.highest_position = Some(self.highest_position.map_or(index, |h| h.max(index)));
++                index
++            }
++        }
++    }
++
++    fn start_next_batch(&mut self) {
++        self.offset = self
++            .next_position
++            .max(self.highest_position.map_or(0, |h| h.saturating_add(1)));
++        self.next_position = self.offset;
++    }
++}
++
++/// Converts each argument that is only ever consumed as a number into a typed uucore argument,
++/// returning the arguments and, per argument, the error to report if it is not a valid number.
++fn convert_args(
++    args: &[impl AsRef<str>],
++    format_items: &[ParsedFormatItem],
++    arg_uses: &[DirectiveArgUses],
++) -> (Vec<format::FormatArgument>, Vec<Option<&'static str>>) {
++    // Find out how each argument is consumed, cycling through the format string the same way
++    // `format_via_uucore` does, including where a `\c` stops the current pass.
++    let mut kinds: Vec<Option<ArgKind>> = vec![None; args.len()];
++    let format_consumes_args = !arg_uses.is_empty();
++    let mut cursor = ArgCursor::default();
++    if format_consumes_args {
++        loop {
++            let mut directive_uses = arg_uses.iter();
++            for (item, _) in format_items {
++                let stop = if matches!(item, format::FormatItem::Spec(_)) {
++                    let Some(directive) = directive_uses.next() else {
++                        break;
++                    };
++                    let mut last_arg = None;
++                    for (position, kind) in &directive.uses {
++                        let index = cursor.take(*position);
++                        last_arg = args.get(index);
++                        if let Some(seen) = kinds.get_mut(index) {
++                            *seen = match *seen {
++                                Some(seen) if seen != *kind => Some(ArgKind::Text),
++                                _ => Some(*kind),
++                            };
++                        }
++                    }
++                    directive.escaped_string
++                        && last_arg.is_some_and(|arg| escaped_string_stops(arg.as_ref()))
++                } else {
++                    // Literal characters consume no arguments; only `\c` stops.
++                    matches!(
++                        item.write(std::io::sink(), &mut format::FormatArguments::new(&[])),
++                        Ok(ControlFlow::Break(()))
++                    )
++                };
++                if stop {
++                    break;
++                }
++            }
++
++            cursor.start_next_batch();
++            if cursor.offset >= args.len() {
++                break;
++            }
++        }
++    }
++
++    args.iter()
++        .zip(kinds)
++        .map(|(arg, kind)| {
++            let arg = arg.as_ref();
++            match kind {
++                Some(ArgKind::SignedInt) => {
++                    let (value, error) = parse_numeric_arg(arg);
++                    (format::FormatArgument::SignedInt(value), error)
++                }
++                Some(ArgKind::UnsignedInt) => {
++                    let (value, error) = parse_numeric_arg(arg);
++                    (format::FormatArgument::UnsignedInt(value), error)
++                }
++                Some(ArgKind::Float) => {
++                    let (value, error) = parse_numeric_arg::<ExtendedBigDecimal>(arg);
++                    (format::FormatArgument::Float(value), error)
++                }
++                Some(ArgKind::Text) | None => {
++                    (format::FormatArgument::Unparsed(OsString::from(arg)), None)
++                }
++            }
++        })
++        .unzip()
++}
++
++/// Returns whether formatting `arg` with `%b` stops output (i.e., it contains a `\c`).
++fn escaped_string_stops(arg: &str) -> bool {
++    let probe_args = [format::FormatArgument::Unparsed(OsString::from(arg))];
++    let mut spec: &[u8] = b"b";
++    format::Spec::parse(&mut spec).is_ok_and(|spec| {
++        matches!(
++            spec.write(
++                std::io::sink(),
++                &mut format::FormatArguments::new(&probe_args)
++            ),
++            Ok(ControlFlow::Break(()))
++        )
++    })
++}
++
++/// Parses a numeric printf argument, returning its value (the best possible one, even when the
++/// argument is invalid) and the error to report, if any.
++fn parse_numeric_arg<T>(arg: &str) -> (T, Option<&'static str>)
++where
++    T: ExtendedParser + From<u32> + Default,
++{
++    // Like bash, a leading quote yields the code of the character that follows it, silently
++    // ignoring anything after that character.
++    if let Some(rest) = arg.strip_prefix(['\'', '"']) {
++        let value = rest
++            .chars()
++            .next()
++            .map_or_else(T::default, |c| T::from(u32::from(c)));
++        return (value, None);
++    }
++
++    match T::extended_parse(arg) {
++        Ok(value) => (value, None),
++        Err(ExtendedParserError::Overflow(value) | ExtendedParserError::Underflow(value)) => {
++            (value, Some("Numerical result out of range"))
++        }
++        Err(ExtendedParserError::PartialMatch(value, _)) => (value, Some("invalid number")),
++        Err(ExtendedParserError::NotNumeric) => (T::default(), Some("invalid number")),
++    }
+ }
+ 
+ fn quote_printf_q(s: &str) -> String {
+@@ -194,8 +494,11 @@ mod tests {
+         format_string: &str,
+         args: impl Iterator<Item = impl Into<OsString>>,
+     ) -> Result<String> {
++        let args: Vec<String> = args
++            .map(|s| s.into().to_string_lossy().into_owned())
++            .collect();
+         let mut result = vec![];
+-        format_via_uucore(format_string, args, &mut result)?;
++        format_via_uucore(format_string, &args, &mut result, std::io::sink())?;
+ 
+         Ok(String::from_utf8(result)?)
+     }
+@@ -218,6 +521,26 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test]
++    fn test_invalid_numbers_reported_to_given_stderr() -> Result<()> {
++        let mut out = vec![];
++        let mut err = vec![];
++        let ok = format_via_uucore(
++            r"%d|%*s|%x|%s\n",
++            &["1x", "q", "s", "'AB", "t"],
++            &mut out,
++            &mut err,
++        )?;
++        assert!(!ok);
++        assert_eq!(String::from_utf8(out)?, "1|s|41|t\n");
++        assert_eq!(
++            String::from_utf8(err)?,
++            "printf: 1x: invalid number\nprintf: q: invalid number\n"
++        );
++
++        Ok(())
++    }
++
+     #[test]
+     fn test_sprintf_with_cycles() -> Result<()> {
+         assert_eq!(sprintf_via_uucore("%s|", ["x", "y"].iter())?, "x|y|");
+diff --git a/brush-shell/tests/cases/compat/builtins/printf.yaml b/brush-shell/tests/cases/compat/builtins/printf.yaml
+index 5026bf36..b2a7837c 100644
+--- a/brush-shell/tests/cases/compat/builtins/printf.yaml
++++ b/brush-shell/tests/cases/compat/builtins/printf.yaml
+@@ -229,7 +229,6 @@ cases:
+ 
+   # Test C-style constant interpretation
+   - name: "printf with quoted character arguments"
+-    known_failure: true
+     stdin: |
+       printf "%d\n" "'A"
+       printf "%d\n" '"'
+@@ -382,6 +381,20 @@ cases:
+       printf "%d\n" "abc"
+       echo "Result: $?"
+ 
++  - name: "printf invalid number diagnostics honor redirections"
++    stdin: |
++      printf '%d|%s\n' x y 2>/dev/null; echo "rc=$?"
++      { printf '%*d|%.*f|\n' a 1 b 2.5; } 2>/dev/null; echo "rc=$?"
++      f() { printf '%x %u\n' 12abc -; }
++      f 2>/dev/null; echo "rc=$?"
++      printf -v v '%d' q 2>/dev/null; echo "v=$v rc=$?"
++      printf '%d\n' 99999999999999999999 2>/dev/null; echo "rc=$?"
++      printf '%d %s\n' x y 2>&1 >/dev/null | wc -l
++
++  - name: "printf character constants ignore trailing characters silently"
++    stdin: |
++      printf '%d %x %.1f %d %d\n' "'AB" '"xyz' "'C" "'" '"' 2>&1; echo "rc=$?"
++
+   - name: "printf %q with empty string"
+     stdin: |
+       printf '%q\n' ''

@@ -1,0 +1,84 @@
+diff --git a/gix-revision/src/spec/parse/function.rs b/gix-revision/src/spec/parse/function.rs
+index dfe15e2f5..3ca9fbd1f 100644
+--- a/gix-revision/src/spec/parse/function.rs
++++ b/gix-revision/src/spec/parse/function.rs
+@@ -503,7 +503,7 @@ where
+     input = {
+         if let Some(b'@') = sep {
+             let past_sep = input[sep_pos.map_or(input.len(), |pos| pos + 1)..].as_bstr();
+-            let (nav, rest, _consumed) = parens(past_sep)?
++            let (nav, mut rest, _consumed) = parens(past_sep)?
+                 .ok_or_else(|| {
+                     validation("@ character must be standalone or followed by {<content>}")
+                         .with_input(&input[sep_pos.unwrap_or(input.len())..])
+@@ -554,6 +554,40 @@ where
+                     .with_input(*name)
+                     .validation_error())
+                 }?;
++                // Like git, allow `<branch>@{upstream}@{<n>|<date>}` to look up the reflog of the sibling branch.
++                if rest.starts_with(b"@{") {
++                    let (nav, past_reflog, _consumed) = parens(rest[1..].as_bstr())?
++                        .ok_or_else(|| validation("@ character must be followed by {<content>}").with_input(rest))
++                        .or_error()?;
++                    let nav = nav.as_ref();
++                    let lookup = match try_parse::<isize>(nav)? {
++                        Some(n) if n < 0 => {
++                            bail!(
++                                validation("reference name must be followed by positive numbers in @{n}")
++                                    .with_input(nav)
++                            )
++                        }
++                        Some(n) if n < 100000000 => {
++                            delegate::ReflogLookup::Entry(n.try_into().expect("non-negative isize fits usize"))
++                        }
++                        n => {
++                            let now = n.is_none().then(gix_date::Zoned::now);
++                            let time = nav
++                                .to_str()
++                                .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
++                                .and_then(|date| {
++                                    gix_date::parse(date, now).or_raise(|| {
++                                        validation("could not parse time for reflog lookup").with_input(nav)
++                                    })
++                                })?;
++                            delegate::ReflogLookup::Date(time)
++                        }
++                    };
++                    delegate
++                        .reflog(lookup)
++                        .or_raise(|| validation(format!("delegate.reflog({lookup:?}) failed")).with_input(nav))?;
++                    rest = past_reflog;
++                }
+             } else if has_ref_or_implied_name {
+                 let time = nav
+                     .to_str()
+diff --git a/gix-revision/tests/revision/spec/parse/anchor/at_symbol.rs b/gix-revision/tests/revision/spec/parse/anchor/at_symbol.rs
+index 5ed5cdcfe..6717da4fd 100644
+--- a/gix-revision/tests/revision/spec/parse/anchor/at_symbol.rs
++++ b/gix-revision/tests/revision/spec/parse/anchor/at_symbol.rs
+@@ -204,6 +204,25 @@ fn sibling_branch_for_branch_name() {
+     }
+ }
+ 
++#[test]
++fn reflog_of_sibling_branch() {
++    for (spec, kind_name, expected_entry) in [
++        ("@{u}@{1}", "Upstream", "1"),
++        ("r1@{upstream}@{0}", "Upstream", "0"),
++        ("r1@{push}@{42 +0030}", "Push", "42 +0030"),
++    ] {
++        let rec = parse(spec);
++
++        assert!(rec.kind.is_none());
++        assert_eq!(rec.sibling_branch[0].as_deref(), Some(kind_name));
++        assert_eq!(
++            rec.current_branch_reflog_entry[0].as_deref(),
++            Some(expected_entry),
++            "like git, the reflog lookup applies to the sibling branch"
++        );
++    }
++}
++
+ #[test]
+ fn sibling_branch_for_hash_is_invalid() {
+     let mut message_diagnostics = Vec::new();

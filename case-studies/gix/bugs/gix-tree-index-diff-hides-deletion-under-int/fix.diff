@@ -1,0 +1,61 @@
+diff --git a/gix-diff/src/index/function.rs b/gix-diff/src/index/function.rs
+index fddcc4bc2..a05afdee7 100644
+--- a/gix-diff/src/index/function.rs
++++ b/gix-diff/src/index/function.rs
+@@ -105,6 +105,15 @@ where
+                     },
+                     Ordering::Equal => {
+                         if ignore_unmerged_and_intent_to_add(rhs) {
++                            // An intent-to-add entry has no content yet, so like Git, consider the
++                            // path absent from `rhs`, which makes it a deletion of the `lhs` entry.
++                            if rhs_entry.stage() == gix_index::entry::Stage::Unconflicted {
++                                if let std::ops::ControlFlow::Break(()) =
++                                    emit_deletion(lhs, &mut cb, tracker.as_mut())?
++                                {
++                                    return Ok(None);
++                                }
++                            }
+                             rhs_storage = rhs_iter.next();
+                             lhs_storage = lhs_iter.next();
+                             continue;
+diff --git a/gix-diff/tests/diff/index.rs b/gix-diff/tests/diff/index.rs
+index aa3c7f9b6..037075548 100644
+--- a/gix-diff/tests/diff/index.rs
++++ b/gix-diff/tests/diff/index.rs
+@@ -1366,6 +1366,36 @@ fn unmerged_entries_and_intent_to_add() -> TestResult {
+     Ok(())
+ }
+ 
++#[test]
++fn intent_to_add_over_existing_entry_is_a_deletion() -> TestResult {
++    let (lhs, mut rhs, _, _, mut pathspec) = repo_with_indices("r4-base", "r4-base", None)?;
++    let idx = rhs
++        .entry_index_by_path("src/shared.rs".into())
++        .expect("entry is present");
++    rhs.entries_mut()[idx]
++        .flags
++        .insert(gix_index::entry::Flags::INTENT_TO_ADD);
++
++    let mut out = Vec::new();
++    gix_diff::index(
++        &lhs,
++        &rhs,
++        |change| -> gix_error::Result<_> {
++            out.push(change.into_owned());
++            Ok(std::ops::ControlFlow::Continue(()))
++        },
++        None::<gix_diff::index::RewriteOptions<'_, gix_object::find::Never>>,
++        &mut pathspec,
++        &mut |_, _, _, _| false,
++    )?;
++    assert_eq!(out.len(), 1, "Git sees intent-to-add entries as absent: {out:?}");
++    assert!(
++        matches!(&out[0], Change::Deletion { location, .. } if location.as_ref() == "src/shared.rs"),
++        "{out:?}"
++    );
++    Ok(())
++}
++
+ mod util {
+     use crate::Result;
+     use std::path::{Path, PathBuf};

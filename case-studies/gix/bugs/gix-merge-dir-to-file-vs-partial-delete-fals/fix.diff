@@ -1,0 +1,155 @@
+diff --git a/gix-merge/src/tree/function/change.rs b/gix-merge/src/tree/function/change.rs
+index ecdb490dc..f16c51698 100644
+--- a/gix-merge/src/tree/function/change.rs
++++ b/gix-merge/src/tree/function/change.rs
+@@ -190,7 +190,7 @@ pub(super) fn matching(
+     })
+ }
+ 
+-fn same_effect(ours: &Change, theirs: &Change) -> bool {
++pub(super) fn same_effect(ours: &Change, theirs: &Change) -> bool {
+     std::mem::discriminant(ours) == std::mem::discriminant(theirs)
+         && ours.source_location() == theirs.source_location()
+         && ours.source_entry_mode_and_id() == theirs.source_entry_mode_and_id()
+diff --git a/gix-merge/src/tree/function/resolve.rs b/gix-merge/src/tree/function/resolve.rs
+index b9a8eab2f..09a2f4ccd 100644
+--- a/gix-merge/src/tree/function/resolve.rs
++++ b/gix-merge/src/tree/function/resolve.rs
+@@ -23,7 +23,9 @@ use crate::tree::{
+     },
+ };
+ 
+-use super::change::{MatchKind, collect as collect_changes, matching as matching_change, pair as pair_candidate};
++use super::change::{
++    MatchKind, collect as collect_changes, matching as matching_change, pair as pair_candidate, same_effect,
++};
+ 
+ /// Perform a merge between `our_tree` and `their_tree`, using `base_tree` as merge-base.
+ /// Note that `base_tree` can be an empty tree to indicate 'no common ancestor between the two sides'.
+@@ -251,6 +253,33 @@ pub fn tree<'objects>(
+                         // ours-change at `dir` itself. Handle such structural-only overlaps below.
+                         let Some(ours_idx) = ours_idx else {
+                             let candidate_ours_idx = candidate.change_idx();
++                            // Example: the base has `dir/a` and `dir/b`, ours deletes `dir/b`, and theirs replaces
++                            // `dir` with a blob, deleting `dir/b` as well. Once the shared deletion is applied, or if it
++                            // is still pending on both sides, nothing of ours below `dir` remains to conflict with their
++                            // blob, which then replaces `dir` cleanly.
++                            if candidate_ours_idx.is_none()
++                                && matches!(candidate, PossibleConflict::TreeToNonTree { .. })
++                                && our_tree.all_changes_below(
++                                    rewritten_location
++                                        .as_ref()
++                                        .map_or_else(|| theirs.source_location(), |(location, _)| location.as_bstr()),
++                                    |idx| {
++                                        let ours = &our_changes[idx];
++                                        matches!(ours.inner, Change::Deletion { .. })
++                                            && (ours.was_applied()
++                                                || (ours.is_pending()
++                                                    && matches!(
++                                                        their_tree.check_conflict(ours.inner.location()),
++                                                        Some(PossibleConflict::Match { change_idx })
++                                                            if same_effect(&their_changes[change_idx].inner, &ours.inner)
++                                                    )))
++                                    },
++                                )
++                            {
++                                apply_change(&mut editor, theirs, rewritten_location.as_ref().map(|t| &t.0))?;
++                                their_changes[theirs_idx].mark_applied();
++                                continue;
++                            }
+                             // Example: the base has `dir/file`, ours modifies `dir/file`, and theirs replaces `dir`
+                             // with a blob. Our index has descendants below `dir` but no change at `dir` itself. The
+                             // normal conflict resolution keeps our directory and moves their blob to a unique path.
+diff --git a/gix-merge/src/tree/utils.rs b/gix-merge/src/tree/utils.rs
+index 202407cac..7bd7a7fd6 100644
+--- a/gix-merge/src/tree/utils.rs
++++ b/gix-merge/src/tree/utils.rs
+@@ -608,6 +608,29 @@ impl TreeNodes {
+         .into()
+     }
+ 
++    /// Return `true` if every change indexed below the tree node at `location` satisfies `predicate`,
++    /// or `false` if there is no such node.
++    pub fn all_changes_below(&self, location: &BStr, mut predicate: impl FnMut(usize) -> bool) -> bool {
++        let mut cursor = &self.0[0];
++        for component in to_components(location) {
++            match cursor.children.get(component).copied() {
++                Some(child_idx) => cursor = &self.0[child_idx],
++                None => return false,
++            }
++        }
++        let mut stack: Vec<usize> = cursor.children.values().copied().collect();
++        while let Some(idx) = stack.pop() {
++            let node = &self.0[idx];
++            if let Some(change_idx) = node.change_idx
++                && !predicate(change_idx)
++            {
++                return false;
++            }
++            stack.extend(node.children.values().copied());
++        }
++        true
++    }
++
+     pub fn remove_existing_change(&mut self, location: &BStr) {
+         self.remove_change_inner(location, true);
+     }
+diff --git a/gix-merge/tests/fixtures/tree-baseline.sh b/gix-merge/tests/fixtures/tree-baseline.sh
+index c2388d303..b1939cbcc 100755
+--- a/gix-merge/tests/fixtures/tree-baseline.sh
++++ b/gix-merge/tests/fixtures/tree-baseline.sh
+@@ -207,6 +207,28 @@ git init deleted-file-added-gitlink-directory
+   git commit -m "replace a with a gitlink directory"
+ )
+ 
++git init tree-to-non-tree-vs-partial-delete
++(cd tree-to-non-tree-vs-partial-delete
++  mkdir a
++  write_lines 1 >a/b
++  write_lines 2 >a/c
++  git add a && git commit -m "init"
++
++  git branch A
++  git branch B
++
++  # A deletes only some of the files in `a/`, while B replaces all of `a/` with a file.
++  # A doesn't touch what B deletes, so B's file can take the place of the directory.
++  git checkout A
++  git rm a/c
++  git commit -m "delete 'a/c'"
++
++  git checkout B
++  rm -Rf a
++  echo "new file" > a
++  git add a && git commit -m "rm -Rf a/ && add non-empty 'a'"
++)
++
+ git init tree-to-non-tree
+ (cd tree-to-non-tree
+   mkdir -p a/sub
+@@ -2306,6 +2328,7 @@ git init type-change-to-symlink
+ baseline non-tree-to-tree A-B A B
+ baseline deleted-file-added-dir A-B A B
+ baseline deleted-file-added-gitlink-directory A-B A B
++baseline tree-to-non-tree-vs-partial-delete A-B A B
+ baseline tree-to-non-tree A-B A B
+ baseline tree-to-non-tree-with-rename A-B A B
+ baseline non-tree-to-tree-with-rename A-B A B
+diff --git a/gix-merge/tests/merge/tree/mod.rs b/gix-merge/tests/merge/tree/mod.rs
+index 7f418093a..9075e56e8 100644
+--- a/gix-merge/tests/merge/tree/mod.rs
++++ b/gix-merge/tests/merge/tree/mod.rs
+@@ -223,11 +223,11 @@ fn run_baseline() -> TestResult {
+     }
+ 
+     assert_eq!(
+-        actual_cases, 187,
++        actual_cases, 189,
+         "BUG: update this number, and don't forget to remove a filter in the end"
+     );
+     assert_eq!(
+-        skipped_tree_resolve_cases, 174,
++        skipped_tree_resolve_cases, 178,
+         "this is done when no case is skipped, and we don't want to accidentally skip them.\
+         Some don't actually have conflicts.\
+         The ones we skipped don't have irreconcilable conflicts"

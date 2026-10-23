@@ -1,0 +1,17 @@
+diff --git a/brush-core/src/commands.rs b/brush-core/src/commands.rs
+index b234cd3..6a25c29 100644
+--- a/brush-core/src/commands.rs
++++ b/brush-core/src/commands.rs
+@@ -810,7 +810,11 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
+ 
+     let mut async_reader = sys::async_pipe::AsyncPipeReader::new(reader)?;
+ 
+-    let cmd_join_handle = sys::tasks::spawn(run_substitution_command(subshell, params, s));
++    // The command may block the thread it runs on (e.g., a builtin writing more to the pipe
++    // than it holds before we read it), so it must not run on a runtime worker thread: a
++    // blocked worker can stop driving I/O, so our read of the pipe never wakes up.
++    let cmd_join_handle =
++        sys::tasks::spawn_blocking(run_substitution_command(subshell, params, s)).await;
+ 
+     let output_str = async_reader.read_to_string().await?;
+ 

@@ -1,0 +1,81 @@
+From 5509eb23d1f9e382e7e6ace718266957765bfc01 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Thu, 22 Oct 2026 12:25:37 -0400
+Subject: [PATCH] to_cmm: split a must_inline_and_duplicate binding only once
+
+With -Oclassic -flambda2-expert-inline-effects-in-cmm, a boxed number
+that is used twice and whose unboxed value comes from an external call,
+e.g. [y] in
+
+  let f x = let y = sin x in (y, y)
+
+made ocamlopt fail with "Duplicate order for bindings when flushing".
+
+add_binding_to_env split the binding in add_to_effect_stages (the
+inlined call is effectful), then passed the original, unsplit binding to
+add_to_validity_stages, which split it again (the call is also a control
+flow point). This bound the call twice, with the same order. Pass the
+split binding to add_to_validity_stages instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ middle_end/flambda2/to_cmm/to_cmm_env.ml      |  7 ++++-
+ .../inline_effects_in_cmm_duplicated_box.ml   | 28 +++++++++++++++++++
+ 2 files changed, 34 insertions(+), 1 deletion(-)
+ create mode 100644 testsuite/tests/flambda2/inline_effects_in_cmm_duplicated_box.ml
+
+diff --git a/middle_end/flambda2/to_cmm/to_cmm_env.ml b/middle_end/flambda2/to_cmm/to_cmm_env.ml
+index f94e9180f8..5dca79ad5a 100644
+--- a/middle_end/flambda2/to_cmm/to_cmm_env.ml
++++ b/middle_end/flambda2/to_cmm/to_cmm_env.ml
+@@ -677,7 +677,12 @@ let rec add_binding_to_env ?extra env res var (Binding binding as b) =
+     { env with bindings; vars; vars_extra }
+   in
+   let env, res = add_to_effect_stages env res var (Binding binding) in
+-  let env, res = add_to_validity_stages env res var (Binding binding) in
++  (* [add_to_effect_stages] may have split the binding and replaced it in
++     [env.bindings]. Use the binding from [env], so that it is not split a
++     second time. *)
++  let env, res =
++    add_to_validity_stages env res var (Variable.Map.find var env.bindings)
++  in
+   env, res
+ 
+ and add_to_effect_stages env res var (Binding binding) =
+diff --git a/testsuite/tests/flambda2/inline_effects_in_cmm_duplicated_box.ml b/testsuite/tests/flambda2/inline_effects_in_cmm_duplicated_box.ml
+new file mode 100644
+index 0000000000..5b009b6ad5
+--- /dev/null
++++ b/testsuite/tests/flambda2/inline_effects_in_cmm_duplicated_box.ml
+@@ -0,0 +1,28 @@
++(* TEST
++   flambda2;
++   ocamlopt_flags += "-Oclassic -flambda2-expert-inline-effects-in-cmm";
++   native;
++*)
++
++(* In classic mode, boxing a number that is used more than once is substituted
++   and duplicated by To_cmm. With -flambda2-expert-inline-effects-in-cmm, the
++   effectful external call that produces the unboxed number is inlined into the
++   boxing, and the binding must be split only once. *)
++
++let[@inline never] pair x =
++  let y = sin x in
++  y, y
++
++let[@inline never] sum x =
++  let y = sqrt x in
++  y +. y
++
++let[@inline never] array x =
++  let y = exp x in
++  [| y; y |]
++
++let () =
++  let a, b = pair 1.0 in
++  assert (a = sin 1.0 && b = sin 1.0);
++  assert (sum 4.0 = 4.0);
++  assert (array 0.0 = [| 1.0; 1.0 |])
+-- 
+2.56.0
+

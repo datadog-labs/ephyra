@@ -1,0 +1,21 @@
+diff --git a/gix/src/commit/mod.rs b/gix/src/commit/mod.rs
+index 13fa0563b..1a32c97f9 100644
+--- a/gix/src/commit/mod.rs
++++ b/gix/src/commit/mod.rs
+@@ -157,7 +157,15 @@ pub mod describe {
+                             //       so rather follow symrefs till the first object and then peel tags after the first object was found.
+                             let tag = r.try_id()?.object().ok()?.try_into_tag().ok()?;
+                             let tag_time = tag.tagger().ok().and_then(|s| s.map(|s| s.seconds())).unwrap_or(0);
+-                            let commit_id = tag.target_id().ok()?.object().ok()?.try_into_commit().ok()?.id;
++                            // The tag may point to another tag, which is peeled until the commit is found.
++                            let commit_id = tag
++                                .target_id()
++                                .ok()?
++                                .object()
++                                .ok()?
++                                .peel_to_kind(gix_object::Kind::Commit)
++                                .ok()?
++                                .id;
+                             Some((commit_id, tag_time, Cow::<BStr>::from(r.name().shorten().to_owned())))
+                         })
+                         .collect();

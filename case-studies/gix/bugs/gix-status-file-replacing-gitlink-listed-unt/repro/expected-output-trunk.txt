@@ -1,0 +1,6 @@
+--- git status --porcelain=v2
+1 .T S... 160000 160000 100644 5afe7f05a3ec295d397d254d52e1029f2d3afd96 5afe7f05a3ec295d397d254d52e1029f2d3afd96 f
+--- git ls-files -o
+--- gix status (index/worktree items)
+Added f
+TypeChange f

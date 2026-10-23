@@ -1,0 +1,101 @@
+From 7daa8e17da3c7d4ba0881c3d8bce755a3f0eb513 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Thu, 22 Oct 2026 13:04:39 -0400
+Subject: [PATCH] Ssa_tail_call: require an empty continuation for tail calls
+
+Flambda 2 can leave unused effect-free operations between a call and
+the return of its result, e.g. the Cmm for
+
+  let f x = let r = g x in let _ = Int64.to_float 5L in r
+
+is (let (r (app g x) _ (int->float 5)) r). Cfg_selectgen compiles that
+as a call followed by a return, but Ssa_tail_call accepted any
+effect-free instructions in the continuation and made it a tail call,
+so -use-ssa (with the default -ssa-validate) aborted with "CFG
+comparison MISMATCH". Only accept continuations without instructions,
+which is what Ssa_of_cmm produces for a call in tail position.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ backend/ssa/ssa_tail_call.ml                  | 14 ++++----
+ .../tests/codegen/ssa_tail_call_dead_ops.ml   | 35 +++++++++++++++++++
+ 2 files changed, 42 insertions(+), 7 deletions(-)
+ create mode 100644 testsuite/tests/codegen/ssa_tail_call_dead_ops.ml
+
+diff --git a/backend/ssa/ssa_tail_call.ml b/backend/ssa/ssa_tail_call.ml
+index a1b40cd7d6..2b4ec4a9ab 100644
+--- a/backend/ssa/ssa_tail_call.ml
++++ b/backend/ssa/ssa_tail_call.ml
+@@ -45,7 +45,10 @@ open Ssa_reducer
+     [Clet (x, Capply ..., Cvar x)] in tail position that [Cfg_selectgen]
+     compiles as a normal call followed by a return. Such shapes would show up as
+     a [Cfg_compare] mismatch under [-ssa-validate]; they do not seem to be
+-    produced in practice. *)
++    produced in practice. The continuation must not contain any instructions,
++    though: Flambda 2 can leave unused effect-free operations between a call and
++    the return of its result, and [Cfg_selectgen] does not make such calls tail
++    calls either. *)
+ module Tail_call_reducer : Reducer = struct
+   open! Context
+   include Default_reducer
+@@ -53,13 +56,10 @@ module Tail_call_reducer : Reducer = struct
+   let returns_args_unchanged (block : finished Block.t) : bool =
+     match Block.terminator block with
+     | Continue { continuation = Return; args } ->
+-      (* Skipping the block must not lose any observable effect; effect-free
+-         instructions (including debug-info markers) are fine since their
+-         results are not returned. *)
++      (* [Ssa_of_cmm] emits nothing between a call in tail position and its
++         [Return]. *)
+       let params = Block.params block in
+-      Array.for_all
+-        (fun instr -> not (Instruction.has_side_effect instr))
+-        (Block.body block)
++      Array.length (Block.body block) = 0
+       && Array.length args = Array.length params
+       && Array.for_all2
+            (fun arg param ->
+diff --git a/testsuite/tests/codegen/ssa_tail_call_dead_ops.ml b/testsuite/tests/codegen/ssa_tail_call_dead_ops.ml
+new file mode 100644
+index 0000000000..ba649470d2
+--- /dev/null
++++ b/testsuite/tests/codegen/ssa_tail_call_dead_ops.ml
+@@ -0,0 +1,35 @@
++(* TEST
++ flags += " -use-ssa";
++ only-default-codegen;
++ native;
++*)
++
++(* [-ssa-validate] is on by default with [-use-ssa]. The unused conversions
++   stay in Cmm between each call and the return of its result, so
++   [Cfg_selectgen] does not make these calls tail calls, and [Ssa_tail_call]
++   must not either. *)
++
++let[@inline never] g x = x + 1
++
++let direct x =
++  let r = g x in
++  let _ = Int64.to_float 5L in
++  r
++
++let indirect h x =
++  let r = h x in
++  let _ = Int64.to_float 5L in
++  r
++
++let rec self n =
++  if n = 0
++  then 0
++  else
++    let r = self (n - 1) in
++    let _ = Int64.to_float 5L in
++    r
++
++let () =
++  assert (direct 41 = 42);
++  assert (indirect g 41 = 42);
++  assert (self 10 = 0)
+-- 
+2.56.0
+

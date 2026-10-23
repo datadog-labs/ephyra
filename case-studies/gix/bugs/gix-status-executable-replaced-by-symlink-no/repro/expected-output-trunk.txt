@@ -1,0 +1,5 @@
+git version 2.56.0
+--- git status --short
+ T a
+--- gix status (index/worktree items)
+Modified a

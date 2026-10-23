@@ -1,0 +1,104 @@
+From c9897d52b449323b25a8ad7bd791f1da42ad6781 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 17:38:20 -0400
+Subject: [PATCH] [EH] Fix invalid trampoline block for unreachable delegate
+ target bodies
+
+When a try that is the target of a delegate has an unreachable body,
+TranslateToExnref::processDelegateTarget adds no br to the outer block,
+and Builder::blockifyWithName reuses the unnamed body block as the
+(result exnref) trampoline block. If that block ends with a none-typed
+expression, e.g. `(unreachable) (nop)`, it becomes a block with a value
+whose last element is none, and validation after the pass fails with
+"block with value must not have last element that is none".
+
+Wrap such a body in a new block instead of reusing it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/passes/TranslateEH.cpp               | 12 ++++++-
+ test/lit/passes/translate-to-exnref.wast | 45 ++++++++++++++++++++++++
+ 2 files changed, 56 insertions(+), 1 deletion(-)
+
+diff --git a/src/passes/TranslateEH.cpp b/src/passes/TranslateEH.cpp
+index 23d21e6..94d6060 100644
+--- a/src/passes/TranslateEH.cpp
++++ b/src/passes/TranslateEH.cpp
+@@ -302,7 +302,17 @@ struct TranslateToExnref : public WalkerPass<PostWalker<TranslateToExnref>> {
+       auto* brToOuter = curr->body->type == Type::unreachable
+                           ? nullptr
+                           : builder.makeBreak(outerBlock->name);
+-      innerBody = builder.blockifyWithName(curr->body,
++      // An unreachable body can be a block that ends with a none-typed
++      // expression, which cannot end a block with a value, so wrap it instead
++      // of reusing it as the trampoline block.
++      auto* bodyBlock = curr->body->dynCast<Block>();
++      Expression* body = curr->body;
++      if (!brToOuter && bodyBlock && !bodyBlock->name.is() &&
++          !bodyBlock->list.empty() &&
++          bodyBlock->list.back()->type != Type::unreachable) {
++        body = builder.makeBlock(curr->body);
++      }
++      innerBody = builder.blockifyWithName(body,
+                                            delegateTrampoline,
+                                            brToOuter,
+                                            Type(HeapType::exn, Nullable));
+diff --git a/test/lit/passes/translate-to-exnref.wast b/test/lit/passes/translate-to-exnref.wast
+index b416850..11b0ecb 100644
+--- a/test/lit/passes/translate-to-exnref.wast
++++ b/test/lit/passes/translate-to-exnref.wast
+@@ -1827,6 +1827,51 @@
+     )
+   )
+ 
++  ;; CHECK:      (func $delegate-target-outer-try-unreachable-ends-with-none (type $1)
++  ;; CHECK-NEXT:  (try_table
++  ;; CHECK-NEXT:   (throw_ref
++  ;; CHECK-NEXT:    (block $l00 (result exnref)
++  ;; CHECK-NEXT:     (block
++  ;; CHECK-NEXT:      (try_table (catch_all_ref $l00)
++  ;; CHECK-NEXT:       (call $foo)
++  ;; CHECK-NEXT:      )
++  ;; CHECK-NEXT:      (return)
++  ;; CHECK-NEXT:      (nop)
++  ;; CHECK-NEXT:     )
++  ;; CHECK-NEXT:    )
++  ;; CHECK-NEXT:   )
++  ;; CHECK-NEXT:  )
++  ;; CHECK-NEXT: )
++  ;; STACKIR-OPT:      (func $delegate-target-outer-try-unreachable-ends-with-none (type $1)
++  ;; STACKIR-OPT-NEXT:  try_table
++  ;; STACKIR-OPT-NEXT:   block $l00 (result exnref)
++  ;; STACKIR-OPT-NEXT:    try_table (catch_all_ref $l00)
++  ;; STACKIR-OPT-NEXT:     call $foo
++  ;; STACKIR-OPT-NEXT:    end
++  ;; STACKIR-OPT-NEXT:    return
++  ;; STACKIR-OPT-NEXT:   end
++  ;; STACKIR-OPT-NEXT:   throw_ref
++  ;; STACKIR-OPT-NEXT:  end
++  ;; STACKIR-OPT-NEXT:  unreachable
++  ;; STACKIR-OPT-NEXT: )
++  (func $delegate-target-outer-try-unreachable-ends-with-none
++    ;; Same as above, but the unreachable body ends with a none-typed
++    ;; instruction. The body block should not be reused as the exnref-typed
++    ;; trampoline block, which would be invalid.
++    (try $l0
++      (do
++        (try
++          (do
++            (call $foo)
++          )
++          (delegate $l0)
++        )
++        (return)
++        (nop)
++      )
++    )
++  )
++
+   ;; CHECK:      (func $delegate-target-caller-none (type $1)
+   ;; CHECK-NEXT:  (throw_ref
+   ;; CHECK-NEXT:   (block $__binaryen_delegate_caller_target0 (result exnref)
+-- 
+2.56.0
+

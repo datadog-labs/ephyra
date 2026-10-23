@@ -1,0 +1,21 @@
+== git merge-file -p ours base theirs
+a
+
+
+b
+<<<<<<< ours
+
+b
+=======
+c
+>>>>>>> theirs
+git exit status: 1 (1 = one conflict)
+== gix merge file ours base theirs
+a
+
+
+b
+
+b
+c
+gix exit status: 0

@@ -1,0 +1,82 @@
+diff --git a/brush-builtins/src/read.rs b/brush-builtins/src/read.rs
+index 644209c2..25048650 100644
+--- a/brush-builtins/src/read.rs
++++ b/brush-builtins/src/read.rs
+@@ -298,12 +298,10 @@ struct InputReader {
+     /// Bytes from a malformed UTF-8 sequence, still owed to the caller one at a time.
+     pending: VecDeque<char>,
+     /// Terminal mode guard - kept alive for RAII cleanup on drop.
+-    /// The guard restores original terminal settings when dropped, even though
+-    /// we don't access the field directly after construction.
+-    ///
+-    /// The leading underscore suppresses the "unused field" warning while making
+-    /// it explicit this field exists solely for its `Drop` implementation.
+-    _term_mode: Option<brush_core::terminal::AutoModeGuard>,
++    /// The guard restores original terminal settings when dropped. It is only present
++    /// when the input is a terminal, so it also tells us whether control characters
++    /// are keystrokes to interpret or plain data to keep.
++    term_mode: Option<brush_core::terminal::AutoModeGuard>,
+ }
+ 
+ /// Events that can occur when reading input.
+@@ -336,7 +334,7 @@ impl InputReader {
+                 },
+             ),
+             pending: VecDeque::new(),
+-            _term_mode: term_mode,
++            term_mode,
+         }
+     }
+ 
+@@ -375,13 +373,22 @@ impl InputReader {
+             }
+         };
+ 
+-        // Map control characters to events.
++        // Map control characters to events. They are keystrokes only when reading from a
++        // terminal (which we put in non-canonical mode); from a pipe or file they are data.
++        if !self.is_terminal() {
++            return Ok(InputEvent::Char(ch));
++        }
+         Ok(match ch {
+             CTRL_C => InputEvent::CtrlC,
+             CTRL_D => InputEvent::CtrlD,
+             _ => InputEvent::Char(ch),
+         })
+     }
++
++    /// Returns whether the input is a terminal whose settings we adjusted.
++    const fn is_terminal(&self) -> bool {
++        self.term_mode.is_some()
++    }
+ }
+ 
+ /// Reads the input file one byte at a time, enforcing the deadline on every byte.
+@@ -518,8 +525,9 @@ fn read_line_with_reader(
+                     return Ok(ReadResult::Line(line));
+                 }
+ 
+-                // Ignore non-whitespace control characters.
+-                if ch.is_ascii_control() && !ch.is_ascii_whitespace() {
++                // Ignore non-whitespace control characters typed at a terminal; from
++                // other input they are kept verbatim, as bash does.
++                if reader.is_terminal() && ch.is_ascii_control() && !ch.is_ascii_whitespace() {
+                     continue;
+                 }
+ 
+diff --git a/brush-shell/tests/cases/compat/builtins/read.yaml b/brush-shell/tests/cases/compat/builtins/read.yaml
+index 285a9726..6e9dd39a 100644
+--- a/brush-shell/tests/cases/compat/builtins/read.yaml
++++ b/brush-shell/tests/cases/compat/builtins/read.yaml
+@@ -450,6 +450,10 @@ cases:
+       echo "read: $?"
+ 
+   - name: "read takes control characters from a pipe as data"
+-    known_failure: true # TODO(signals): control characters are dropped from any input
+     stdin: |
+       printf 'a\003b\004c\n' | { read -r x; echo "rc=$? len=${#x}"; }
++
++  - name: "read keeps other control characters from non-terminal input"
++    stdin: |
++      printf 'a\001b\033e\177f\n' | { read -r x; echo "rc=$?"; printf '%s' "$x" | od -An -tx1; }
++      v=$'p\x7fq'; read -r y <<< "$v"; printf '%s' "$y" | od -An -tx1

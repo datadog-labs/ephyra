@@ -1,0 +1,168 @@
+diff --git a/gix-merge/src/tree/function/resolve.rs b/gix-merge/src/tree/function/resolve.rs
+index 09a2f4ccd..e6428027d 100644
+--- a/gix-merge/src/tree/function/resolve.rs
++++ b/gix-merge/src/tree/function/resolve.rs
+@@ -192,13 +192,29 @@ pub fn tree<'objects>(
+                     their_tree.insert(theirs, theirs_idx);
+                 }
+ 
+-                match matching_change(
++                let mut candidate = matching_change(
+                     theirs,
+                     *needs_tree_insertion,
+                     rewritten_location.as_ref(),
+                     our_tree,
+                     our_changes,
+-                ) {
++                );
++                // Example: the base has `dir/file` and `a`, ours modifies `dir/file`, and theirs renames `a` to `dir`.
++                // The rename source has no counterpart, but its destination replaces our directory. Handle it like
++                // a blob replacing `dir`, so applying the rename doesn't discard our directory or have it discarded.
++                let rename_destination_replaces_our_tree = candidate.is_none()
++                    && rewritten_location.is_none()
++                    && matches!(theirs, Change::Rewrite { copy: false, .. })
++                    && matches!(
++                        our_tree.check_conflict(theirs.location()),
++                        Some(PossibleConflict::TreeToNonTree { change_idx: None })
++                    )
++                    // A node without indexed descendants, e.g. one left by a removed change, has no directory to keep.
++                    && !our_tree.all_changes_below(theirs.location(), |_| false);
++                if rename_destination_replaces_our_tree {
++                    candidate = Some(PossibleConflict::TreeToNonTree { change_idx: None });
++                }
++                match candidate {
+                     None => {
+                         if let Some((rewritten_location, ours_idx)) = rewritten_location {
+                             // The deferred change has no conflict at its directory-rewritten destination. Record the
+@@ -260,9 +276,16 @@ pub fn tree<'objects>(
+                             if candidate_ours_idx.is_none()
+                                 && matches!(candidate, PossibleConflict::TreeToNonTree { .. })
+                                 && our_tree.all_changes_below(
+-                                    rewritten_location
+-                                        .as_ref()
+-                                        .map_or_else(|| theirs.source_location(), |(location, _)| location.as_bstr()),
++                                    rewritten_location.as_ref().map_or_else(
++                                        || {
++                                            if rename_destination_replaces_our_tree {
++                                                theirs.location()
++                                            } else {
++                                                theirs.source_location()
++                                            }
++                                        },
++                                        |(location, _)| location.as_bstr(),
++                                    ),
+                                     |idx| {
+                                         let ours = &our_changes[idx];
+                                         matches!(ours.inner, Change::Deletion { .. })
+@@ -299,10 +322,16 @@ pub fn tree<'objects>(
+                                 )?;
+                                 match resolve_tree_conflicts {
+                                     None => {
++                                        if rename_destination_replaces_our_tree {
++                                            editor.remove_if_leaf(to_components(theirs.source_location()))?;
++                                        }
+                                         editor.upsert(toc(&renamed_location), mode.kind(), id.to_owned())?;
+                                     }
+                                     Some(ResolveWith::Ours) => {
+                                         if outer_side.is_swapped() {
++                                            if rename_destination_replaces_our_tree {
++                                                editor.remove_if_leaf(to_components(theirs.source_location()))?;
++                                            }
+                                             editor.upsert(to_components(location), mode.kind(), id.to_owned())?;
+                                         }
+                                     }
+diff --git a/gix-merge/tests/fixtures/tree-baseline.sh b/gix-merge/tests/fixtures/tree-baseline.sh
+index b1939cbcc..723df4575 100755
+--- a/gix-merge/tests/fixtures/tree-baseline.sh
++++ b/gix-merge/tests/fixtures/tree-baseline.sh
+@@ -269,6 +269,48 @@ git init non-tree-to-tree-with-rename
+   git add a && git commit -m "mv 'a' to 'a/sub/b', populate 'a/' with empty files"
+ )
+ 
++git init rename-onto-modified-dir
++(cd rename-onto-modified-dir
++  mkdir a
++  write_lines original 1 2 3 4 5 >a/b
++  write_lines other 1 2 3 >c
++  git add . && git commit -m "init"
++
++  git branch A
++  git branch B
++
++  git checkout A
++  write_lines 1 2 3 4 5 6 >a/b
++  git commit -am "'A' changes 'a/b'"
++
++  # B replaces the directory `a` by renaming `c` onto it. As A still has a modified file in `a/`,
++  # the renamed file must be kept at a unique path next to A's directory instead of being lost.
++  git checkout B
++  git rm -rq a
++  git mv c a
++  git commit -m "rm a/ && mv c a"
++)
++
++git init rename-symlink-onto-modified-dir
++(cd rename-symlink-onto-modified-dir
++  mkdir a
++  write_lines original 1 2 3 4 5 >a/b
++  ln -s target l
++  git add . && git commit -m "init"
++
++  git branch A
++  git branch B
++
++  git checkout A
++  write_lines 1 2 3 4 5 6 >a/b
++  git commit -am "'A' changes 'a/b'"
++
++  git checkout B
++  git rm -rq a
++  git mv l a
++  git commit -m "rm a/ && mv l a"
++)
++
+ git init tree-to-non-tree-with-rename
+ (cd tree-to-non-tree-with-rename
+   mkdir -p a/sub
+@@ -2331,6 +2373,8 @@ baseline deleted-file-added-gitlink-directory A-B A B
+ baseline tree-to-non-tree-vs-partial-delete A-B A B
+ baseline tree-to-non-tree A-B A B
+ baseline tree-to-non-tree-with-rename A-B A B
++baseline rename-onto-modified-dir A-B A B
++baseline rename-symlink-onto-modified-dir A-B A B
+ baseline non-tree-to-tree-with-rename A-B A B
+ baseline rename-add-same-symlink A-B A B
+ baseline rename-add-exe-bit-conflict A-B A B
+@@ -3569,3 +3613,19 @@ EOF
+ EOF
+   make_resolve_tree ours B A
+ )
++
++for dir in rename-onto-modified-dir rename-symlink-onto-modified-dir; do
++  (cd $dir
++    # The modification below `a/` conflicts with the deletion of `a/`, and the rename onto `a` conflicts with
++    # the directory that remains, so choosing the ancestor keeps the ancestor's directory and the rename source.
++    git read-tree main
++    make_resolve_tree ancestor A B
++    make_resolve_tree ancestor B A
++
++    # Choosing ours keeps precisely the side named first: either A's modified directory or B's renamed entry.
++    git read-tree A
++    make_resolve_tree ours A B
++    git read-tree B
++    make_resolve_tree ours B A
++  )
++done
+diff --git a/gix-merge/tests/merge/tree/mod.rs b/gix-merge/tests/merge/tree/mod.rs
+index 9075e56e8..53ac849b2 100644
+--- a/gix-merge/tests/merge/tree/mod.rs
++++ b/gix-merge/tests/merge/tree/mod.rs
+@@ -223,7 +223,7 @@ fn run_baseline() -> TestResult {
+     }
+ 
+     assert_eq!(
+-        actual_cases, 189,
++        actual_cases, 193,
+         "BUG: update this number, and don't forget to remove a filter in the end"
+     );
+     assert_eq!(

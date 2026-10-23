@@ -1,0 +1,137 @@
+diff --git a/brush-core/src/error.rs b/brush-core/src/error.rs
+index 9f3ed3d..1abb8e2 100644
+--- a/brush-core/src/error.rs
++++ b/brush-core/src/error.rs
+@@ -16,6 +16,9 @@ pub struct Error {
+     /// Whether or not the error should be considered a "fatal" error that would
+     /// result in abnormal exit of a non-interactive shell.
+     fatal: bool,
++
++    /// Whether or not the error has already been displayed to the user.
++    reported: bool,
+ }
+ 
+ /// Monolithic error type for the shell
+@@ -407,6 +410,7 @@ where
+         Self {
+             kind: Box::new(convertible_to_kind.into()),
+             fatal: false,
++            reported: false,
+         }
+     }
+ }
+@@ -419,6 +423,18 @@ impl Error {
+         self
+     }
+ 
++    /// Marks this error as already displayed to the user.
++    #[must_use]
++    pub(crate) const fn into_reported(mut self) -> Self {
++        self.reported = true;
++        self
++    }
++
++    /// Returns whether or not this error has already been displayed to the user.
++    pub(crate) const fn is_reported(&self) -> bool {
++        self.reported
++    }
++
+     /// Returns whether or not this error is fatal.
+     pub const fn is_fatal(&self) -> bool {
+         self.fatal
+diff --git a/brush-core/src/interp.rs b/brush-core/src/interp.rs
+index 5e92d51..28c6a29 100644
+--- a/brush-core/src/interp.rs
++++ b/brush-core/src/interp.rs
+@@ -630,6 +630,11 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
+                     }
+                 }
+ 
++                // An error from the body must be reported while this command's redirections are
++                // still in effect (e.g. `{ ...; } 2>/dev/null`), not later by an enclosing
++                // command with the outer stderr.
++                let redirected = redirects.is_some();
++
+                 match pipeline_context.shell {
+                     // An owned shell is a discarded clone, so this stage can run asynchronously.
+                     // That lets the pipeline start readers before writers fill the pipe.
+@@ -637,13 +642,15 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
+                         let (mut shell, compound) = (*target, compound.clone());
+                         Ok(ExecutionSpawnResult::StartedTask(
+                             sys::tasks::spawn_blocking(async move {
+-                                compound.execute(&mut shell, &params).await
++                                let result = compound.execute(&mut shell, &params).await;
++                                report_redirected_error(&shell, &params, redirected, result)
+                             })
+                             .await,
+                         ))
+                     }
+                     commands::ShellForCommand::ParentShell(shell) => {
+-                        Ok(compound.execute(shell, &params).await?.into())
++                        let result = compound.execute(shell, &params).await;
++                        Ok(report_redirected_error(shell, &params, redirected, result)?.into())
+                     }
+                 }
+             }
+@@ -655,6 +662,24 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
+     }
+ }
+ 
++/// If `redirected`, displays an error from a compound command using the command's own
++/// (redirected) stderr, and marks it as reported so it is not displayed again as it
++/// propagates.
++fn report_redirected_error(
++    shell: &Shell<impl extensions::ShellExtensions>,
++    params: &ExecutionParameters,
++    redirected: bool,
++    result: Result<ExecutionResult, error::Error>,
++) -> Result<ExecutionResult, error::Error> {
++    match result {
++        Err(err) if redirected => {
++            let _ = shell.display_error(&mut params.stderr(shell), &err);
++            Err(err.into_reported())
++        }
++        other => other,
++    }
++}
++
+ enum WhileOrUntil {
+     While,
+     Until,
+diff --git a/brush-core/src/shell/io.rs b/brush-core/src/shell/io.rs
+index 9037891..f776413 100644
+--- a/brush-core/src/shell/io.rs
++++ b/brush-core/src/shell/io.rs
+@@ -81,6 +81,9 @@ impl<SE: extensions::ShellExtensions> crate::Shell<SE> {
+         err: &error::Error,
+     ) -> Result<(), error::Error> {
+         use crate::extensions::ErrorFormatter as _;
++        if err.is_reported() {
++            return Ok(());
++        }
+         let str = self.error_formatter.format_error(err, self);
+         write!(file, "{str}")?;
+ 
+diff --git a/brush-shell/tests/cases/compat/errors.yaml b/brush-shell/tests/cases/compat/errors.yaml
+index 2038003..3f545a7 100644
+--- a/brush-shell/tests/cases/compat/errors.yaml
++++ b/brush-shell/tests/cases/compat/errors.yaml
+@@ -419,12 +419,17 @@ cases:
+       [[ $out == *$'\e'* ]] && echo "builtin error: colored" || echo "builtin error: plain"
+ 
+   - name: "Expansion error in a redirected group"
+-    known_failure: true # TODO(errors): the error leaves the group before it's shown, so it's shown on the shell's stderr despite the group's redirect, and the shell exits with status 1 rather than 127
+     stdin: |
+       unset zz
+       { echo "${zz?unset}"; } 2>/dev/null
+       echo "not reached"
+ 
++  - name: "Array subscript error in a redirected group"
++    stdin: |
++      a=(x)
++      { a[-2]=y; } 2>/dev/null
++      echo "status: $?"
++
+   - name: "Builtin diagnostics carry the script location"
+     known_failure: true # TODO(errors): brush prints no "file: line N:" location
+     stdin: |

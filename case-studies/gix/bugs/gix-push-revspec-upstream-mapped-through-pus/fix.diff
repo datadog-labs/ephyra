@@ -1,0 +1,64 @@
+diff --git a/gix/src/repository/config/branch.rs b/gix/src/repository/config/branch.rs
+index db5884eb0..f4b654ce5 100644
+--- a/gix/src/repository/config/branch.rs
++++ b/gix/src/repository/config/branch.rs
+@@ -62,19 +62,10 @@ impl crate::Repository {
+                     Err(err) => return Some(Err(err)),
+                 };
+                 if remote.push_specs.is_empty() {
+-                    let push_default =
+-                        match self
+-                            .config
+-                            .resolved
+-                            .string(Push::DEFAULT)
+-                            .map_or(Ok(Default::default()), |v| {
+-                                Push::DEFAULT
+-                                    .try_into_default(v)
+-                                    .with_lenient_default(self.config.lenient_config)
+-                            }) {
+-                            Ok(v) => v,
+-                            Err(err) => return Some(Err(err)),
+-                        };
++                    let push_default = match self.push_default() {
++                        Ok(v) => v,
++                        Err(err) => return Some(Err(err)),
++                    };
+                     match push_default {
+                         push::Default::Nothing => None,
+                         push::Default::Current | push::Default::Matching => Some(Ok(name.to_owned())),
+@@ -132,6 +123,15 @@ impl crate::Repository {
+             }
+         };
+ 
++        // With `push.default=upstream`, Git reports the upstream tracking branch, which is tracked through
++        // the fetch remote of the branch, not through the push remote (they differ in triangular workflows).
++        if direction == remote::Direction::Push
++            && remote.push_specs.is_empty()
++            && matches!(self.push_default(), Ok(push::Default::Upstream))
++        {
++            return self.branch_remote_tracking_ref_name(name, remote::Direction::Fetch);
++        }
++
+         if remote.fetch_specs.is_empty() {
+             return None;
+         }
+@@ -251,6 +251,19 @@ impl crate::Repository {
+     }
+ }
+ 
++impl crate::Repository {
++    fn push_default(&self) -> Result<push::Default> {
++        self.config
++            .resolved
++            .string(Push::DEFAULT)
++            .map_or(Ok(Default::default()), |v| {
++                Push::DEFAULT
++                    .try_into_default(v)
++                    .with_lenient_default(self.config.lenient_config)
++            })
++    }
++}
++
+ fn source_ref_to_full_name(source: gix_refspec::match_group::SourceRef<'_>) -> Result<FullName> {
+     match source {
+         gix_refspec::match_group::SourceRef::FullName(name) => gix_ref::FullName::try_from(name.into_owned())

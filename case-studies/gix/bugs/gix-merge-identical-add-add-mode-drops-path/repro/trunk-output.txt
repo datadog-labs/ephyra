@@ -1,0 +1,11 @@
+git version 2.56.0
+== git merge-tree main side
+534214061d10f28dc90e50ba441f70772e2b98e4
+100644 0cfbf08886fca9a91cb753ec8734c84fcbe52c9f 2	b
+100755 0cfbf08886fca9a91cb753ec8734c84fcbe52c9f 3	b
+
+CONFLICT (add/add): Merge conflict in b
+git exit status: 1 (1 = conflicts)
+== gix merge_commits(main, side)
+100644 blob d00491fd7e5bb6fa28c517a0bb32b8b506539d4d	a
+gix unresolved_conflicts: true, resolutions: Err(Unknown)

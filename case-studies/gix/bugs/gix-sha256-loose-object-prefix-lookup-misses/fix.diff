@@ -1,0 +1,54 @@
+diff --git a/gix-odb/src/store_impls/loose/find.rs b/gix-odb/src/store_impls/loose/find.rs
+index c9469e16a..9fe0c4de0 100644
+--- a/gix-odb/src/store_impls/loose/find.rs
++++ b/gix-odb/src/store_impls/loose/find.rs
+@@ -34,7 +34,7 @@ impl Store {
+                 .max_depth(1)
+                 .follow_links(false)
+                 .into_iter(),
+-            hash_hex_len: prefix.as_oid().kind().len_in_hex(),
++            hash_hex_len: self.object_hash.len_in_hex(),
+         };
+         let mut candidate = None;
+         for oid in single_directory_iter {
+diff --git a/gix-odb/tests/odb/store/loose.rs b/gix-odb/tests/odb/store/loose.rs
+index 902b54ce8..33f63131c 100644
+--- a/gix-odb/tests/odb/store/loose.rs
++++ b/gix-odb/tests/odb/store/loose.rs
+@@ -257,7 +257,7 @@ mod lookup_prefix {
+ 
+     use crate::{
+         hex_to_id,
+-        store::loose::{ldb, ldb_at},
++        store::loose::{ldb, ldb_at, ldb_at_opts},
+     };
+ 
+     #[test]
+@@ -330,6 +330,27 @@ mod lookup_prefix {
+             }
+         }
+     }
++
++    #[test]
++    fn short_hex_prefixes_find_sha256_objects() {
++        let objects_dir = gix_testtools::tempfile::tempdir().unwrap();
++        let hex = "abcd6ac64baf0082ea0cff6ee67034cb6b25a15b7f1114ca900bb567e440cafb";
++        std::fs::create_dir(objects_dir.path().join(&hex[..2])).unwrap();
++        std::fs::write(objects_dir.path().join(&hex[..2]).join(&hex[2..]), b"fake").unwrap();
++        let store = ldb_at_opts(objects_dir.path(), gix_hash::Kind::Sha256);
++        let oid = gix_hash::ObjectId::from_hex(hex.as_bytes()).unwrap();
++        for short in ["abcd", "abcd6ac", &hex[..40]] {
++            // Short prefixes parsed from hex are of kind SHA1 as their length doesn't tell them apart.
++            let prefix = gix_hash::Prefix::from_hex(short).unwrap();
++            for mut candidates in [None, Some(HashSet::default())] {
++                assert_eq!(
++                    store.lookup_prefix(prefix, candidates.as_mut()).unwrap(),
++                    Some(Ok(oid)),
++                    "{short}"
++                );
++            }
++        }
++    }
+ }
+ 
+ mod find {

@@ -1,0 +1,296 @@
+diff --git a/brush-builtins/src/break_.rs b/brush-builtins/src/break_.rs
+index d16a039..5b07b26 100644
+--- a/brush-builtins/src/break_.rs
++++ b/brush-builtins/src/break_.rs
+@@ -1,4 +1,5 @@
+ use clap::Parser;
++use std::io::Write;
+ 
+ use brush_core::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, builtins};
+ 
+@@ -15,8 +16,22 @@ impl builtins::Command for BreakCommand {
+ 
+     async fn execute<SE: brush_core::ShellExtensions>(
+         &self,
+-        _context: brush_core::ExecutionContext<'_, SE>,
++        context: brush_core::ExecutionContext<'_, SE>,
+     ) -> Result<brush_core::ExecutionResult, Self::Error> {
++        // Like bash, outside of a loop this does nothing but warn (except in posix mode), and
++        // succeeds.
++        let loop_depth = context.shell.loop_depth();
++        if loop_depth == 0 {
++            if !context.shell.options().posix_mode {
++                writeln!(
++                    context.stderr(),
++                    "{}: only meaningful in a `for', `while', or `until' loop",
++                    context.command_name
++                )?;
++            }
++            return Ok(ExecutionResult::success());
++        }
++
+         // If specified, which_loop needs to be positive.
+         if self.which_loop <= 0 {
+             return Ok(ExecutionExitCode::InvalidUsage.into());
+@@ -26,7 +41,7 @@ impl builtins::Command for BreakCommand {
+ 
+         result.next_control_flow = ExecutionControlFlow::BreakLoop {
+             #[expect(clippy::cast_sign_loss)]
+-            levels: (self.which_loop - 1) as usize,
++            levels: (self.which_loop as usize).min(loop_depth) - 1,
+         };
+ 
+         Ok(result)
+diff --git a/brush-builtins/src/continue_.rs b/brush-builtins/src/continue_.rs
+index 8634097..5cb97eb 100644
+--- a/brush-builtins/src/continue_.rs
++++ b/brush-builtins/src/continue_.rs
+@@ -1,4 +1,5 @@
+ use clap::Parser;
++use std::io::Write;
+ 
+ use brush_core::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, builtins};
+ 
+@@ -15,8 +16,22 @@ impl builtins::Command for ContinueCommand {
+ 
+     async fn execute<SE: brush_core::ShellExtensions>(
+         &self,
+-        _context: brush_core::ExecutionContext<'_, SE>,
++        context: brush_core::ExecutionContext<'_, SE>,
+     ) -> Result<brush_core::ExecutionResult, Self::Error> {
++        // Like bash, outside of a loop this does nothing but warn (except in posix mode), and
++        // succeeds.
++        let loop_depth = context.shell.loop_depth();
++        if loop_depth == 0 {
++            if !context.shell.options().posix_mode {
++                writeln!(
++                    context.stderr(),
++                    "{}: only meaningful in a `for', `while', or `until' loop",
++                    context.command_name
++                )?;
++            }
++            return Ok(ExecutionResult::success());
++        }
++
+         // If specified, which_loop needs to be positive.
+         if self.which_loop <= 0 {
+             return Ok(ExecutionExitCode::InvalidUsage.into());
+@@ -26,7 +41,7 @@ impl builtins::Command for ContinueCommand {
+ 
+         result.next_control_flow = ExecutionControlFlow::ContinueLoop {
+             #[expect(clippy::cast_sign_loss)]
+-            levels: (self.which_loop - 1) as usize,
++            levels: (self.which_loop as usize).min(loop_depth) - 1,
+         };
+ 
+         Ok(result)
+diff --git a/brush-core/src/interp.rs b/brush-core/src/interp.rs
+index 617e36e..5e92d51 100644
+--- a/brush-core/src/interp.rs
++++ b/brush-core/src/interp.rs
+@@ -675,6 +675,7 @@ impl Execute for ast::CompoundCommand {
+                 // Clone off a new subshell, and run the body of the subshell there.
+                 // TODO(source-info): Do we need to reset the line number?
+                 let mut subshell = shell.clone();
++                subshell.leave_loops();
+ 
+                 // Handle errors within the subshell context to prevent fatal errors
+                 // from propagating to the parent shell.
+@@ -807,6 +808,8 @@ impl Execute for ast::ForClauseCommand {
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        let mut shell = shell.enter_loop();
++        let shell = &mut *shell;
+         let mut result = ExecutionResult::success();
+ 
+         // If we were given explicit words to iterate over, then expand them all, with splitting
+@@ -993,6 +996,8 @@ impl Execute for (WhileOrUntil, &ast::WhileOrUntilClauseCommand) {
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        let mut shell = shell.enter_loop();
++        let shell = &mut *shell;
+         let is_while = match self.0 {
+             WhileOrUntil::While => true,
+             WhileOrUntil::Until => false,
+@@ -1071,6 +1076,8 @@ impl Execute for ast::ArithmeticForClauseCommand {
+         shell: &mut Shell<impl extensions::ShellExtensions>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
++        let mut shell = shell.enter_loop();
++        let shell = &mut *shell;
+         let mut result = ExecutionResult::success();
+         if let Some(initializer) = &self.initializer {
+             initializer.eval(shell, params, true).await?;
+diff --git a/brush-core/src/shell.rs b/brush-core/src/shell.rs
+index 54a58ae..5a0b3ac 100644
+--- a/brush-core/src/shell.rs
++++ b/brush-core/src/shell.rs
+@@ -105,6 +105,10 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
+     /// Clone depth from the original ancestor shell.
+     depth: usize,
+ 
++    /// Number of loops (`for`, `while`, `until`) currently executing in the current function
++    /// (or at the top level); `break` and `continue` can only leave these.
++    loop_depth: usize,
++
+     /// Shell name
+     name: Option<String>,
+ 
+@@ -192,6 +196,7 @@ impl<SE: extensions::ShellExtensions> Clone for Shell<SE> {
+             key_bindings: self.key_bindings.clone(),
+             history: self.history.clone(),
+             depth: self.depth + 1,
++            loop_depth: self.loop_depth,
+         }
+     }
+ }
+@@ -269,6 +274,18 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
+ }
+ 
+ impl<SE: extensions::ShellExtensions> Shell<SE> {
++    /// Returns the number of loops enclosing the command currently executing, not counting
++    /// loops in callers of the current function.
++    pub const fn loop_depth(&self) -> usize {
++        self.loop_depth
++    }
++
++    /// Puts the shell outside of any loop, as a `( ... )` subshell is: like bash (per POSIX
++    /// interpretation 842), it's not in the same execution environment as its loops.
++    pub(crate) const fn leave_loops(&mut self) {
++        self.loop_depth = 0;
++    }
++
+     /// Increments the interactive line offset in the shell by the indicated number
+     /// of lines.
+     ///
+diff --git a/brush-core/src/shell/builder.rs b/brush-core/src/shell/builder.rs
+index 950b51a..ae83ed7 100644
+--- a/brush-core/src/shell/builder.rs
++++ b/brush-core/src/shell/builder.rs
+@@ -256,6 +256,7 @@ impl<SE: extensions::ShellExtensions> Default for Shell<SE> {
+             last_exit_status_change_count: 0,
+             last_pipeline_statuses: vec![0],
+             depth: 0,
++            loop_depth: 0,
+             name: None,
+             args: vec![],
+             version: None,
+diff --git a/brush-core/src/shell/callstack.rs b/brush-core/src/shell/callstack.rs
+index 51ff6d9..ebbe1c2 100644
+--- a/brush-core/src/shell/callstack.rs
++++ b/brush-core/src/shell/callstack.rs
+@@ -120,11 +120,22 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
+         let leave = Leave::Function {
+             frames: self.call_stack.depth(),
+             scopes: self.env.scope_depth(),
++            loop_depth: self.loop_depth,
+         };
+ 
++        // Like bash, `break` and `continue` in a function don't leave the caller's loops.
++        self.loop_depth = 0;
++
+         Ok(ShellGuard::new(self, leave))
+     }
+ 
++    /// Enters a loop (`for`, `while`, `until`) on the shell, until the returned guard is
++    /// dropped.
++    pub(crate) const fn enter_loop(&mut self) -> ShellGuard<'_, SE> {
++        self.loop_depth += 1;
++        ShellGuard::new(self, Leave::Loop)
++    }
++
+     /// Enters a new variable scope on the shell, until the returned guard is dropped.
+     pub(crate) fn enter_scope(&mut self, scope: env::EnvironmentScope) -> ShellGuard<'_, SE> {
+         self.env.push_scope(scope);
+@@ -202,6 +213,7 @@ enum Leave {
+     Function {
+         frames: usize,
+         scopes: usize,
++        loop_depth: usize,
+     },
+     Script {
+         frames: usize,
+@@ -215,6 +227,7 @@ enum Leave {
+         scope: env::EnvironmentScope,
+     },
+     TrapBlock,
++    Loop,
+ }
+ 
+ impl<'a, SE: crate::extensions::ShellExtensions> ShellGuard<'a, SE> {
+@@ -280,7 +293,12 @@ impl<SE: crate::extensions::ShellExtensions> Drop for ShellGuard<'_, SE> {
+         // entered is on top. If it isn't, report that and pop nothing, rather than risk
+         // popping something else.
+         let left = match self.leave {
+-            Leave::Function { frames, scopes } => {
++            Leave::Function {
++                frames,
++                scopes,
++                loop_depth,
++            } => {
++                self.shell.loop_depth = loop_depth;
+                 // Pop the frame and its scope together, or neither.
+                 let left = self.frame_on_top(frames, callstack::FrameType::is_function)
+                     && self.pop_scope(scopes, env::EnvironmentScope::Local);
+@@ -304,6 +322,11 @@ impl<SE: crate::extensions::ShellExtensions> Drop for ShellGuard<'_, SE> {
+                 self.pop_frame(frames, callstack::FrameType::is_trap_handler)
+             }
+             Leave::Scope { scopes, scope } => self.pop_scope(scopes, scope),
++            Leave::Loop => {
++                let in_loop = self.shell.loop_depth > 0;
++                self.shell.loop_depth = self.shell.loop_depth.saturating_sub(1);
++                in_loop
++            }
+             Leave::TrapBlock => {
+                 let blocked = self.shell.call_stack.is_trap_delivery_suppressed();
+                 self.shell.call_stack.release_trap_delivery_block();
+diff --git a/brush-shell/tests/cases/compat/compound_cmds/for.yaml b/brush-shell/tests/cases/compat/compound_cmds/for.yaml
+index 4248ff4..08b01db 100644
+--- a/brush-shell/tests/cases/compat/compound_cmds/for.yaml
++++ b/brush-shell/tests/cases/compat/compound_cmds/for.yaml
+@@ -129,7 +129,6 @@ cases:
+       done
+ 
+   - name: "Continue in nested for loop with too large N"
+-    known_failure: true
+     stdin: |
+       for f in a b c; do
+         for g in 1 2 3; do
+@@ -218,12 +217,18 @@ cases:
+       echo "after continue: $?"
+ 
+   - name: "break and continue outside a loop"
+-    known_failure: true # TODO(loops): outside a loop, they end the line (or fail in a function), where bash reports it and goes on
+     ignore_stderr: true
+     stdin: |
+       break; echo "after break: $?"
+       continue; echo "after continue: $?"
+ 
++  - name: "break and continue in a function called outside a loop"
++    ignore_stderr: true
++    stdin: |
++      f() { break; echo "after break: $?"; continue 2; echo "after continue: $?"; }
++      f
++      echo "after f: $?"
++
+   - name: "break and continue check for a loop before their options"
+     known_failure: true # TODO(loops): the loop check doesn't come before option parsing
+     ignore_stderr: true
+@@ -232,7 +237,6 @@ cases:
+       f
+ 
+   - name: "break and continue act only on the loops of the current function"
+-    known_failure: true # TODO(loops): a function's body doesn't start outside its caller's loops
+     ignore_stderr: true
+     stdin: |
+       f() { break; echo "f went on: $?"; }
+@@ -249,7 +253,6 @@ cases:
+       for i in 1; do cat <(break; echo "not read"); echo "after process substitution"; done
+ 
+   - name: "break and continue past the outermost loop"
+-    known_failure: true # TODO(loops): a count past the outermost loop doesn't stop there
+     stdin: |
+       for i in 1 2; do for j in a b; do break 5; done; echo "not reached"; done
+       echo "after break: $?"

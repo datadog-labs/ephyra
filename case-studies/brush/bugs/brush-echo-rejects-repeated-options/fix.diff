@@ -1,0 +1,53 @@
+diff --git a/brush-builtins/src/echo.rs b/brush-builtins/src/echo.rs
+index 03da65a5..00626dd3 100644
+--- a/brush-builtins/src/echo.rs
++++ b/brush-builtins/src/echo.rs
+@@ -5,18 +5,22 @@ use brush_core::{ExecutionResult, builtins, escape};
+ 
+ /// Echo text to standard output.
+ #[derive(Parser)]
+-#[clap(disable_help_flag = true, disable_version_flag = true)]
++#[clap(
++    disable_help_flag = true,
++    disable_version_flag = true,
++    args_override_self = true
++)]
+ pub(crate) struct EchoCommand {
+     /// Suppress the trailing newline from the output.
+     #[arg(short = 'n')]
+     no_trailing_newline: bool,
+ 
+     /// Interpret backslash escapes in the provided text.
+-    #[arg(short = 'e')]
++    #[arg(short = 'e', overrides_with = "no_interpret_backslash_escapes")]
+     interpret_backslash_escapes: bool,
+ 
+     /// Do not interpret backslash escapes in the provided text.
+-    #[arg(short = 'E')]
++    #[arg(short = 'E', overrides_with = "interpret_backslash_escapes")]
+     no_interpret_backslash_escapes: bool,
+ 
+     /// Tokens to echo to standard output.
+diff --git a/brush-shell/tests/cases/compat/builtins/echo.yaml b/brush-shell/tests/cases/compat/builtins/echo.yaml
+index 7081a4fa..44958b5c 100644
+--- a/brush-shell/tests/cases/compat/builtins/echo.yaml
++++ b/brush-shell/tests/cases/compat/builtins/echo.yaml
+@@ -33,3 +33,18 @@ cases:
+       shopt -s xpg_echo
+       echo -n 'a\tb'
+       echo -e 'c'
++
++  - name: "echo with repeated options"
++    stdin: |
++      echo -n -n a; echo
++      echo -e -e 'b\tc'
++      echo -nn d; echo
++      echo -n -e -n 'e\tf'; echo
++
++  - name: "echo -e and -E: last one wins"
++    stdin: |
++      echo -e -E 'a\tb'
++      echo -E -e 'c\td'
++      echo -eE 'e\tf'
++      echo -Ee 'g\th'
++      echo -enE 'i\tj'; echo

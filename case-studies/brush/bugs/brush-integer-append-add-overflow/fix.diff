@@ -1,0 +1,17 @@
+diff --git a/brush-core/src/variables.rs b/brush-core/src/variables.rs
+index d8302be..40504e1 100644
+--- a/brush-core/src/variables.rs
++++ b/brush-core/src/variables.rs
+@@ -273,8 +273,10 @@ impl ShellVariable {
+                 ShellValue::String(base) => match value {
+                     ShellValueLiteral::Scalar(suffix) => {
+                         if treat_as_int {
+-                            let int_value = base.parse::<i64>().unwrap_or(0)
+-                                + suffix.parse::<i64>().unwrap_or(0);
++                            let int_value = base
++                                .parse::<i64>()
++                                .unwrap_or(0)
++                                .wrapping_add(suffix.parse::<i64>().unwrap_or(0));
+                             base.clear();
+                             base.push_str(int_value.to_string().as_str());
+                         } else {

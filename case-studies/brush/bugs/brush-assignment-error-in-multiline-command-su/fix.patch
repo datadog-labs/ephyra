@@ -1,0 +1,126 @@
+From 147703a8b626c00a8e4888b38d1cd22a51336f0e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 09:16:13 -0400
+Subject: [PATCH] fix(core): end a multi-line command substitution on an error
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A variable assignment or expansion error such as `x=$((1/0))` on one line
+of a multi-line `$( )` ends the whole substitution in bash. brush ran the
+body through `Program::execute`, which reports such an error and moves on
+to the next line as it does for a script, so the later lines still ran and
+their output was substituted.
+
+Run the substitution's commands one by one and stop at the first variable
+assignment or expansion error; other failures still go on to the next
+command.
+
+Signed-off-by: Alperen Keleş <alpkeles99@gmail.com>
+Assisted-by: Claude Code:claude-opus-5-5
+---
+ brush-core/src/commands.rs                 | 54 ++++++++++++++++++++--
+ brush-shell/tests/cases/compat/errors.yaml | 25 ++++++++++
+ 2 files changed, 75 insertions(+), 4 deletions(-)
+
+diff --git a/brush-core/src/commands.rs b/brush-core/src/commands.rs
+index 5a0ee439..534b83eb 100644
+--- a/brush-core/src/commands.rs
++++ b/brush-core/src/commands.rs
+@@ -897,10 +897,56 @@ async fn run_substitution_command(
+     // TODO(source-info): review this
+     let source_info = crate::SourceInfo::from("main");
+ 
+-    // Handle the parse result using default shell behavior.
+-    shell
+-        .run_parsed_result(parse_result, &source_info, &params)
+-        .await
++    // Handle a parse error using default shell behavior.
++    let Ok(program) = parse_result else {
++        return shell
++            .run_parsed_result(parse_result, &source_info, &params)
++            .await;
++    };
++
++    // The substitution's commands run as a single unit: unlike a script, where a variable
++    // assignment or expansion error only abandons the current line, such an error aborts
++    // the rest of the substitution.
++    let mut result = ExecutionResult::success();
++    for command in &program.complete_commands {
++        result = match command.execute(&mut shell, &params).await {
++            Ok(result) => result,
++            Err(err) => {
++                let _ = shell.display_error(&mut params.stderr(&shell), &err);
++                let aborts = aborts_command_substitution(&err);
++                let result = err.into_result(&shell);
++                shell.set_last_exit_status(result.exit_code.into());
++                if aborts {
++                    return Ok(result);
++                }
++                result
++            }
++        };
++
++        shell.set_last_exit_status(result.exit_code.into());
++
++        if !result.is_normal_flow() {
++            break;
++        }
++    }
++
++    Ok(result)
++}
++
++/// Returns whether the error is a variable assignment or expansion error, which aborts
++/// the whole command substitution it occurs in.
++fn aborts_command_substitution(err: &error::Error) -> bool {
++    matches!(
++        err.kind(),
++        ErrorKind::ArrayIndexOutOfRange(_)
++            | ErrorKind::ReadonlyVariable
++            | ErrorKind::CannotAssignToSpecialParameter
++            | ErrorKind::AssigningListToArrayMember
++            | ErrorKind::EvalError(_)
++            | ErrorKind::BadSubstitution(_)
++            | ErrorKind::CheckedExpansionError(_)
++            | ErrorKind::ExpandingUnsetVariable(_)
++    )
+ }
+ 
+ // Detects a subshell command that consists solely of a single input redirection
+diff --git a/brush-shell/tests/cases/compat/errors.yaml b/brush-shell/tests/cases/compat/errors.yaml
+index 8b6491d8..6bc7b606 100644
+--- a/brush-shell/tests/cases/compat/errors.yaml
++++ b/brush-shell/tests/cases/compat/errors.yaml
+@@ -300,6 +300,31 @@ cases:
+       value_guard=2
+       echo "after readonly assignment"
+ 
++  - name: "Variable assignment error (command substitution)"
++    ignore_stderr: true
++    stdin: |
++      readonly value_guard=1
++      arr=(x)
++      v=$(
++      value_guard=2
++      echo "after readonly assignment"
++      )
++      echo "v=<$v> status=$?"
++      v=$(
++      arr[-2]=y
++      echo "after subscript assignment"
++      )
++      echo "v=<$v> status=$?"
++
++  - name: "Redirection error (command substitution)"
++    ignore_stderr: true
++    stdin: |
++      v=$(
++      echo before > missing_dir/out.txt
++      echo "after redirection"
++      )
++      echo "v=<$v> status=$?"
++
+   - name: "Expansion error (command line)"
+     known_failure: true # Needs investigation
+     ignore_stderr: true

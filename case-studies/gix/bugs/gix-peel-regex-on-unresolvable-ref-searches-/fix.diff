@@ -1,0 +1,42 @@
+diff --git a/gix/src/revision/spec/parse/delegate/navigate.rs b/gix/src/revision/spec/parse/delegate/navigate.rs
+index a321c5d8f..832f2ec0f 100644
+--- a/gix/src/revision/spec/parse/delegate/navigate.rs
++++ b/gix/src/revision/spec/parse/delegate/navigate.rs
+@@ -246,6 +246,10 @@ impl delegate::Navigate for Delegate<'_> {
+                 }
+                 handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
+             }
++            None if self.refs[self.idx].is_some() => {
++                // The anchor reference could not be peeled (its error is delayed), so there is nothing to search from.
++                bail!("Tried to search the commit-graph from a reference that could not be resolved")
++            }
+             None => {
+                 let references = self.repo.references()?;
+                 let references = references.all()?;
+diff --git a/gix/tests/gix/revision/spec/from_bytes/mod.rs b/gix/tests/gix/revision/spec/from_bytes/mod.rs
+index b43d61b8a..58b60443e 100644
+--- a/gix/tests/gix/revision/spec/from_bytes/mod.rs
++++ b/gix/tests/gix/revision/spec/from_bytes/mod.rs
+@@ -339,6 +339,22 @@ fn missing_symbolic_referents_keep_their_name() -> TestResult {
+     Ok(())
+ }
+ 
++#[test]
++fn regex_search_from_unresolvable_symbolic_ref_fails() -> TestResult {
++    let (repo, _keep) = crate::basic_rw_repo()?;
++    std::fs::write(repo.git_dir().join("HEAD"), b"ref: refs/heads/unborn\n")?;
++    std::fs::write(repo.git_dir().join("refs/heads/alias"), b"ref: refs/heads/missing\n")?;
++
++    for revspec in ["HEAD^{/.}", "@^{/.}", "alias^{/.}", "alias^{/!-x}"] {
++        assert!(
++            repo.rev_parse(revspec).is_err(),
++            "{revspec}: nothing is reachable from an unresolvable reference, so it must not search all references"
++        );
++    }
++    assert!(repo.rev_parse(":/.").is_ok(), "searching from all references still works");
++    Ok(())
++}
++
+ #[test]
+ fn both_missing_symbolic_referents_are_retained() -> TestResult {
+     let (repo, _keep) = crate::basic_rw_repo()?;

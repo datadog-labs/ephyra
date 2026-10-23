@@ -1,0 +1,26 @@
+[package]
+name = "bynfuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+arbitrary = "1"
+wasm-smith = "=0.261.0"
+wasmparser = "=0.261.0"
+wasmprinter = { version = "=0.261.0", default-features = false }
+wasmtime = { version = "=50.0.0", default-features = false, features = ["cranelift", "gc", "gc-drc", "runtime", "std", "threads", "stack-switching", "parallel-compilation"] }
+
+[[bin]]
+name = "bynexec"
+path = "src/exec.rs"
+
+[[bin]]
+name = "bynfuzz"
+path = "src/fuzz.rs"
+
+[workspace]
+
+[profile.release]
+debug = false
+opt-level = 3

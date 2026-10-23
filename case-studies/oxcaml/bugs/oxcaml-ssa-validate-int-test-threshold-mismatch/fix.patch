@@ -1,0 +1,119 @@
+From 98ca6de7e1531586f3ea1c0894ff3f2fd948a5b0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Thu, 22 Oct 2026 13:04:27 -0400
+Subject: [PATCH] Cfg_compare: accept x <= k against x < k + 1 in Int_test
+
+Simplify_terminator.simplify_switch lowers the same three-arm Switch to
+an Int_test against 1 with lt = eq, or against 2 with eq = gt, depending
+on whether the first two arms already share a label when it runs. The
+legacy and the SSA pipelines can differ there, so -use-ssa (with the
+default -ssa-validate) aborted with "CFG comparison MISMATCH" on e.g.
+
+  type t = A | B | C
+  let f v =
+    let _ = try (match v with A -> 0 | B -> 1 | C -> truncate (sqrt 2.0))
+            with Exit -> 0 in
+    print_endline "ok"
+
+Treat the two forms as equal, unless k + 1 wraps around.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ backend/cfg/cfg_compare.ml                    | 38 +++++++++++++++++++
+ .../tests/codegen/ssa_validate_int_test.ml    | 28 ++++++++++++++
+ 2 files changed, 66 insertions(+)
+ create mode 100644 testsuite/tests/codegen/ssa_validate_int_test.ml
+
+diff --git a/backend/cfg/cfg_compare.ml b/backend/cfg/cfg_compare.ml
+index a2373aa886..351633c226 100644
+--- a/backend/cfg/cfg_compare.ml
++++ b/backend/cfg/cfg_compare.ml
+@@ -312,6 +312,16 @@ let compare_body ~ppf_m ~map_label ~old_label ~new_label old_body new_body =
+   in
+   loop (DLL.hd_cell old_body) (DLL.hd_cell new_body)
+ 
++(* [k' = k + 1] without wrapping around, for the signedness of the comparison.
++   The immediate is a machine word: unsigned [-1] is the largest value, and
++   [Int.max_int + 1] is not representable. *)
++let is_succ_without_wrap ~(is_signed : Scalar.Signedness.t) k k' =
++  (not (Int.equal k Int.max_int))
++  && (match is_signed with
++    | Signed -> true
++    | Unsigned -> not (Int.equal k (-1)))
++  && Int.equal k' (k + 1)
++
+ let terminator_structure_match ~map_label (old_term : Cfg.terminator)
+     (new_term : Cfg.terminator) =
+   match old_term, new_term with
+@@ -342,6 +352,34 @@ let terminator_structure_match ~map_label (old_term : Cfg.terminator)
+     map_label ifso lt;
+     map_label ifnot eq;
+     true
++  (* [x <= k] (Int_test with [lt = eq]) ≈ [x < k + 1] (Int_test with [eq = gt]
++     against [k + 1]), unless [k + 1] wraps around.
++     [Simplify_terminator.simplify_switch] can produce either form for the same
++     [Switch], depending on whether its first arms already share a label when it
++     runs or only after later block merging. *)
++  | ( Int_test
++        { lt = old_lt;
++          eq = old_eq;
++          gt = old_gt;
++          is_signed = old_is_signed;
++          imm = Some old_imm
++        },
++      Int_test
++        { lt = new_lt;
++          eq = new_eq;
++          gt = new_gt;
++          is_signed = new_is_signed;
++          imm = Some new_imm
++        } )
++    when Scalar.Signedness.equal old_is_signed new_is_signed
++         && (Label.equal old_lt old_eq && Label.equal new_eq new_gt
++             && is_succ_without_wrap ~is_signed:old_is_signed old_imm new_imm
++            || Label.equal new_lt new_eq && Label.equal old_eq old_gt
++               && is_succ_without_wrap ~is_signed:old_is_signed new_imm old_imm
++            ) ->
++    map_label old_lt new_lt;
++    map_label old_gt new_gt;
++    true
+   | ( Int_test
+         { lt = old_lt;
+           eq = old_eq;
+diff --git a/testsuite/tests/codegen/ssa_validate_int_test.ml b/testsuite/tests/codegen/ssa_validate_int_test.ml
+new file mode 100644
+index 0000000000..2b26b28623
+--- /dev/null
++++ b/testsuite/tests/codegen/ssa_validate_int_test.ml
+@@ -0,0 +1,28 @@
++(* TEST
++ flags += " -use-ssa";
++ only-default-codegen;
++ native;
++*)
++
++(* [-ssa-validate] is on by default with [-use-ssa]. The [Switch] in [f] is
++   lowered to [x <= 1] by the legacy pipeline and to [x < 2] by the SSA
++   pipeline, which [Cfg_compare] must accept. *)
++
++type t =
++  | A
++  | B
++  | C
++
++let count = ref 0
++
++let f v =
++  let _ =
++    try match v with A -> 0 | B -> 1 | C -> truncate (sqrt 2.0) with Exit -> 0
++  in
++  incr count
++
++let () =
++  f A;
++  f B;
++  f C;
++  assert (!count = 3)
+-- 
+2.56.0
+

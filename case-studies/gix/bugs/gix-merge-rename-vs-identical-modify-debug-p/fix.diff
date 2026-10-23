@@ -1,0 +1,73 @@
+diff --git a/gix-merge/src/tree/function/resolve.rs b/gix-merge/src/tree/function/resolve.rs
+index a0cf570f8..b9a8eab2f 100644
+--- a/gix-merge/src/tree/function/resolve.rs
++++ b/gix-merge/src/tree/function/resolve.rs
+@@ -397,6 +397,9 @@ pub fn tree<'objects>(
+                                     let renamed_without_change = their_source_id == their_id;
+                                     let (merged_blob_id, resolution) = if renamed_without_change {
+                                         (*our_id, None)
++                                    } else if our_id == their_id {
++                                        // Both sides changed the content in the same way, there is nothing to merge.
++                                        (*their_id, None)
+                                     } else {
+                                         let (our_location, our_id, our_mode, their_location, their_id, their_mode) =
+                                             match side {
+diff --git a/gix-merge/tests/fixtures/tree-baseline.sh b/gix-merge/tests/fixtures/tree-baseline.sh
+index 6022f9b61..c2388d303 100755
+--- a/gix-merge/tests/fixtures/tree-baseline.sh
++++ b/gix-merge/tests/fixtures/tree-baseline.sh
+@@ -367,6 +367,28 @@ git init rename-delete
+   git commit -m "Modify foo & rename foo -> olddir/bar"
+ )
+ 
++git init rename-modify-same-content
++(cd rename-modify-same-content
++  # A modifies `foo` and renames it to `bar`; B makes the very same modification to `foo` in place.
++  # Both sides agree on the content, so there is nothing to merge and the result is `bar` with that content.
++  write_lines 1 2 3 4 5 >foo
++  git add foo
++  git commit -m "original"
++
++  git branch A
++  git branch B
++
++  git checkout A
++  write_lines 1 2 3 4 5 6 >foo
++  git add foo
++  git mv foo bar
++  git commit -m "Modify foo & rename foo -> bar"
++
++  git checkout B
++  write_lines 1 2 3 4 5 6 >foo
++  git commit -am "Modify foo the same way"
++)
++
+ git init rename-change-matrix
+ (cd rename-change-matrix
+   # Each top-level directory is one independent rename interaction:
+@@ -2305,6 +2327,7 @@ baseline simple side-1-unrelated-diff3 side1 unrelated
+ baseline rename-delete A-B A B
+ baseline rename-delete A-similar A A
+ baseline rename-delete B-similar B B
++baseline rename-modify-same-content A-B A B
+ baseline rename-change-matrix A-B A B
+ baseline same-rename-with-content A-B A B
+ baseline same-rename-and-file-to-directory A-B A B
+diff --git a/gix-merge/tests/merge/tree/mod.rs b/gix-merge/tests/merge/tree/mod.rs
+index ae1b77a43..7f418093a 100644
+--- a/gix-merge/tests/merge/tree/mod.rs
++++ b/gix-merge/tests/merge/tree/mod.rs
+@@ -223,11 +223,11 @@ fn run_baseline() -> TestResult {
+     }
+ 
+     assert_eq!(
+-        actual_cases, 185,
++        actual_cases, 187,
+         "BUG: update this number, and don't forget to remove a filter in the end"
+     );
+     assert_eq!(
+-        skipped_tree_resolve_cases, 170,
++        skipped_tree_resolve_cases, 174,
+         "this is done when no case is skipped, and we don't want to accidentally skip them.\
+         Some don't actually have conflicts.\
+         The ones we skipped don't have irreconcilable conflicts"

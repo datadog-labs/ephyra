@@ -1,0 +1,54 @@
+From 57ab26d98995c1237ec2bf1eb467f9605d310941 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 09:16:14 -0400
+Subject: [PATCH] fix(core): avoid a hang when a builtin writes a lot in a
+ command substitution
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A command substitution could hang when a builtin wrote more than a pipe's
+buffer (64 KiB) after a nested `$( )`. The substitution's command was
+spawned on a runtime worker thread, so the builtin's blocking write to the
+full pipe could block the worker that had to drive the read of that pipe.
+
+Run the substitution's command with `spawn_blocking`, off the runtime's
+worker threads, and remove the `known_failure` marker from the
+background-job compat case that now passes.
+
+Signed-off-by: Alperen Keleş <alpkeles99@gmail.com>
+Assisted-by: Claude Code:claude-opus-5-5
+---
+ brush-core/src/commands.rs                          | 6 +++++-
+ brush-shell/tests/cases/compat/background_jobs.yaml | 1 -
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/brush-core/src/commands.rs b/brush-core/src/commands.rs
+index 5a0ee439..5afc885c 100644
+--- a/brush-core/src/commands.rs
++++ b/brush-core/src/commands.rs
+@@ -858,7 +858,11 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
+ 
+     let mut async_reader = sys::async_pipe::AsyncPipeReader::new(reader)?;
+ 
+-    let cmd_join_handle = sys::tasks::spawn(run_substitution_command(subshell, params, s));
++    // The command may block the thread it runs on (e.g., a builtin writing more to the pipe
++    // than it holds before we read it), so it must not run on a runtime worker thread: a
++    // blocked worker can stop driving I/O, so our read of the pipe never wakes up.
++    let cmd_join_handle =
++        sys::tasks::spawn_blocking(run_substitution_command(subshell, params, s)).await;
+ 
+     let output_str = async_reader.read_to_string().await?;
+ 
+diff --git a/brush-shell/tests/cases/compat/background_jobs.yaml b/brush-shell/tests/cases/compat/background_jobs.yaml
+index 82736cb4..a5040dae 100644
+--- a/brush-shell/tests/cases/compat/background_jobs.yaml
++++ b/brush-shell/tests/cases/compat/background_jobs.yaml
+@@ -132,7 +132,6 @@ cases:
+       #send:Ctrl+D
+ 
+   - name: "A background job started in a command substitution runs during it"
+-    known_failure: true # TODO(jobs): the job's task doesn't run until the substitution's busy loop ends, so neither does a signal it sends
+     stdin: |
+       x=$(
+         (sleep 0.1; echo ran > ran.txt) &

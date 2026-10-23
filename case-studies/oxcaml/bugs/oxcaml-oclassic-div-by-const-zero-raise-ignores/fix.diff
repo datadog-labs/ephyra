@@ -1,0 +1,64 @@
+diff --git a/middle_end/flambda2/to_cmm/to_cmm_primitive.ml b/middle_end/flambda2/to_cmm/to_cmm_primitive.ml
+index 78cc4b3f..41362720 100644
+--- a/middle_end/flambda2/to_cmm/to_cmm_primitive.ml
++++ b/middle_end/flambda2/to_cmm/to_cmm_primitive.ml
+@@ -1324,6 +1324,22 @@ let unary_primitive env res dbg f (_arg_simple : Simple.t option)
+     let tag = Tag.to_int (P.Lazy_block_tag.to_tag lazy_tag) in
+     None, res, C.make_alloc ~mode:Heap dbg ~tag [arg]
+ 
++(* Division is translated to a conditional on the denominator followed by an
++   unsafe division on the way into Flambda 2 (see [Simplify_binary_primitive]),
++   so a division by a constant zero is unreachable. It must not be translated
++   using [Cmm_helpers], which would raise [Division_by_zero] without the extra
++   arguments of the current exception handler. *)
++let is_int_division_by_zero (f : P.binary_primitive) (y : Cmm.expression) =
++  match[@ocaml.warning "-4"] f, y with
++  | Int_arith (Tagged_immediate, (Div _ | Mod _)), Cconst_int (1, _) -> true
++  | ( Int_arith
++        ( ( Naked_int8 | Naked_int16 | Naked_int32 | Naked_int64
++          | Naked_nativeint | Naked_immediate ),
++          (Div _ | Mod _) ),
++      (Cconst_int (0, _) | Cconst_natint (0n, _)) ) ->
++    true
++  | _ -> false
++
+ let binary_primitive env dbg f (_x_simple : Simple.t option)
+     (_y_simple : Simple.t option) (x : Cmm.expression) (y : Cmm.expression) =
+   match (f : P.binary_primitive) with
+@@ -1365,6 +1381,13 @@ let binary_primitive env dbg f (_x_simple : Simple.t option)
+     let memory_chunk = C.memory_chunk_of_kind kind in
+     C.load ~dbg memory_chunk mut ~addr
+ 
++let binary_primitive_or_invalid env res dbg f x_simple y_simple x y =
++  if is_int_division_by_zero f y
++  then
++    let expr, res = C.invalid res ~message:"Integer division by zero" in
++    res, expr
++  else res, binary_primitive env dbg f x_simple y_simple x y
++
+ let ternary_primitive _env dbg f (_x_simple : Simple.t option)
+     (_y_simple : Simple.t option) (_z_simple : Simple.t option)
+     (x : Cmm.expression) (y : Cmm.expression) (z : Cmm.expression) =
+@@ -1505,7 +1528,9 @@ let trans_prim : To_cmm_env.t To_cmm_env.trans_prim =
+     unary = (fun env res dbg prim x -> unary_primitive env res dbg prim None x);
+     binary =
+       (fun env res dbg prim x y ->
+-        let cmm = binary_primitive env dbg prim None None x y in
++        let res, cmm =
++          binary_primitive_or_invalid env res dbg prim None None x y
++        in
+         None, res, cmm);
+     ternary =
+       (fun env res dbg prim x y z ->
+@@ -1579,8 +1604,9 @@ let prim_simple env res dbg p =
+     let To_cmm_env.{ env; res; expr = y' } = arg env res y in
+     let free_vars = Backend_var.Set.union x'.free_vars y'.free_vars in
+     let effs = Ece.join x'.effs y'.effs in
+-    let expr =
+-      binary_primitive env dbg binary (Some x) (Some y) x'.cmm y'.cmm
++    let res, expr =
++      binary_primitive_or_invalid env res dbg binary (Some x) (Some y) x'.cmm
++        y'.cmm
+     in
+     Env.simple expr free_vars, None, env, res, effs
+   | Ternary (ternary, x, y, z) ->

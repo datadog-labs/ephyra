@@ -1,0 +1,45 @@
+diff --git a/gix/src/repository/config/branch.rs b/gix/src/repository/config/branch.rs
+index db5884eb0..4f32b5e4d 100644
+--- a/gix/src/repository/config/branch.rs
++++ b/gix/src/repository/config/branch.rs
+@@ -57,7 +57,7 @@ impl crate::Repository {
+                     })
+             }
+             remote::Direction::Push => {
+-                let remote = match self.branch_remote(name.shorten(), direction)? {
++                let remote = match self.branch_remote_or_default(name.shorten(), direction)? {
+                     Ok(r) => r,
+                     Err(err) => return Some(Err(err)),
+                 };
+@@ -123,7 +123,7 @@ impl crate::Repository {
+                 ))));
+             }
+         };
+-        let remote = match self.branch_remote(name.shorten(), direction)? {
++        let remote = match self.branch_remote_or_default(name.shorten(), direction)? {
+             Ok(r) => r,
+             Err(err) => {
+                 return Some(Err(err.and_raise(message(
+@@ -251,6 +251,22 @@ impl crate::Repository {
+     }
+ }
+ 
++impl crate::Repository {
++    /// Like [`branch_remote(…)`](Self::branch_remote()), but when pushing and no remote is configured for the branch,
++    /// fall back to the [default remote](Self::remote_default_name()) like `git push` does.
++    fn branch_remote_or_default(
++        &self,
++        short_branch_name: &BStr,
++        direction: remote::Direction,
++    ) -> Option<Result<crate::Remote<'_>>> {
++        if direction == remote::Direction::Push && self.branch_remote_name(short_branch_name, direction).is_none() {
++            let name = self.remote_default_name(direction)?;
++            return self.try_find_remote(name.as_bstr());
++        }
++        self.branch_remote(short_branch_name, direction)
++    }
++}
++
+ fn source_ref_to_full_name(source: gix_refspec::match_group::SourceRef<'_>) -> Result<FullName> {
+     match source {
+         gix_refspec::match_group::SourceRef::FullName(name) => gix_ref::FullName::try_from(name.into_owned())

@@ -1,0 +1,61 @@
+diff --git a/gix/src/revision/spec/parse/delegate/revision.rs b/gix/src/revision/spec/parse/delegate/revision.rs
+index e1b29d639..d49f18f79 100644
+--- a/gix/src/revision/spec/parse/delegate/revision.rs
++++ b/gix/src/revision/spec/parse/delegate/revision.rs
+@@ -154,9 +154,13 @@ impl delegate::Revision for Delegate<'_> {
+             },
+         };
+ 
++        // Like Git, the reference must resolve to an object even if it has a reflog of its own.
++        let mut resolved = r.clone();
++        resolved
++            .follow_to_object()
++            .map_err(|err| error::with_missing_reference(err.into_exn()))?;
+         if !r.log_exists()? {
+-            r.follow_to_object()
+-                .map_err(|err| error::with_missing_reference(err.into_exn()))?;
++            r = resolved;
+         }
+         let mut platform = r.log_iter();
+         match platform.rev().ok().flatten() {
+diff --git a/gix/tests/fixtures/make_symbolic_ref_reflogs.sh b/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
+index 109d566a0..f38380383 100755
+--- a/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
++++ b/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
+@@ -15,6 +15,9 @@ git commit -q --allow-empty -m third
+ git symbolic-ref refs/symref refs/heads/main
+ git symbolic-ref refs/symref-chain refs/symref
+ git symbolic-ref refs/heads/symref refs/heads/main
++# A dangling symbolic branch keeps its own reflog, but Git refuses to use it as it doesn't resolve.
++git symbolic-ref refs/heads/dangling refs/heads/missing
++cp .git/logs/HEAD .git/logs/refs/heads/dangling
+ 
+ # Bake Git's object IDs or failure exit codes into the shared revspec baseline format.
+ function baseline() {
+@@ -28,3 +31,5 @@ for name in main refs/symref refs/symref-chain; do
+   done
+ done
+ baseline 'refs/heads/symref@{1}'
++baseline 'refs/heads/dangling@{0}'
++baseline 'refs/heads/dangling@{1979-02-26 00:00:00 +0000}'
+diff --git a/gix/tests/gix/revision/spec/from_bytes/reflog.rs b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+index 289bc083f..92f06a1be 100644
+--- a/gix/tests/gix/revision/spec/from_bytes/reflog.rs
++++ b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+@@ -32,6 +32,16 @@ fn symbolic_references_use_their_own_log_or_the_final_targets() -> gix_testtools
+         parse_spec("refs/heads/symref@{1}", &repo).is_err(),
+         "an existing reflog takes precedence over the target's longer log"
+     );
++    assert!(
++        repo.find_reference("refs/heads/dangling")?.log_exists()?,
++        "the dangling symbolic branch has its own reflog"
++    );
++    for revspec in ["refs/heads/dangling@{0}", "refs/heads/dangling@{1979-02-26 00:00:00 +0000}"] {
++        assert!(
++            parse_spec(revspec, &repo).is_err(),
++            "{revspec}: like Git, a reference that doesn't resolve can't be used for reflog lookups"
++        );
++    }
+     Ok(())
+ }
+ 

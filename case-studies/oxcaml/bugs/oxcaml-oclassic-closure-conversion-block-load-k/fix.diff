@@ -1,0 +1,59 @@
+diff --git a/middle_end/flambda2/from_lambda/closure_conversion.ml b/middle_end/flambda2/from_lambda/closure_conversion.ml
+index 73bbd4d2..792569c0 100644
+--- a/middle_end/flambda2/from_lambda/closure_conversion.ml
++++ b/middle_end/flambda2/from_lambda/closure_conversion.ml
+@@ -1418,7 +1418,8 @@ type simplified_block_load =
+   | Block_but_cannot_simplify of Code_or_metadata.t Value_approximation.t
+   | Field_contents of Simple.t
+ 
+-let simplify_block_load acc body_env ~block ~field : simplified_block_load =
++let simplify_block_load acc body_env ~block ~field ~load_kind :
++    simplified_block_load =
+   match find_value_approximation_through_symbol acc body_env block with
+   | Unknown _ -> Unknown
+   | Closure_approximation _ | Value_symbol _ | Value_const _ -> Not_a_block
+@@ -1427,9 +1428,19 @@ let simplify_block_load acc body_env ~block ~field : simplified_block_load =
+       let i = Target_ocaml_int.to_int field in
+       if i >= Array.length approx then None else Some approx.(i)
+     in
++    (* The load can be of a different kind from the field of the known block,
++       e.g. in an unreachable match case for another constructor, where a
++       [float#] field is read from a block whose field is a boxed float. The
++       field contents must then not be substituted for the result. *)
+     match approx with
+-    | Some (Value_symbol sym) -> Field_contents (Simple.symbol sym)
+-    | Some (Value_const c) -> Field_contents (Simple.const c)
++    | Some (Value_symbol sym) ->
++      if Flambda_kind.equal load_kind Flambda_kind.value
++      then Field_contents (Simple.symbol sym)
++      else Unknown
++    | Some (Value_const c) ->
++      if Flambda_kind.equal load_kind (Reg_width_const.kind c)
++      then Field_contents (Simple.const c)
++      else Unknown
+     | Some approx -> Block_but_cannot_simplify approx
+     | None -> Not_a_block)
+ 
+@@ -1707,8 +1718,10 @@ let close_let acc env let_bound_ids_with_kinds user_visible defining_expr
+             (Bound_pattern.static
+                (Bound_static.create [Bound_static.Pattern.block_like symbol]))
+             defining_expr ~body
+-        | Prim (Unary (Block_load { field; _ }, block), _) -> (
+-          match simplify_block_load acc body_env ~block ~field with
++        | Prim (Unary (Block_load { field; kind = load_kind; _ }, block), _)
++          -> (
++          let load_kind = P.Block_access_kind.element_kind_for_load load_kind in
++          match simplify_block_load acc body_env ~block ~field ~load_kind with
+           | Unknown -> bind acc body_env
+           | Not_a_block ->
+             if Flambda_features.kind_checks ()
+@@ -4173,7 +4186,8 @@ let wrap_final_module_block acc env ~program ~prog_return_cont
+           let pos_str = string_of_int pos in
+           let field = Target_ocaml_int.of_int (Acc.machine_width acc) pos in
+           let block = module_block_simple in
+-          match simplify_block_load acc env ~block ~field with
++          let load_kind = kind_of_field pos in
++          match simplify_block_load acc env ~block ~field ~load_kind with
+           | Unknown | Not_a_block | Block_but_cannot_simplify _ ->
+             Let_bound
+               ( Variable.create ("field_" ^ pos_str) (kind_of_field pos),

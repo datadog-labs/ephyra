@@ -1,0 +1,71 @@
+diff --git a/gix-traverse/src/commit/topo/init.rs b/gix-traverse/src/commit/topo/init.rs
+index 949bec911..d5d4e3314 100644
+--- a/gix-traverse/src/commit/topo/init.rs
++++ b/gix-traverse/src/commit/topo/init.rs
+@@ -187,6 +187,11 @@ where
+                 continue;
+             }
+ 
++            // Tips reachable from an end are hidden, like `git rev-list tip ^end`.
++            if w.states.get(id).is_some_and(|s| s.contains(WalkFlags::Uninteresting)) {
++                continue;
++            }
++
+             let commit = find(w.commit_graph.as_ref(), &w.find, id, &mut w.buf)?;
+             let (generation, time) = gen_and_commit_time(commit)?;
+             let parent_ids = w
+diff --git a/gix-traverse/src/commit/topo/iter.rs b/gix-traverse/src/commit/topo/iter.rs
+index 6b9e67e6e..fc024c20d 100644
+--- a/gix-traverse/src/commit/topo/iter.rs
++++ b/gix-traverse/src/commit/topo/iter.rs
+@@ -109,7 +109,17 @@ where
+ 
+     fn explore_walk_step(&mut self) -> Result {
+         if let Some((_, id)) = self.explore_queue.pop() {
+-            let parents = self.collect_parents(&id)?;
++            // Like Git, hide all ancestors of uninteresting commits, even when only
++            // first parents are followed for interesting ones.
++            let uninteresting = self
++                .states
++                .get(&id)
++                .is_some_and(|s| s.contains(WalkFlags::Uninteresting));
++            let parents = if uninteresting {
++                self.collect_all_parents(&id)?
++            } else {
++                self.collect_parents(&id)?
++            };
+             self.process_parents(&id, &parents)?;
+ 
+             for parent in parents {
+diff --git a/gix-traverse/tests/traverse/commit/topo.rs b/gix-traverse/tests/traverse/commit/topo.rs
+index f097563f2..8b8f15c45 100644
+--- a/gix-traverse/tests/traverse/commit/topo.rs
++++ b/gix-traverse/tests/traverse/commit/topo.rs
+@@ -341,6 +341,27 @@ mod first_parent {
+         assert_eq!(result, expected);
+         Ok(())
+     }
++
++    #[test]
++    fn tip_reachable_from_end_through_second_parent() -> gix_testtools::TestResult {
++        let odb = odb()?;
++        let end = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
++
++        // `git rev-list --first-parent tip ^end` is empty: ends hide all their ancestors.
++        for tip in [
++            "62ed296d9986f50477e9f7b7e81cd0258939a43d",
++            "3be0c4c793c634c8fd95054345d4935d10a0879a",
++            "2083b02a78e88b747e305b6ed3d5a861cf9fb73f",
++        ]
++        .map(hex_to_id)
++        {
++            for sorting in [topo::Sorting::TopoOrder, topo::Sorting::DateOrder] {
++                let result = traverse_both([tip], [end], &odb, sorting, Parents::First)?;
++                assert!(result.is_empty(), "{tip} is hidden by {end}, got {result:?}");
++            }
++        }
++        Ok(())
++    }
+ }
+ 
+ mod date_order {

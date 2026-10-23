@@ -1,0 +1,81 @@
+From 912fbe50cfb906def8752d26b43d95f7316b887f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 23:35:37 -0400
+Subject: [PATCH] linscan: keep the arguments of atomic operations live across
+ them
+
+The amd64 single-domain compare-and-set path writes its scratch result
+before it has read the address and the new value. Interf makes every
+result of an atomic operation interfere with every argument, but the
+linear-scan allocator ended the arguments' intervals before the results
+began, so the scratch could share a register with the new value (the
+old value was stored back) or with the address (the new value was
+stored through the value just loaded).
+
+Treat the arguments of the atomic operations as live until the end of
+the instruction, so that they overlap the results.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ asmcomp/interval.ml                           | 11 +++++++-
+ .../tests/lib-atomic/test_atomic_linscan.ml   | 26 +++++++++++++++++++
+ 2 files changed, 36 insertions(+), 1 deletion(-)
+ create mode 100644 testsuite/tests/lib-atomic/test_atomic_linscan.ml
+
+diff --git a/asmcomp/interval.ml b/asmcomp/interval.ml
+index 3cfbf78..9819dc4 100644
+--- a/asmcomp/interval.ml
++++ b/asmcomp/interval.ml
+@@ -99,7 +99,16 @@ let update_interval_position_by_set intervals regs pos kind =
+   Set.iter (update_interval_position intervals pos kind) regs
+ 
+ let update_interval_position_by_instr intervals instr pos =
+-  update_interval_position_by_array intervals instr.arg pos Argument;
++  (* The atomic operations write a result (or the amd64 scratch) before
++     they have finished reading their arguments, so every result must
++     differ from every argument (see Interf). Keeping the arguments live
++     to the end of the instruction makes them overlap the results. *)
++  let arg_kind =
++    match instr.desc with
++    | Iop(Iatomic_fetch_add | Iatomic_exchange | Iatomic_compare_exchange) ->
++        Live
++    | _ -> Argument in
++  update_interval_position_by_array intervals instr.arg pos arg_kind;
+   update_interval_position_by_array intervals instr.res pos Result;
+   update_interval_position_by_set intervals instr.live pos Live
+ 
+diff --git a/testsuite/tests/lib-atomic/test_atomic_linscan.ml b/testsuite/tests/lib-atomic/test_atomic_linscan.ml
+new file mode 100644
+index 0000000..90fb163
+--- /dev/null
++++ b/testsuite/tests/lib-atomic/test_atomic_linscan.ml
+@@ -0,0 +1,26 @@
++(* TEST
++ ocamlopt_flags = "-linscan";
++ native;
++*)
++
++(* With -linscan, the results of an atomic operation, including the amd64
++   scratch register, must not share a register with its arguments. *)
++
++(* The new value dies at the compare-and-set. *)
++let b = Atomic.make 0
++let () =
++  let v = Array.length Sys.argv in
++  ignore (Atomic.compare_and_set b (Atomic.get b) v);
++  assert (Atomic.get b = Array.length Sys.argv)
++
++(* The address dies at the compare-and-set. *)
++let n = Array.length Sys.argv
++let a = Atomic.make 0
++let () = assert (Atomic.compare_and_set a (Atomic.get a) n)
++
++let r = Atomic.make 0
++let () =
++  assert (Atomic.exchange r n = 0);
++  assert (Atomic.get r = n);
++  assert (Atomic.fetch_and_add r n = n);
++  assert (Atomic.get r = 2 * n)
+-- 
+2.56.0
+

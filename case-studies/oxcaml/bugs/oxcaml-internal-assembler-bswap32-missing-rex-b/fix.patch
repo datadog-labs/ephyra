@@ -1,0 +1,126 @@
+From 864a154794ca61479bc64918bfd6efcae20500fa Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Thu, 22 Oct 2026 12:14:53 -0400
+Subject: [PATCH] x86 binary emitter: emit REX.B for 32-bit bswap of r8d-r15d
+
+emit_BSWAP encoded [bswap r32] as 0F C8+rd without a REX prefix, so with
+-internal-assembler (and in the JIT) [bswap %r8d] .. [bswap %r15d]
+byte-swapped %eax .. %edi instead. String.get_int32_be and friends then
+corrupted an unrelated register.
+
+Emit REX.B for r8d-r15d, as the 64-bit case already does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ backend/x86_binary_emitter.ml                 |  5 +-
+ .../tests/asmcomp/bswap32_high_regs.ml        | 70 +++++++++++++++++++
+ .../tests/asmcomp/bswap32_high_regs.reference |  4 ++
+ 3 files changed, 78 insertions(+), 1 deletion(-)
+ create mode 100644 oxcaml/testsuite/tests/asmcomp/bswap32_high_regs.ml
+ create mode 100644 oxcaml/testsuite/tests/asmcomp/bswap32_high_regs.reference
+
+diff --git a/backend/x86_binary_emitter.ml b/backend/x86_binary_emitter.ml
+index 819a60586a..53a28731db 100644
+--- a/backend/x86_binary_emitter.ml
++++ b/backend/x86_binary_emitter.ml
+@@ -1484,7 +1484,10 @@ let emit_cqto b =
+   buf_int8 b 0x99
+ 
+ let emit_BSWAP b = function
+-  | Reg32 reg -> buf_opcodes b [ 0x0F; 0xC8 + reg7 (rd_of_reg64 reg) ]
++  | Reg32 reg ->
++      let reg = rd_of_reg64 reg in
++      emit_rex b (rexb_opcode reg);
++      buf_opcodes b [ 0x0F; 0xC8 + reg7 reg ]
+   | Reg64 reg ->
+       let reg = rd_of_reg64 reg in
+       emit_rex b (rexw lor rexb_opcode reg);
+diff --git a/oxcaml/testsuite/tests/asmcomp/bswap32_high_regs.ml b/oxcaml/testsuite/tests/asmcomp/bswap32_high_regs.ml
+new file mode 100644
+index 0000000000..2dac3463d2
+--- /dev/null
++++ b/oxcaml/testsuite/tests/asmcomp/bswap32_high_regs.ml
+@@ -0,0 +1,70 @@
++(* TEST
++ arch_amd64;
++ not-windows;
++ not-macos;
++ flags = "-internal-assembler";
++ native;
++*)
++
++(* Regression test for [emit_BSWAP] in [backend/x86_binary_emitter.ml]. The
++   32-bit form was encoded without the REX.B prefix, so [bswap %r8d] ..
++   [bswap %r15d] byte-swapped [%eax] .. [%edi] instead, corrupting an unrelated
++   register. With twelve values live at once, some of the swaps below are done
++   in r8-r15. *)
++
++external bswap32 : int32 -> int32 = "%bswap_int32"
++
++external bswap64 : int64 -> int64 = "%bswap_int64"
++
++let[@inline never] sum32 s =
++  let x0 = String.get_int32_be s 0 in
++  let x1 = String.get_int32_be s 1 in
++  let x2 = String.get_int32_be s 2 in
++  let x3 = String.get_int32_be s 3 in
++  let x4 = String.get_int32_be s 4 in
++  let x5 = String.get_int32_be s 5 in
++  let x6 = String.get_int32_be s 6 in
++  let x7 = String.get_int32_be s 7 in
++  let x8 = String.get_int32_be s 8 in
++  let x9 = String.get_int32_be s 9 in
++  let x10 = String.get_int32_be s 10 in
++  let x11 = String.get_int32_be s 11 in
++  Int32.(
++    (1 * to_int x0) + (2 * to_int x1) + (3 * to_int x2) + (4 * to_int x3)
++    + (5 * to_int x4) + (6 * to_int x5) + (7 * to_int x6) + (8 * to_int x7)
++    + (9 * to_int x8) + (10 * to_int x9) + (11 * to_int x10)
++    + (12 * to_int x11))
++
++let[@inline never] swap32 a b c d e f g h i j k l =
++  let a = bswap32 a and b = bswap32 b and c = bswap32 c and d = bswap32 d in
++  let e = bswap32 e and f = bswap32 f and g = bswap32 g and h = bswap32 h in
++  let i = bswap32 i and j = bswap32 j and k = bswap32 k and l = bswap32 l in
++  let ( ^^ ) = Int32.logxor in
++  a ^^ b ^^ c ^^ d ^^ e ^^ f ^^ g ^^ h ^^ i ^^ j ^^ k ^^ Int32.shift_left l 1
++
++let[@inline never] sum64 s =
++  let x0 = Bytes.get_int64_be s 0 in
++  let x1 = Bytes.get_int64_be s 1 in
++  let x2 = Bytes.get_int64_be s 2 in
++  let x3 = Bytes.get_int64_be s 3 in
++  let x4 = Bytes.get_int64_be s 4 in
++  let x5 = Bytes.get_int64_be s 5 in
++  let x6 = Bytes.get_int64_be s 6 in
++  let x7 = Bytes.get_int64_be s 7 in
++  let x8 = Bytes.get_int64_be s 8 in
++  let x9 = Bytes.get_int64_be s 9 in
++  let x10 = Bytes.get_int64_be s 10 in
++  let x11 = Bytes.get_int64_be s 11 in
++  let ( ^^ ) = Int64.logxor in
++  x0 ^^ x1 ^^ x2 ^^ x3 ^^ x4 ^^ x5 ^^ x6 ^^ x7 ^^ x8 ^^ x9 ^^ x10
++  ^^ Int64.shift_left x11 1
++
++let () =
++  let s = String.init 24 (fun i -> Char.chr (0x41 + (i * 7 mod 53))) in
++  Printf.printf "sum32 = %d\n" (sum32 s);
++  let n k = Int32.of_int (0x01020304 * (k + 1)) in
++  Printf.printf "swap32 = %ld\n"
++    (swap32 (n 0) (n 1) (n 2) (n 3) (n 4) (n 5) (n 6) (n 7) (n 8) (n 9)
++       (n 10) (n 11));
++  Printf.printf "sum64 = %Ld\n" (sum64 (Bytes.of_string s));
++  Printf.printf "bswap64 = %Lx\n" (bswap64 0x0102030405060708L)
+diff --git a/oxcaml/testsuite/tests/asmcomp/bswap32_high_regs.reference b/oxcaml/testsuite/tests/asmcomp/bswap32_high_regs.reference
+new file mode 100644
+index 0000000000..7dec7575e7
+--- /dev/null
++++ b/oxcaml/testsuite/tests/asmcomp/bswap32_high_regs.reference
+@@ -0,0 +1,4 @@
++sum32 = 115348997581
++swap32 = 1618751512
++sum64 = -2326791275590985015
++bswap64 = 807060504030201
+-- 
+2.56.0
+

@@ -1,0 +1,112 @@
+diff --git a/gix/src/revision/spec/parse/delegate/revision.rs b/gix/src/revision/spec/parse/delegate/revision.rs
+index 8dce95427..c481fa36e 100644
+--- a/gix/src/revision/spec/parse/delegate/revision.rs
++++ b/gix/src/revision/spec/parse/delegate/revision.rs
+@@ -119,6 +119,19 @@ impl delegate::Revision for Delegate<'_> {
+             r.follow_to_object()
+                 .map_err(|err| error::with_missing_reference(err.into_exn()))?;
+         }
++        // An entry that records the deletion of the reference has a null new id. Like Git, which treats it as the
++        // end of the log, fall back to the current value of the reference instead of returning the null id.
++        let current = r.clone();
++        let id_or_current = |id: ObjectId| -> Result<ObjectId> {
++            if !id.is_null() {
++                return Ok(id);
++            }
++            let mut current = current.clone();
++            Ok(current
++                .follow_to_object()
++                .map_err(|err| error::with_missing_reference(err.into_exn()))?
++                .detach())
++        };
+         let mut platform = r.log_iter();
+         match platform.rev().ok().flatten() {
+             Some(mut it) => match query {
+@@ -135,7 +148,7 @@ impl delegate::Revision for Delegate<'_> {
+                         })
+                         .find(|l| l.signature.time.seconds <= date.seconds)
+                     {
+-                        Some(closest_line) => closest_line.new_oid,
++                        Some(closest_line) => id_or_current(closest_line.new_oid)?,
+                         None => match last {
+                             None => bail!("Reflog does not contain any entries"),
+                             Some(id) => id,
+@@ -149,9 +162,10 @@ impl delegate::Revision for Delegate<'_> {
+                 }
+                 ReflogLookup::Entry(no) => match it.nth(no).and_then(std::result::Result::ok) {
+                     Some(line) => {
++                        let id = id_or_current(line.new_oid)?;
+                         let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
+-                        if !objs.contains(&line.new_oid) {
+-                            objs.push(line.new_oid);
++                        if !objs.contains(&id) {
++                            objs.push(id);
+                         }
+                         Ok(())
+                     }
+diff --git a/gix/tests/fixtures/generated-archives/.gitignore b/gix/tests/fixtures/generated-archives/.gitignore
+index e0cec4f40..e94a98a28 100644
+--- a/gix/tests/fixtures/generated-archives/.gitignore
++++ b/gix/tests/fixtures/generated-archives/.gitignore
+@@ -57,6 +57,8 @@
+ # Generate this small symbolic-reference reflog fixture, including its Git baseline.
+ /make_symbolic_ref_reflogs.tar
+ /make_symbolic_ref_reflogs_sha256.tar
++/make_reflog_with_deletion.tar
++/make_reflog_with_deletion_sha256.tar
+ # Generate this small tracking-selector fixture, including its Git baseline.
+ /make_tracking_branch_revspecs.tar
+ /make_tracking_branch_revspecs_sha256.tar
+diff --git a/gix/tests/fixtures/make_reflog_with_deletion.sh b/gix/tests/fixtures/make_reflog_with_deletion.sh
+new file mode 100755
+index 000000000..222e8f3df
+--- /dev/null
++++ b/gix/tests/fixtures/make_reflog_with_deletion.sh
+@@ -0,0 +1,21 @@
++#!/usr/bin/env bash
++set -eu -o pipefail
++
++# Deleting the checked-out branch records an entry with a null new id in HEAD's reflog.
++git init -q
++export GIT_COMMITTER_DATE="2000-01-01 00:00:00 +0000"
++git commit -q --allow-empty -m 'fix one'
++export GIT_COMMITTER_DATE="2000-01-02 00:00:00 +0000"
++git update-ref -d refs/heads/main
++export GIT_COMMITTER_DATE="2000-01-03 00:00:00 +0000"
++git commit -q --allow-empty -m 'fix two'
++
++# Bake Git's object IDs or failure exit codes into the shared revspec baseline format.
++function baseline() {
++  printf '%s\n' "$1" >>baseline.git
++  git rev-parse -q --verify "$1" >>baseline.git 2>/dev/null || echo $? >>baseline.git
++}
++
++for spec in 'HEAD@{0}' 'HEAD@{1}' 'HEAD@{1}^{/fix}' 'HEAD@{2000-01-02 12:00:00 +0000}'; do
++  baseline "$spec"
++done
+diff --git a/gix/tests/gix/revision/spec/from_bytes/reflog.rs b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+index 289bc083f..6bda1e141 100644
+--- a/gix/tests/gix/revision/spec/from_bytes/reflog.rs
++++ b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+@@ -35,6 +35,21 @@ fn symbolic_references_use_their_own_log_or_the_final_targets() -> gix_testtools
+     Ok(())
+ }
+ 
++#[test]
++fn deletion_entries_resolve_to_the_current_value() -> gix_testtools::TestResult {
++    let fixture = gix_testtools::scripted_fixture_read_only("make_reflog_with_deletion.sh")?;
++    let repo = gix::open_opts(fixture, crate::restricted())?;
++    let head = repo.head_id()?.detach();
++    for spec in ["HEAD@{1}", "HEAD@{1}^{/fix}", "HEAD@{2000-01-02 12:00:00 +0000}"] {
++        assert_eq!(
++            parse_spec(spec, &repo)?.single(),
++            Some(head.attach(&repo)),
++            "{spec} selects an entry that deletes the ref, which like in Git ends the log at the current value"
++        );
++    }
++    Ok(())
++}
++
+ #[test]
+ fn nth_prior_checkout() {
+     let repo = repo("complex_graph").unwrap();

@@ -1,0 +1,46 @@
+diff --git a/brush-core/src/patterns.rs b/brush-core/src/patterns.rs
+index 2564c6d..25df9a8 100644
+--- a/brush-core/src/patterns.rs
++++ b/brush-core/src/patterns.rs
+@@ -286,10 +286,14 @@ impl Pattern {
+                     .set_extended_globbing(self.enable_extended_globbing)
+                     .set_case_insensitive(self.case_insensitive);
+ 
++                // Skip empty pieces (e.g. from `""` or an empty expansion) so that
++                // a pattern like `"".*` is still recognized as starting with a dot.
+                 let subpattern_starts_with_dot = subpattern
+                     .pieces
+-                    .first()
+-                    .is_some_and(|piece| piece.as_str().starts_with('.'));
++                    .iter()
++                    .map(|piece| piece.as_str())
++                    .find(|s| !s.is_empty())
++                    .is_some_and(|s| s.starts_with('.'));
+ 
+                 let allow_dot_files = !options.require_dot_in_pattern_to_match_dot_files
+                     || subpattern_starts_with_dot;
+diff --git a/brush-shell/tests/cases/compat/patterns/filename_expansion.yaml b/brush-shell/tests/cases/compat/patterns/filename_expansion.yaml
+index 6c956ae..4271bbe 100644
+--- a/brush-shell/tests/cases/compat/patterns/filename_expansion.yaml
++++ b/brush-shell/tests/cases/compat/patterns/filename_expansion.yaml
+@@ -224,6 +224,20 @@ cases:
+       echo ".*  : " .*
+       echo "./.*: " ./.*
+ 
++  - name: "Pathname expansion: dot files with leading empty quotes"
++    min_oracle_version: 5.2
++    test_files:
++      - path: ".file"
++      - path: "subdir/.hidden"
++    stdin: |
++      shopt -u dotglob
++      empty=
++      echo "".*
++      echo ''.*
++      echo $empty"".*
++      echo $(true)''.*
++      echo subdir/"".*
++
+   - name: "Glob results are sorted"
+     test_files:
+       - path: "cherry.txt"
