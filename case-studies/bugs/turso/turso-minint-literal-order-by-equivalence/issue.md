@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9925 (https://github.com/tursodatabase/turso/issues/9925) (line 1 corrected 2026-10-21).
 
 Title: A result column `-9223372036854775808` becomes REAL when ORDER BY / GROUP BY has `-9.223372036854776e18` (and the other way round)
 

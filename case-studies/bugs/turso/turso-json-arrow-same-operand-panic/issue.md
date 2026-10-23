@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9836 (https://github.com/tursodatabase/turso/issues/9836) (line 1 corrected 2026-10-21).
 
 Title: `x -> x` and `x ->> x` panic (index out of bounds) when both operands are the same expression
 

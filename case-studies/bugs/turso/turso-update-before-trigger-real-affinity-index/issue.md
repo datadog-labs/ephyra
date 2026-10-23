@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9933 (https://github.com/tursodatabase/turso/issues/9933) (line 1 corrected 2026-10-21).
 Title: UPDATE with a BEFORE UPDATE trigger writes an index key from a REAL column without REAL affinity, corrupting the index (SQLite-created file)
 
 SQLite writes a whole-number value in a REAL column (`128.0`) to disk as an integer and turns it back into a REAL when it reads the column. In an UPDATE on a table with a BEFORE UPDATE trigger, Turso reads the columns again after the trigger, without that conversion. The new index key is computed from the integer `128`, while the key it deletes on the next UPDATE is computed from `128.0`. An expression index whose value depends on the type (`typeof`, `format`, `printf`, `quote`, ...) then gets a key that doesn't match the row.

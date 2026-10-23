@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9840 (https://github.com/tursodatabase/turso/issues/9840) (line 1 corrected 2026-10-21).
 
 **Title:** JSON functions write a negative-zero REAL as `-0.0`; SQLite writes `0.0`
 

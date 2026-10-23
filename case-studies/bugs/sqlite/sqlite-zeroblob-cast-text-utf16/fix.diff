@@ -1,0 +1,18 @@
+--- a/src/vdbeapi.c
++++ b/src/vdbeapi.c
+@@ -691,6 +691,7 @@
+   }
+ #ifndef SQLITE_OMIT_INCRBLOB
+   sqlite3VdbeMemSetZeroBlob(pCtx->pOut, (int)n);
++  pOut->enc = pCtx->enc;
+   return SQLITE_OK;
+ #else
+   return sqlite3VdbeMemSetZeroBlob(pCtx->pOut, (int)n);
+@@ -2017,6 +2018,7 @@
+ #else
+     rc = sqlite3VdbeMemSetZeroBlob(&p->aVar[i-1], n);
+ #endif
++    p->aVar[i-1].enc = ENC(p->db);
+     sqlite3_mutex_leave(p->db->mutex);
+   }
+   return rc;

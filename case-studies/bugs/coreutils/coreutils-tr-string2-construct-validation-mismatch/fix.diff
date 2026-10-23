@@ -1,0 +1,257 @@
+diff --git a/src/uu/tr/locales/en-US.ftl b/src/uu/tr/locales/en-US.ftl
+index b2613bf64..14582325e 100644
+--- a/src/uu/tr/locales/en-US.ftl
++++ b/src/uu/tr/locales/en-US.ftl
+@@ -36,6 +36,8 @@ tr-error-invalid-repeat-count = invalid repeat count { $count } in [c*n] constru
+ tr-error-empty-set2-when-not-truncating = when not truncating set1, string2 must be non-empty
+ tr-error-class-except-lower-upper-in-set2 = when translating, the only character classes that may appear in set2 are 'upper' and 'lower'
+ tr-error-class-in-set2-not-matched = when translating, every 'upper'/'lower' in set2 must be matched by a 'upper'/'lower' in the same position in set1
++tr-error-equivalence-class-in-set2 = [=c=] expressions may not appear in string2 when translating
++tr-error-char-star-in-set2-when-not-translating = the [c*] construct may appear in string2 only when translating
+ tr-error-set1-longer-set2-ends-in-class = when translating with string1 longer than string2,
+   the latter string must not end with a character class
+ tr-error-complement-more-than-one-unique = when translating with complemented character classes,
+diff --git a/src/uu/tr/locales/fr-FR.ftl b/src/uu/tr/locales/fr-FR.ftl
+index dd1f1966d..287f6584e 100644
+--- a/src/uu/tr/locales/fr-FR.ftl
++++ b/src/uu/tr/locales/fr-FR.ftl
+@@ -37,6 +37,8 @@ tr-error-invalid-repeat-count = nombre de répétitions invalide { $count } dans
+ tr-error-empty-set2-when-not-truncating = quand on ne tronque pas set1, string2 doit être non-vide
+ tr-error-class-except-lower-upper-in-set2 = lors de la traduction, les seules classes de caractères qui peuvent apparaître dans set2 sont 'upper' et 'lower'
+ tr-error-class-in-set2-not-matched = lors de la traduction, chaque 'upper'/'lower' dans set2 doit être associé à un 'upper'/'lower' à la même position dans set1
++tr-error-equivalence-class-in-set2 = les expressions [=c=] ne peuvent pas apparaître dans string2 lors de la traduction
++tr-error-char-star-in-set2-when-not-translating = la construction [c*] ne peut apparaître dans string2 que lors de la traduction
+ tr-error-set1-longer-set2-ends-in-class = lors de la traduction avec string1 plus long que string2,
+   cette dernière chaîne ne doit pas se terminer par une classe de caractères
+ tr-error-complement-more-than-one-unique = lors de la traduction avec des classes de caractères complémentées,
+diff --git a/src/uu/tr/src/diagnostics.rs b/src/uu/tr/src/diagnostics.rs
+index f225f0a00..68638ddf4 100644
+--- a/src/uu/tr/src/diagnostics.rs
++++ b/src/uu/tr/src/diagnostics.rs
+@@ -80,7 +80,11 @@ fn describe(error: &BadSequence) -> Option<(Option<String>, Option<&'static str>
+         )),
+         BadSequence::MultipleCharRepeatInSet2
+         | BadSequence::ClassExceptLowerUpperInSet2
+-        | BadSequence::ClassInSet2NotMatchedBySet1 => Some((None, None)),
++        | BadSequence::ClassInSet2NotMatchedBySet1
++        | BadSequence::EquivalenceClassInSet2 => Some((None, None)),
++        BadSequence::CharStarInSet2WhenNotTranslating => {
++            Some((None, Some("tr-diag-help-repeat")))
++        }
+         BadSequence::Set1LongerSet2EndsInClass => Some((
+             Some(translate!("tr-diag-label-set1-longer-set2-ends-in-class")),
+             None,
+diff --git a/src/uu/tr/src/operation.rs b/src/uu/tr/src/operation.rs
+index 36a2acc07..17f9cb1eb 100644
+--- a/src/uu/tr/src/operation.rs
++++ b/src/uu/tr/src/operation.rs
+@@ -45,6 +45,8 @@ pub enum BadSequence {
+     EmptySet2WhenNotTruncatingSet1,
+     ClassExceptLowerUpperInSet2,
+     ClassInSet2NotMatchedBySet1,
++    EquivalenceClassInSet2,
++    CharStarInSet2WhenNotTranslating,
+     Set1LongerSet2EndsInClass,
+     ComplementMoreThanOneUniqueInSet2,
+     BackwardsRange { end: u32, start: u32 },
+@@ -111,6 +113,16 @@ impl Display for BadSequence {
+             Self::ClassInSet2NotMatchedBySet1 => {
+                 write!(f, "{}", translate!("tr-error-class-in-set2-not-matched"))
+             }
++            Self::EquivalenceClassInSet2 => {
++                write!(f, "{}", translate!("tr-error-equivalence-class-in-set2"))
++            }
++            Self::CharStarInSet2WhenNotTranslating => {
++                write!(
++                    f,
++                    "{}",
++                    translate!("tr-error-char-star-in-set2-when-not-translating")
++                )
++            }
+             Self::Set1LongerSet2EndsInClass => {
+                 write!(
+                     f,
+@@ -206,12 +218,14 @@ pub enum Sequence {
+     CharStar(u8),
+     CharRepeat(u8, usize),
+     Class(Class),
++    /// `[=c=]`: every character equivalent to `c`, which is only `c` itself.
++    Equiv(u8),
+ }
+ 
+ impl Sequence {
+     pub fn flatten(&self) -> Box<dyn Iterator<Item = u8>> {
+         match self {
+-            Self::Char(c) => Box::new(std::iter::once(*c)),
++            Self::Char(c) | Self::Equiv(c) => Box::new(std::iter::once(*c)),
+             Self::CharRange(l, r) => Box::new(*l..=*r),
+             Self::CharStar(c) => Box::new(std::iter::repeat(*c)),
+             Self::CharRepeat(c, n) => Box::new(std::iter::repeat_n(*c, *n)),
+@@ -255,7 +269,7 @@ impl Sequence {
+     /// the count of a `[c*n]` repeat can be far too large to materialize.
+     fn expanded_len(&self) -> usize {
+         match self {
+-            Self::Char(_) => 1,
++            Self::Char(_) | Self::Equiv(_) => 1,
+             Self::CharRange(l, r) => usize::from(*r) - usize::from(*l) + 1,
+             // A star is only sized once it has been turned into a repeat.
+             Self::CharStar(_) => 0,
+@@ -349,6 +363,20 @@ impl Sequence {
+             ));
+         }
+ 
++        if !translating && set2.iter().any(|s| is_char_star(&s)) {
++            return Err(SequenceError::whole_set(
++                BadSequence::CharStarInSet2WhenNotTranslating,
++                2,
++            ));
++        }
++
++        if translating && set2.iter().any(|x| matches!(x, Self::Equiv(_))) {
++            return Err(SequenceError::whole_set(
++                BadSequence::EquivalenceClassInSet2,
++                2,
++            ));
++        }
++
+         if translating
+             && set2.iter().any(|&x| {
+                 matches!(x, Self::Class(_))
+@@ -387,14 +415,21 @@ impl Sequence {
+             })
+             .collect();
+ 
+-        // For every upper/lower in set2, there must be an upper/lower in set1 at the same position. The position is calculated by expanding everything before the upper/lower in both sets
++        // For every upper/lower in set2, there must be an upper/lower in set1 at the same position. The position is calculated by expanding everything before the upper/lower in both sets.
++        // This only matters for case conversion: it does not apply when not
++        // translating, nor to a complemented set1, whose order is fixed, nor
++        // to a class that starts past the end of set1, which is never used.
++        let set1_full_len = Self::expanded_len_of(&set1);
+         for (set2_pos, set2_item) in set2.iter().enumerate() {
+-            if matches!(set2_item, Self::Class(_)) {
++            if translating && !complement_flag && matches!(set2_item, Self::Class(_)) {
+                 let set2_part_solved_len = Self::expanded_len_of(&set2[..set2_pos]);
++                if set2_part_solved_len > set1_full_len {
++                    continue;
++                }
+ 
+                 let mut class_matches = false;
+                 for (set1_pos, set1_item) in set1.iter().enumerate() {
+-                    if matches!(set1_item, Self::Class(_))
++                    if matches!(set1_item, Self::Class(Class::Upper | Class::Lower))
+                         && Self::expanded_len_of(&set1[..set1_pos]) == set2_part_solved_len
+                     {
+                         class_matches = true;
+@@ -451,7 +486,8 @@ impl Sequence {
+                     }
+                 }
+                 // Otherwise set1 is cut to the length of set2 while pairing below.
+-            } else if matches!(
++            } else if translating
++                && matches!(
+                 set2.last().copied(),
+                 Some(Self::Class(Class::Upper | Class::Lower))
+             ) {
+@@ -758,7 +794,7 @@ impl Sequence {
+                 l,
+                 match (a, b) {
+                     (Err(()), _) => Err(BadSequence::MissingEquivalentClassChar),
+-                    (Ok(c), Ok(())) => Ok(Self::Char(c)),
++                    (Ok(c), Ok(())) => Ok(Self::Equiv(c)),
+                     (Ok(c), Err(v)) => Err(BadSequence::MultipleCharInEquivalence(format!(
+                         "{}{}",
+                         String::from_utf8_lossy(&[c]),
+diff --git a/tests/by-util/test_tr.rs b/tests/by-util/test_tr.rs
+index 2262f8987..4d654cfb3 100644
+--- a/tests/by-util/test_tr.rs
++++ b/tests/by-util/test_tr.rs
+@@ -2058,3 +2058,89 @@ string2 must map all characters in the domain to one
+             .stderr_only("tr: the [c*] repeat construct may not appear in string1\n");
+     }
+ }
++
++#[test]
++fn test_delete_squeeze_any_class_in_set2() {
++    // Not translating: case classes need no counterpart in set1.
++    new_ucmd!()
++        .args(&["-ds", "a", "[:lower:]"])
++        .pipe_in("xaab\n")
++        .succeeds()
++        .stdout_only("xb\n");
++    new_ucmd!()
++        .args(&["-ds", "[:print:]", "x[:upper:]"])
++        .pipe_in("ab\n\n")
++        .succeeds()
++        .stdout_only("\n\n");
++}
++
++#[test]
++fn test_complement_case_class_in_set2() {
++    new_ucmd!()
++        .args(&["-c", "a", "b[:lower:]b"])
++        .pipe_in("xaAb\n")
++        .succeeds()
++        .stdout_is("babbj");
++}
++
++#[test]
++fn test_equivalence_class_in_set2_when_translating() {
++    for args in [&["a", "[=a=]"][..], &["-c", "ab", "[=a=]"], &["-s", "a", "[=a=]"]] {
++        new_ucmd!()
++            .args(args)
++            .fails_with_code(1)
++            .stderr_only("tr: [=c=] expressions may not appear in string2 when translating\n");
++    }
++    new_ucmd!()
++        .args(&["-ds", "a", "[=b=]"])
++        .pipe_in("abbc")
++        .succeeds()
++        .stdout_only("bc");
++}
++
++#[test]
++fn test_char_star_in_set2_when_not_translating() {
++    for set2 in ["[b*]", "[b*0]"] {
++        new_ucmd!()
++            .args(&["-ds", "a", set2])
++            .fails_with_code(1)
++            .stderr_only("tr: the [c*] construct may appear in string2 only when translating\n");
++    }
++    new_ucmd!()
++        .args(&["-s", "a", "[b*]"])
++        .pipe_in("xaab\n")
++        .succeeds()
++        .stdout_only("xb\n");
++}
++
++#[test]
++fn test_case_class_alignment_in_set2() {
++    // set2's case class must line up with an upper/lower class in set1 ...
++    for (set1, set2) in [
++        ("[:xdigit:]", "[:upper:]"),
++        ("[:alpha:]", "[:upper:]"),
++        ("a", "b[:lower:]"),
++        ("[:upper:][:upper:]", "[:lower:]x[:lower:]"),
++    ] {
++        new_ucmd!()
++            .args(&[set1, set2])
++            .fails_with_code(1)
++            .stderr_contains("must be matched by a 'upper'/'lower'");
++    }
++    // ... unless it starts past the end of set1, where it is never used
++    new_ucmd!()
++        .args(&["a", "ab[:lower:]"])
++        .pipe_in("xaAb\n")
++        .succeeds()
++        .stdout_only("xaAb\n");
++    new_ucmd!()
++        .args(&["[:upper:]", "[:lower:]x[:lower:]"])
++        .pipe_in("xaAb\n")
++        .succeeds()
++        .stdout_only("xaab\n");
++    new_ucmd!()
++        .args(&["[:lower:]", "[:lower:]"])
++        .pipe_in("xaAb\n")
++        .succeeds()
++        .stdout_only("xaAb\n");
++}

@@ -650,15 +650,36 @@ fn key_conflict(t: &Table) -> String {
 
 /// A foreign key's actions and deferral, as written after its
 /// `REFERENCES` clause (NO ACTION, the default, left out).
+///
+/// Spelled one way or another by the key itself (`spell`), each way the
+/// same constraint: an action left out now and then written `NO ACTION`,
+/// now and then `MATCH SIMPLE` or `ON INSERT ..` (both parsed and ignored
+/// by SQLite), a key that is not deferred half the time `DEFERRABLE` or
+/// `DEFERRABLE INITIALLY IMMEDIATE` (the grammar's
+/// `defer_subclause` and `refarg` rules, which nothing else spells).
 pub fn fk_tail(f: &crate::model::ForeignKey) -> String {
+    let key = format!("{f:?}");
     let mut out = String::new();
+    if crate::expr::spell(&key, 8) == 0 {
+        out.push_str(" MATCH SIMPLE");
+    }
     for (on, a) in [("DELETE", f.on_delete), ("UPDATE", f.on_update)] {
         if a != crate::model::Action::NoAction {
             out.push_str(&format!(" ON {on} {}", a.sql()));
+        } else if crate::expr::spell(&format!("{on}{key}"), 4) == 0 {
+            out.push_str(&format!(" ON {on} NO ACTION"));
         }
+    }
+    if crate::expr::spell(&format!("i{key}"), 8) == 0 {
+        out.push_str(" ON INSERT CASCADE");
     }
     if f.deferred {
         out.push_str(" DEFERRABLE INITIALLY DEFERRED");
+    } else {
+        // Never `NOT DEFERRABLE`: DROP CONSTRAINT of the key leaves it
+        // behind on trunk 3769f60be38b, a syntax error for a table
+        // constraint (candidate sqlite-drop-constraint-fk-not-deferrable).
+        out.push_str(["", "", " DEFERRABLE", " DEFERRABLE INITIALLY IMMEDIATE"][crate::expr::spell(&format!("d{key}"), 4) as usize]);
     }
     out
 }

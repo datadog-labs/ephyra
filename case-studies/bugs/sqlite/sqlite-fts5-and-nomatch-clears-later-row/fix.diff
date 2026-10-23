@@ -1,0 +1,36 @@
+--- a/ext/fts5/fts5_expr.c
++++ b/ext/fts5/fts5_expr.c
+@@ -1052,6 +1052,24 @@
+     int i;
+     for(i=0; i<pNode->nChild; i++){
+       fts5ExprNodeZeroPoslist(pNode->apChild[i]);
++    }
++  }
++}
++
++/*
++** Zero the position lists of the phrases in the subtree rooted at pNode
++** that belong to nodes currently pointing to rowid iRowid. Nodes that
++** point to a different rowid have already been advanced past iRowid
++** (for example the children of an OR node that do not match iRowid),
++** so their position lists belong to that later row and are left as is.
++*/
++static void fts5ExprNodeZeroPoslistAt(Fts5ExprNode *pNode, i64 iRowid){
++  if( pNode->eType==FTS5_STRING || pNode->eType==FTS5_TERM ){
++    if( pNode->iRowid==iRowid ) fts5ExprNodeZeroPoslist(pNode);
++  }else{
++    int i;
++    for(i=0; i<pNode->nChild; i++){
++      fts5ExprNodeZeroPoslistAt(pNode->apChild[i], iRowid);
+     }
+   }
+ }
+@@ -1375,7 +1393,7 @@
+   }while( bMatch==0 );
+ 
+   if( pAnd->bNomatch && pAnd!=pExpr->pRoot ){
+-    fts5ExprNodeZeroPoslist(pAnd);
++    fts5ExprNodeZeroPoslistAt(pAnd, iLast);
+   }
+   pAnd->iRowid = iLast;
+   return SQLITE_OK;

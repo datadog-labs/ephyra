@@ -1,0 +1,59 @@
+--- a/ext/fts5/test/fts5aux.test
++++ b/ext/fts5/test/fts5aux.test
+@@ -486,6 +486,56 @@
+   do_catchsql_test 15.3.$tn {
+     SELECT snippet(t1, $iCol, '[', ']', '...', 5) FROM t1('one OR five');
+   } {1 {column index out of range}}
++}
++
++#-------------------------------------------------------------------------
++# When an AND node does not match the current row, the position lists
++# of phrases whose nodes have already advanced to a later row must not
++# be cleared, or those phrases report no instances for the later row.
++#
++reset_db
++do_execsql_test 16.0 {
++  CREATE VIRTUAL TABLE t1 USING fts5(a);
++  INSERT INTO t1(rowid, a) VALUES(1, 'x y'), (2, 'x z');
++}
++
++do_execsql_test 16.1 {
++  SELECT rowid, highlight(t1, 0, '[', ']') FROM t1('x AND (z OR "y x")');
++} {2 {[x] [z]}}
++
++do_execsql_test 16.2 {
++  SELECT rowid, highlight(t1, 0, '[', ']')
++  FROM t1('(x AND (z OR "y x")) OR zz');
++} {2 {[x] [z]}}
++
++do_execsql_test 16.3 {
++  SELECT rowid, highlight(t1, 0, '[', ']')
++  FROM t1('(x AND (z OR "y x")) NOT zz');
++} {2 {[x] [z]}}
++
++do_execsql_test 16.4 {
++  SELECT rowid, highlight(t1, 0, '[', ']')
++  FROM t1('(x AND (z OR "y x")) OR zz') WHERE rowid=2;
++} {2 {[x] [z]}}
++
++do_execsql_test 16.5 {
++  SELECT bm25(t1) = (SELECT bm25(t1) FROM t1('x AND (z OR "y x")'))
++  FROM t1('(x AND (z OR "y x")) OR zz');
++} {1}
++
++foreach {tn detail} {1 full 2 column} {
++  do_execsql_test 16.6.$tn.0 "
++    CREATE VIRTUAL TABLE t2_${tn} USING fts5(a, b, detail=$detail);
++    INSERT INTO t2_${tn}(rowid, a, b) VALUES(1, 'x y', ''), (2, 'x z', '');
++  "
++  do_execsql_test 16.6.$tn.1 "
++    SELECT rowid, highlight(t2_${tn}, 0, '\[', '\]')
++    FROM t2_${tn}('(x AND (z OR b : y)) OR zz');
++  " {2 {[x] [z]}}
++  do_execsql_test 16.6.$tn.2 "
++    SELECT rowid, highlight(t2_${tn}, 0, '\[', '\]')
++    FROM t2_${tn}('(x AND (z OR b : y)) OR zz') ORDER BY rank;
++  " {2 {[x] [z]}}
+ }
+ 
+ finish_test

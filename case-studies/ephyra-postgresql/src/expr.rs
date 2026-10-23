@@ -1956,7 +1956,7 @@ fn from_item_ok(src: &Src, s: &Schema, scope: &Scope, lateral: bool) -> bool {
                 return false;
             }
             // A known PostgreSQL bug, excluded
-            // (`../bugs/candidates/pg-minmax-subquery-relid`): a min/max
+            // (`../bugs/postgresql/pg-minmax-subquery-relid`): a min/max
             // subquery in FROM (index-optimized) with an outer `= ANY
             // (array_append(.., s.c))` pushed into it fails in the planner
             // ("no relation entry for relid 1", XX000). So an aggregate

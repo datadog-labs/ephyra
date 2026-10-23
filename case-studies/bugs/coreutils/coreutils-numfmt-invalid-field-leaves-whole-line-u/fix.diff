@@ -1,0 +1,206 @@
+diff --git a/src/uu/numfmt/src/format.rs b/src/uu/numfmt/src/format.rs
+index 3c0e005d8..8f3368c02 100644
+--- a/src/uu/numfmt/src/format.rs
++++ b/src/uu/numfmt/src/format.rs
+@@ -12,7 +12,7 @@ use uucore::i18n::decimal::{locale_decimal_separator, locale_grouping_separator}
+ use uucore::translate;
+ 
+ use crate::numeric::ParsedNumber;
+-use crate::options::{NumfmtOptions, RoundMethod, TransformOptions};
++use crate::options::{InvalidModes, NumfmtOptions, RoundMethod, TransformOptions};
+ use crate::units::{
+     DisplayableSuffix, RawSuffix, Result, Suffix, Unit, iec_bases_f64, si_bases_f64,
+ };
+@@ -933,11 +933,30 @@ fn split_bytes<'a>(input: &'a [u8], delim: &'a [u8]) -> impl Iterator<Item = &'a
+     })
+ }
+ 
++/// Convert one selected field, or, unless `--invalid=abort`, hand back `None`
++/// after keeping its error in `invalid`: such a field is written as it came and
++/// the rest of the line is still converted.
++fn convert_field(
++    convert: impl FnOnce() -> Result<String>,
++    options: &NumfmtOptions,
++    invalid: &mut Vec<String>,
++) -> std::result::Result<Option<String>, WriteError> {
++    match convert() {
++        Ok(formatted) => Ok(Some(formatted)),
++        Err(message) if matches!(options.invalid, InvalidModes::Abort) => Err(message.into()),
++        Err(message) => {
++            invalid.push(message);
++            Ok(None)
++        }
++    }
++}
++
+ pub fn write_formatted_with_delimiter<W: std::io::Write + ?Sized>(
+     writer: &mut W,
+     input: &[u8],
+     options: &NumfmtOptions,
+     eol: Option<u8>,
++    invalid: &mut Vec<String>,
+ ) -> std::result::Result<(), WriteError> {
+     let delimiter = options.delimiter.as_deref().unwrap();
+ 
+@@ -950,12 +969,17 @@ pub fn write_formatted_with_delimiter<W: std::io::Write + ?Sized>(
+         }
+ 
+         if field_selected {
+-            // Field must be valid UTF-8 for numeric conversion
+-            let field_str = std::str::from_utf8(field)
+-                .map_err(|_| translate!("numfmt-error-invalid-number", "input" => escape_line(field).quote()))?
+-                .trim_start();
+-            let formatted = format_string(field_str, options, None)?;
+-            writer.write_all(formatted.as_bytes())?;
++            let convert = || {
++                // Field must be valid UTF-8 for numeric conversion
++                let field_str = std::str::from_utf8(field)
++                    .map_err(|_| translate!("numfmt-error-invalid-number", "input" => escape_line(field).quote()))?
++                    .trim_start();
++                format_string(field_str, options, None)
++            };
++            match convert_field(convert, options, invalid)? {
++                Some(formatted) => writer.write_all(formatted.as_bytes())?,
++                None => writer.write_all(field)?,
++            }
+         } else {
+             // add unselected field without conversion
+             writer.write_all(field)?;
+@@ -974,6 +998,7 @@ pub fn write_formatted_with_whitespace<W: std::io::Write + ?Sized>(
+     s: &str,
+     options: &NumfmtOptions,
+     eol: Option<u8>,
++    invalid: &mut Vec<String>,
+ ) -> std::result::Result<(), WriteError> {
+     for (n, (prefix, field)) in (1..).zip(WhitespaceSplitter {
+         s: Some(s),
+@@ -998,11 +1023,18 @@ pub fn write_formatted_with_whitespace<W: std::io::Write + ?Sized>(
+                 None
+             };
+ 
+-            let formatted = format_string(field, options, implicit_padding)?;
+-            writer.write_all(formatted.as_bytes())?;
++            let convert = || format_string(field, options, implicit_padding);
++            match convert_field(convert, options, invalid)? {
++                Some(formatted) => writer.write_all(formatted.as_bytes())?,
++                None => {
++                    writer.write_all(prefix.as_bytes())?;
++                    writer.write_all(field.as_bytes())?;
++                }
++            }
+         } else {
+-            // the -z option converts an initial \n into a space
+-            let prefix = if options.zero_terminated && prefix.starts_with('\n') {
++            // the -z option converts an initial \n into a space, except before
++            // the first field
++            let prefix = if options.zero_terminated && n > 1 && prefix.starts_with('\n') {
+                 writer.write_all(b" ")?;
+                 &prefix[1..]
+             } else {
+diff --git a/src/uu/numfmt/src/numfmt.rs b/src/uu/numfmt/src/numfmt.rs
+index ebdee84b7..e5b4dc561 100644
+--- a/src/uu/numfmt/src/numfmt.rs
++++ b/src/uu/numfmt/src/numfmt.rs
+@@ -59,13 +59,16 @@ fn format_and_write(
+     let mut buf = Vec::new();
+     let dest: &mut dyn Write = if buffer_output { &mut buf } else { writer };
+ 
++    // Fields that did not convert, outside abort mode: they are written as
++    // they came and the rest of the line is still converted.
++    let mut invalid = Vec::new();
+     let result = if options.delimiter.is_some() {
+-        write_formatted_with_delimiter(dest, line, options, eol)
++        write_formatted_with_delimiter(dest, line, options, eol, &mut invalid)
+     } else {
+         match std::str::from_utf8(line) {
+             // Scientific notation is rejected per field when the number is
+             // parsed, so a token in a field that is not converted is left alone.
+-            Ok(s) => write_formatted_with_whitespace(dest, s, options, eol),
++            Ok(s) => write_formatted_with_whitespace(dest, s, options, eol, &mut invalid),
+             Err(_) => Err(translate!(
+                 "numfmt-error-invalid-number",
+                 "input" => escape_line(line).quote()
+@@ -83,7 +86,7 @@ fn format_and_write(
+         Err(WriteError::Invalid(message)) => Err(message),
+     };
+ 
+-    if let Err(msg) = result {
++    let report = |msg: String| -> UResult<()> {
+         match options.invalid {
+             InvalidModes::Abort => {
+                 return Err(Box::new(NumfmtError::FormattingError(msg)));
+@@ -96,6 +99,16 @@ fn format_and_write(
+             }
+             InvalidModes::Ignore => {}
+         }
++        Ok(())
++    };
++
++    let saw_invalid = !invalid.is_empty();
++    for msg in invalid {
++        report(msg)?;
++    }
++
++    if let Err(msg) = result {
++        report(msg)?;
+         // On error, echo the original line unchanged.
+         writer
+             .write_all(input_line)
+@@ -113,7 +126,7 @@ fn format_and_write(
+             .write_all(&buf)
+             .map_err_context(|| translate!("numfmt-error-write"))?;
+     }
+-    Ok(false)
++    Ok(saw_invalid)
+ }
+ 
+ /// Run `body` with stdout buffered the way stdio buffers it: a block at a time
+diff --git a/tests/by-util/test_numfmt.rs b/tests/by-util/test_numfmt.rs
+index 9e6158751..b195f4f4b 100644
+--- a/tests/by-util/test_numfmt.rs
++++ b/tests/by-util/test_numfmt.rs
+@@ -1476,6 +1476,44 @@ fn test_invalid_fail_with_fields_does_not_duplicate_output() {
+         .stderr_is("numfmt: invalid number: 'Foo'\n");
+ }
+ 
++#[test]
++fn test_invalid_field_does_not_stop_conversion_of_others() {
++    new_ucmd!()
++        .args(&["--invalid=warn", "--field=-", "--to=si"])
++        .pipe_in("x 1000 y 2000\n")
++        .succeeds()
++        .stdout_is("x 1.0k y 2.0k\n")
++        .stderr_is("numfmt: invalid number: 'x'\nnumfmt: invalid number: 'y'\n");
++    new_ucmd!()
++        .args(&["--invalid=ignore", "--field=-", "--to=si", "-d:"])
++        .pipe_in("1000:x:2000\n")
++        .succeeds()
++        .stdout_only("1.0k:x:2.0k\n");
++}
++
++#[test]
++fn test_invalid_field_zero_terminated_newline_becomes_space() {
++    new_ucmd!()
++        .args(&["-z", "--invalid=ignore"])
++        .pipe_in("e\n")
++        .succeeds()
++        .stdout_only("e ");
++    new_ucmd!()
++        .args(&["-z", "--invalid=ignore", "--field=2"])
++        .pipe_in("5\nx\0")
++        .succeeds()
++        .stdout_only("5 x\0");
++}
++
++#[test]
++fn test_zero_terminated_keeps_newline_before_first_field() {
++    new_ucmd!()
++        .args(&["-z", "--field=3"])
++        .pipe_in("\n x 5\0")
++        .succeeds()
++        .stdout_only("\n x 5\0");
++}
++
+ #[test]
+ fn test_abort_with_fields_preserves_partial_output() {
+     new_ucmd!()

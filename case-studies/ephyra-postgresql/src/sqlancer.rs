@@ -118,7 +118,7 @@
 //!   - Sorted grouping sets (GroupAggregate) leave a grouping column with
 //!     its value, not NULL, in a set that omits it, when the row has a NULL
 //!     and a later input column is projected: a PG 19 regression, likely
-//!     from c456e391138 (`../bugs/candidates/pg-plans-sortagg-cte`). Which
+//!     from c456e391138 (`../bugs/postgresql/pg-plans-sortagg-cte`). Which
 //!     rows it touches cannot be told from the query, so on a query with
 //!     grouping sets a difference of rows between the original and a variant
 //!     is a known skip (`agree`); errors are still failures. This also hides
@@ -239,7 +239,7 @@ pub fn negated_sort_constant_bug(q: &Query) -> bool {
     }
     let ordered = !q.order.is_empty() && q.selects().iter().any(|sel| sel.items.iter().any(negated_constant));
     let grouped = all_selects(q).iter().any(|sel| sel.group.iter().any(negated_constant));
-    !crate::fixed("viewdef-negated-const-sortgroup") && (ordered || grouped)
+    !crate::fixed("viewdef-negated-sort-constant") && (ordered || grouped)
 }
 
 /// Every SELECT of a query: its CTEs', its own, its members' and those of

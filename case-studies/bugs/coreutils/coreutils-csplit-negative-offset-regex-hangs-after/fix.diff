@@ -1,0 +1,70 @@
+diff --git a/src/uu/csplit/src/csplit.rs b/src/uu/csplit/src/csplit.rs
+index d5b1a728c..ad2ec3597 100644
+--- a/src/uu/csplit/src/csplit.rs
++++ b/src/uu/csplit/src/csplit.rs
+@@ -494,6 +494,9 @@ impl SplitWriter<'_> {
+             // The consequence is that the buffer may already be full with lines from a previous
+             // split, which is taken care of when calling `shrink_buffer_to_size`.
+             let offset_usize = offset.unsigned_abs() as usize;
++            // A line number pattern may have left the buffer rewound; reading from it here would
++            // hand each buffered line back to the buffer forever.
++            input_iter.stop_rewind();
+             // lines of the current split before the match; a negative offset may not go past them
+             let mut lines_in_split = input_iter.buffer_len();
+             input_iter.set_size_of_buffer(offset_usize);
+@@ -576,6 +579,11 @@ where
+         self.rewind = true;
+     }
+ 
++    /// Stop outputting the buffer's content, keeping it in the buffer.
++    fn stop_rewind(&mut self) {
++        self.rewind = false;
++    }
++
+     /// Shrink the buffer so that its length is equal to the set size, returning an iterator for
+     /// the elements that were too much.
+     fn shrink_buffer_to_size(&mut self) -> impl Iterator<Item = Vec<u8>> + '_ {
+diff --git a/tests/by-util/test_csplit.rs b/tests/by-util/test_csplit.rs
+index 3812aaf1d..fe91a220d 100644
+--- a/tests/by-util/test_csplit.rs
++++ b/tests/by-util/test_csplit.rs
+@@ -1870,3 +1870,39 @@ fn test_empty_skip_to_regex_is_accepted() {
+     ucmd.args(&["letters", "%%"]).succeeds().stdout_only("19\n");
+     assert_eq!(at.read("xx00"), "delta\necho\nfoxtrot\n");
+ }
++
++#[test]
++fn test_negative_offset_regex_after_line_number_does_not_hang() {
++    let (at, mut ucmd) = at_and_ucmd!();
++    ucmd.args(&["-", "/1/", "1", "/x/-1"])
++        .pipe_in("1\n")
++        .fails_with_code(1);
++    assert!(!at.file_exists("xx00"));
++
++    let (at, mut ucmd) = at_and_ucmd!();
++    ucmd.args(&["-", "/3/-1", "2", "/x/-1"])
++        .pipe_in("1\n2\n3\n4\n5\n")
++        .fails()
++        .stdout_is("2\n0\n8\n")
++        .stderr_is("csplit: '/x/-1': match not found\n");
++    assert!(!at.file_exists("xx00"));
++
++    let (at, mut ucmd) = at_and_ucmd!();
++    ucmd.args(&["-", "/3/-2", "2", "/4/-1"])
++        .pipe_in("1\n2\n3\n4\n5\n")
++        .succeeds()
++        .stdout_only("0\n2\n2\n6\n");
++    assert_eq!(at.read("xx00"), "");
++    assert_eq!(at.read("xx01"), "1\n");
++    assert_eq!(at.read("xx02"), "2\n");
++    assert_eq!(at.read("xx03"), "3\n4\n5\n");
++
++    // the lines an earlier regex already examined are not searched again
++    let (at, mut ucmd) = at_and_ucmd!();
++    ucmd.args(&["-", "/3/-2", "2", "/3/-2", "-k"])
++        .pipe_in("1\n2\n3\n4\n5\n")
++        .fails()
++        .stdout_is("0\n2\n8\n")
++        .stderr_is("csplit: '/3/-2': match not found\n");
++    assert_eq!(at.read("xx02"), "2\n3\n4\n5\n");
++}

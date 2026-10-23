@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9838 (https://github.com/tursodatabase/turso/issues/9838) (line 1 corrected 2026-10-21).
 
 Title: json_each/json_tree with a NULL path error "root path should be text" (SQLite returns no rows)
 

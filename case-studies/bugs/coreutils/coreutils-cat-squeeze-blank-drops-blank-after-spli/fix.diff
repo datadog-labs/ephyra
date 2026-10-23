@@ -1,0 +1,45 @@
+diff --git a/src/uu/cat/src/cat.rs b/src/uu/cat/src/cat.rs
+index 768cb1698..ff3d0728c 100644
+--- a/src/uu/cat/src/cat.rs
++++ b/src/uu/cat/src/cat.rs
+@@ -633,10 +633,14 @@ fn write_new_line<W: Write>(
+         return Ok(());
+     }
+     if !state.at_line_start || !options.squeeze_blank || !state.one_blank_kept {
+-        state.one_blank_kept = true;
+-        if state.at_line_start && options.number == NumberingMode::All {
+-            state.line_number.write(writer)?;
+-            state.line_number.increment();
++        // A newline ending a line left unfinished by a previous read or file
++        // is not a blank line.
++        if state.at_line_start {
++            state.one_blank_kept = true;
++            if options.number == NumberingMode::All {
++                state.line_number.write(writer)?;
++                state.line_number.increment();
++            }
+         }
+         write_end_of_line(writer, options.end_of_line().as_bytes(), is_interactive)?;
+     }
+diff --git a/tests/by-util/test_cat.rs b/tests/by-util/test_cat.rs
+index 877d361bc..368bc9cec 100644
+--- a/tests/by-util/test_cat.rs
++++ b/tests/by-util/test_cat.rs
+@@ -395,6 +395,17 @@ fn test_squeeze_all_files_repeated() {
+         .stdout_only("a\n\nb");
+ }
+ 
++#[test]
++fn test_squeeze_unterminated_line_across_files() {
++    // the newline ending a line from the previous file is not a blank line
++    let (at, mut ucmd) = at_and_ucmd!();
++    at.write("input1", "a");
++    at.write("input2", "\n\nb\n");
++    ucmd.args(&["-s", "input1", "input2"])
++        .succeeds()
++        .stdout_only("a\n\nb\n");
++}
++
+ #[test]
+ fn test_show_ends_crlf() {
+     new_ucmd!()

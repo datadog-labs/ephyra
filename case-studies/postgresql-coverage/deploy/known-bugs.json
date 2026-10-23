@@ -4,7 +4,7 @@
   "bugs": [
     {
       "id": "unrecognized-node-10",
-      "folder": "bugs/candidates/pg-unrecognized-node-10",
+      "folder": "bugs/will-not-post/pg-unrecognized-node-10",
       "summary": "Planner use-after-free: add_partial_path() frees a partial Path that a Gather built in apply_scanjoin_target_to_paths() still points to (the Path is shared by the scan/join rel and final_rel); create_plan then reads freed memory: ERROR XX000 unrecognized node type: <n> (n varies by build). Reachable since 8300d3ad4aa.",
       "status": "open",
       "upstream": "pgsql-hackers thread \"Use-after-free of a shared Path in add_path()/add_partial_path()\" (Jeevan Chalke, 2026-09-09; v2 2026-09-23, uncommitted): https://www.postgresql.org/message-id/flat/CAM2+6=XaYtMGwh27O7oDTfAw7kV4VdUVbxC2RVzWtKz_ysekKw@mail.gmail.com",
@@ -13,12 +13,12 @@
         "optional": true,
         "sources": [
           {
-            "path": "bugs/candidates/pg-unrecognized-node-10/v2-0001-skip-pfree-of-paths-of-another-rel.patch",
+            "path": "bugs/will-not-post/pg-unrecognized-node-10/v2-0001-skip-pfree-of-paths-of-another-rel.patch",
             "strip": 1,
             "note": "the thread's v2-0001 (save it under this name); v2-0002 only adds regression tests"
           },
           {
-            "path": "bugs/candidates/pg-unrecognized-node-10/parentcheck.diff",
+            "path": "bugs/will-not-post/pg-unrecognized-node-10/parentcheck.diff",
             "strip": 1,
             "note": "local substitute: the same four `->parent == parent_rel` guards on the pfree() calls of add_path()/add_partial_path() as v2-0001, without its comments; applies to master 158b6d5109"
           }
@@ -48,7 +48,7 @@
     },
     {
       "id": "toast-missing-chunk-vacuum-full",
-      "folder": "bugs/candidates/pg-toast-missing-chunk-vacuum-full",
+      "folder": "bugs/will-not-post/pg-toast-missing-chunk-vacuum-full",
       "summary": "VACUUM FULL / CLUSTER / CREATE INDEX fail with \"missing chunk number 0 for toast value N in pg_toast_M\" (XX001): a RECENTLY_DEAD heap tuple whose TOAST chunks on-access pruning already removed under a newer horizon (cached by a lazy VACUUM of an unrelated table), while a transaction in another database holds an older XID. Class of BUG #18351 / #19519.",
       "status": "open",
       "upstream": "BUG #19519 thread (pgsql-bugs) and CF 6824; v7 by Matthias van de Meent, 2026-10-12",
@@ -258,7 +258,7 @@
     },
     {
       "id": "window-exclude-ties-mark",
-      "folder": "bugs/candidates/pg-window-exclude-ties-mark",
+      "folder": "bugs/will-not-post/pg-window-exclude-ties-mark",
       "summary": "ROWS frames that do not contain the current row, with EXCLUDE TIES: first_value/last_value/nth_value return NULL or a value one row off, and with an offset of 2 FOLLOWING or more ERROR XX000 \"cannot fetch row before WindowObject's mark position\". Since 11 (0a459cec96d).",
       "status": "open",
       "upstream": "BUG #19732 (pgsql-bugs, 2026-09-30; our query posted 2026-10-05); patch v4 by Andrey Rachitskiy 2026-10-12, Message-ID CAB8bMitM01bphvvik4hPtMh93=FMLUaFcKP+Jpch3mzHwZrYUw@mail.gmail.com, uncommitted. Not ours to file.",
@@ -267,7 +267,7 @@
         "optional": false,
         "sources": [
           {
-            "path": "bugs/candidates/pg-window-exclude-ties-mark/upstream-v4-0001.patch",
+            "path": "bugs/will-not-post/pg-window-exclude-ties-mark/upstream-v4-0001.patch",
             "strip": 1,
             "note": "the thread's v4-0001 (nodeWindowAgg.c and window regression tests)"
           }
@@ -374,7 +374,7 @@
     },
     {
       "id": "viewdef-sublink-paren",
-      "folder": "bugs/candidates/pg-viewdef-sublink-paren",
+      "folder": "bugs/will-not-post/pg-viewdef-sublink-paren",
       "summary": "In pretty mode get_sublink_expr prints the left operand of IN/ANY/ALL (subquery) without the parentheses an operator expression needs: pg_get_viewdef(.., true), pg_get_ruledef(.., true), psql \\d+ show text that fails or means something else. Since 7.4, widened in 9.5. Duplicate of a pgsql-hackers report (Henson Choi, 2026-10-13).",
       "status": "open",
       "upstream": "pgsql-hackers \"[DEPARSE] Pretty-printed sublink test expressions lose needed parentheses\" (Henson Choi, 2026-10-13), CAAAe_zCy+D45Qd_br484F+V34y0BVA=hp_7cb=u6HysyMkE3UQ@mail.gmail.com",
@@ -383,7 +383,7 @@
         "optional": false,
         "sources": [
           {
-            "path": "bugs/candidates/pg-viewdef-sublink-paren/fix.patch",
+            "path": "bugs/will-not-post/pg-viewdef-sublink-paren/fix.patch",
             "strip": 1,
             "note": "ours: get_rule_expr_paren with the SubLink as parent (the thread has its own patch)"
           }
@@ -407,7 +407,7 @@
     },
     {
       "id": "toast-v7-recently-dead-assert",
-      "folder": "bugs/candidates/pg-toast-v7-recently-dead-assert",
+      "folder": "bugs/will-not-post/pg-toast-v7-recently-dead-assert",
       "summary": "A bug in the v7 TOAST patch (cfbot cf/6824) of toast-missing-chunk-vacuum-full, not in master: when VACUUM FULL / CLUSTER (no sort) scans an UPDATE's old version before its live successor and the old version's TOAST is gone, rewrite_heap_tuple() writes the successor, then fails on the parked old version and returns false for the caller's live tuple: TRAP Assert(\"recently_dead\") in heapam_relation_copy_for_cluster (heapam_handler.c:993). Without asserts the outcome is correct.",
       "status": "open",
       "upstream": "not reported yet (README.md: a draft reply for the BUG #19519 thread)",
@@ -416,7 +416,7 @@
         "optional": true,
         "sources": [
           {
-            "path": "bugs/candidates/pg-toast-v7-recently-dead-assert/scripts/v7-assert-fix.patch",
+            "path": "bugs/will-not-post/pg-toast-v7-recently-dead-assert/scripts/v7-assert-fix.patch",
             "strip": 1,
             "note": "ours: drop the Assert (applies on top of v7 only, so optional: build-fixed.sh applies it after v7, build-patched.sh skips it)"
           }
@@ -440,6 +440,42 @@
       "expected": "f\nq1\nq2\n1|t\nf\n",
       "expected_from": "by hand from minimal.sql (VALIDATION.md): master + v7 + the fix succeeds; master + v7 crashes after q1; plain master prints ERROR XX001 after q1",
       "excluded_by": "none: only runs on the fixes build can hit it"
+    },
+    {
+      "id": "heap-update-locked-only-assert",
+      "folder": "bugs/will-not-post/pg-heap-update-locked-only-assert",
+      "summary": "heap_update asserts HEAP_XMAX_IS_LOCKED_ONLY(infomask_lock_old_tuple) (heapam.c:3893) when the row's xmax is a multi of the transaction's own lock plus an aborted subtransaction's update and the update releases the buffer lock (TOAST or a full page): MultiXactIdExpand returns the multi unchanged. Assert builds only; 14 to master.",
+      "status": "open",
+      "upstream": "pgsql-hackers \"Assertion with aborted UPDATE in subtransaction\" (Jasper Smit, 2025-03-26, unanswered, patch attached): https://www.postgresql.org/message-id/CAOG+RQ6ECiiFH7bb7e1M0bkd0whprp=T0u=rvARSaPOGrY-NDQ@mail.gmail.com",
+      "fix": {
+        "kind": "core",
+        "optional": true,
+        "sources": [
+          {
+            "path": "bugs/will-not-post/pg-heap-update-locked-only-assert/thread-patch.patch",
+            "strip": 1,
+            "note": "the 2025 thread's patch (save it under this name)"
+          }
+        ],
+        "obtain": "the patch attached to the 2025-03-26 message linked in upstream; save as the source path"
+      },
+      "signatures": {
+        "sqlstate": [],
+        "errors": [
+          "HEAP_XMAX_IS_LOCKED_ONLY\\(infomask_lock_old_tuple\\)"
+        ],
+        "runner_signatures": [
+          "infomask_lock_old_tuple"
+        ],
+        "finding_kinds": [
+          "crash"
+        ]
+      },
+      "reproduce": "single-session",
+      "check": "CREATE TABLE t (id int PRIMARY KEY, n int, b text);\nALTER TABLE t ALTER COLUMN b SET STORAGE EXTERNAL;\nINSERT INTO t VALUES (1, 0, repeat('x', 3000));\nBEGIN;\nSELECT id FROM t FOR NO KEY UPDATE;\nSAVEPOINT s1;\nUPDATE t SET n = 1;\nROLLBACK TO s1;\nRELEASE s1;\nUPDATE t SET n = 2;\nCOMMIT;\nSELECT n FROM t;\n",
+      "expected": "1\n2\n",
+      "expected_from": "by hand: a fixed build returns the row and n = 2 (master crashes the backend at the second UPDATE); -q hides command tags, so the SELECT id and SELECT n rows are the output",
+      "excluded_by": "none: savepoints, FK/ON CONFLICT locks and EXCEPTION blocks combine in the generator; pretriage labels the crash known by signature"
     }
   ]
 }

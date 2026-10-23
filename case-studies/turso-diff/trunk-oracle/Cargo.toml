@@ -6,7 +6,7 @@ publish = false
 description = "Runs a replay script on SQLite trunk and prints the last statement's rows, for turso-diff"
 
 [dependencies]
-rusqlite = { version = "0.37", features = ["bundled", "serialize"] }
+rusqlite = { version = "0.37", features = ["bundled", "serialize", "hooks"] }
 
 [workspace]
 

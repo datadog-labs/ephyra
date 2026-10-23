@@ -1,0 +1,40 @@
+diff --git a/src/uu/od/src/od.rs b/src/uu/od/src/od.rs
+index 2cd60faac..c3cd0c98b 100644
+--- a/src/uu/od/src/od.rs
++++ b/src/uu/od/src/od.rs
+@@ -620,7 +620,7 @@ fn extract_strings_from_input(
+         match radix {
+             Radix::NoPrefix => writeln!(writer, "{string_content}"),
+             Radix::Decimal => writeln!(writer, "{offset:07} {string_content}"),
+-            Radix::Hexadecimal => writeln!(writer, "{offset:07x} {string_content}"),
++            Radix::Hexadecimal => writeln!(writer, "{offset:06x} {string_content}"),
+             Radix::Octal => writeln!(writer, "{offset:07o} {string_content}"),
+         }
+     };
+diff --git a/tests/by-util/test_od.rs b/tests/by-util/test_od.rs
+index 4b4364938..6e273795f 100644
+--- a/tests/by-util/test_od.rs
++++ b/tests/by-util/test_od.rs
+@@ -1010,6 +1010,22 @@ fn test_strings_skip_bytes_within_input() {
+         .stdout_only("abcd\n");
+ }
+ 
++// -S prints offsets with the same width as the normal dump: 6 hex digits with -Ax.
++#[test]
++fn test_strings_address_radix_width() {
++    for (radix, expected) in [
++        ("-Ax", "000002 abc\n"),
++        ("-Ad", "0000002 abc\n"),
++        ("-Ao", "0000002 abc\n"),
++    ] {
++        new_ucmd!()
++            .args(&[radix, "-S", "3"])
++            .pipe_in("\0\0abc\0")
++            .succeeds()
++            .stdout_only(expected);
++    }
++}
++
+ // A seekable special file such as /dev/null can be skipped past its (empty)
+ // end without error, matching GNU od.
+ #[cfg(unix)]

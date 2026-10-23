@@ -1,0 +1,2 @@
+CREATE TABLE t (a INT) AS VALUES (1);
+SELECT a, a + 1, (a + 1) * 2 FROM t GROUP BY CAST(a AS VARCHAR), a;

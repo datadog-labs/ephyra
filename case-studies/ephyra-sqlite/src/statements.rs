@@ -8,7 +8,7 @@
 //! Version 0:
 //!
 //! - `SELECT <c.. | *> FROM t [WHERE p] [ORDER BY c [DESC], ..] [LIMIT n]`
-//! - `INSERT INTO t ([rowid,] c..) VALUES (..), ..`
+//! - `INSERT INTO t ([rowid,] c..) VALUES (..), ..`, `INSERT INTO t SELECT * FROM t2`
 //! - `UPDATE t SET c = v, .. [WHERE p]`
 //! - `DELETE FROM t [WHERE p]`
 //! - `VACUUM`, `PRAGMA incremental_vacuum(n)`
@@ -40,7 +40,7 @@ use std::fmt;
 
 use crate::{
     expr::{key_expr, pred_expr, spell, At, Sql},
-    model::{ColType, Coll, Db, ForeignKey, Index, Rule, Step, Table, Term, Value, DECLS},
+    model::{ColType, Coll, Db, ForeignKey, Index, Key, Rule, Step, Table, Term, Value, DECLS},
     writer::{constraint_name, create_table_named, fk_tail, index_term},
 };
 
@@ -254,6 +254,23 @@ pub enum Statement {
     /// A statement on virtual table `vt{k}` ([`crate::vtabs`]), `kind`
     /// that table's (its own for a CREATE).
     Virtual { s: crate::vtabs::VStmt, kind: crate::vtabs::Kind },
+}
+
+/// The pragmas `PRAGMA {p}` read after the one written, each of `reads`
+/// in turn (unless [`spell`] renders one spelling only, as in the unit
+/// tests): the setting itself, of main alone, or another read only. A
+/// statement with a handful of values picking one of them by its value
+/// would never run some (`temp_store` has three). Their rows are not read:
+/// the setting and the database stay as they are (`max_page_count = -1`
+/// and one past the most pages set nothing, nor does `page_size = 0`, no
+/// page size; `case_sensitive_like`,
+/// `defer_foreign_keys` and `writable_schema` set as they are, `RESET`
+/// also reloading the schema).
+fn read_back(f: &mut fmt::Formatter, reads: &[&str]) -> fmt::Result {
+    if spell("read back", 2) == 1 {
+        return Ok(());
+    }
+    reads.iter().try_for_each(|p| write!(f, "; PRAGMA {p}"))
 }
 
 /// The pragmas [`Statement::DbPragma`] runs on one schema, and whether
@@ -481,6 +498,8 @@ pub fn create_rule(g: &Rule) -> String {
     };
     let (timing, on) = match (g.view, g.before) {
         (true, _) => ("INSTEAD OF", 'v'),
+        // BEFORE left out half the time (by its id): the default.
+        (_, true) if spell(&format!("w{}", g.id), 2) == 0 => ("", 't'),
         (_, true) => ("BEFORE", 't'),
         _ => ("AFTER", 't'),
     };
@@ -676,7 +695,44 @@ pub struct Insert {
     /// The rows as `SELECT * FROM (VALUES ..)` (with `WHERE true` before
     /// ON CONFLICT, which would read as a join constraint), in order.
     pub select: bool,
+    /// `INSERT INTO t{table} SELECT * FROM t{copy}`: the rows are those of
+    /// table `copy` (every column, in its order), which SQLite may copy
+    /// with its transfer optimization (`xferOptimization`) where the two
+    /// tables have the same shape; see `crate::semantics::copy_ok`.
+    pub copy: Option<usize>,
+    /// How a copy spells its SELECT ([`COPY_FORMS`], an index into it):
+    /// the same rows each way, but only the plain form, an alias, a
+    /// schema-qualified name (`main`, `temp`, `aux`: [`Db`] order, the
+    /// source's schema) and `NOT INDEXED` are SQLite's transfer
+    /// optimization's to take; each other form fails one of its tests
+    /// (a WHERE, an ORDER BY, a LIMIT, columns named, `t.*`, a subquery, a
+    /// compound, a WITH, a join, DISTINCT, GROUP BY).
+    pub copy_form: u8,
 }
+
+/// The spellings of a copy's SELECT ([`Insert::copy_form`]), `{t}` the
+/// source table, `{c}` its columns, `{db}` its schema.
+pub const COPY_FORMS: [&str; 17] = [
+    "SELECT * FROM {t}",
+    "SELECT * FROM {t} AS u",
+    "SELECT * FROM main.{t}",
+    "SELECT * FROM temp.{t}",
+    "SELECT * FROM aux.{t}",
+    "SELECT * FROM {t} NOT INDEXED",
+    "SELECT * FROM {t} WHERE true",
+    "SELECT * FROM {t} ORDER BY 1 DESC",
+    "SELECT * FROM {t} LIMIT -1",
+    "SELECT {c} FROM {t}",
+    "SELECT {t}.* FROM {t}",
+    "SELECT * FROM (SELECT * FROM {t})",
+    "SELECT * FROM {t} UNION ALL SELECT * FROM {t} WHERE false",
+    "WITH w(x) AS (SELECT 1) SELECT * FROM {t}",
+    "SELECT {t}.* FROM {t} CROSS JOIN (SELECT 1)",
+    // One row only: DISTINCT and GROUP BY merge rows by the source's
+    // collations.
+    "SELECT DISTINCT * FROM {t}",
+    "SELECT * FROM {t} GROUP BY 1",
+];
 
 /// A conflict resolution: `OR ABORT`, `OR FAIL`, `OR ROLLBACK` (drawn only
 /// where nothing conflicts, so as plain), `OR IGNORE` (a conflicting row
@@ -748,6 +804,58 @@ pub struct Update {
     pub vector: VectorSet,
     /// `UPDATE .. FROM` one row of another table ([`UpdateFrom`]).
     pub from: Option<UpdateFrom>,
+    /// A set of the table's key besides `sets` ([`KeySet`]), written
+    /// first: SQLite moves the row (`chngRowid`, `chngPk`).
+    pub key: Option<KeySet>,
+}
+
+/// A set of a key column (`Some(c)`: the INTEGER PRIMARY KEY, or a column
+/// of a WITHOUT ROWID table's PRIMARY KEY) or of the rowid (`None`, as
+/// `rowid`, `oid` or `_rowid_` by the value: [`KeySet::name`]), to what
+/// [`KeyTo`] says. The model resolves it (`crate::semantics::key_update`)
+/// only on a table no foreign key links and no trigger with a body
+/// watches, with a new key no other row holds (or, for one row, under
+/// IGNORE or REPLACE).
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeySet {
+    pub column: Option<usize>,
+    pub to: KeyTo,
+}
+
+/// The new key: a literal (one row at most), or the old key shifted by a
+/// constant (`k + n`) or negated (`-k`), on any rows of a rowid table.
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeyTo {
+    Lit(Value),
+    Plus(i64),
+    Neg,
+}
+
+impl KeySet {
+    /// The name the set assigns.
+    pub fn name(&self) -> String {
+        match self.column {
+            Some(c) => format!("c{c}"),
+            None => {
+                let k = match &self.to {
+                    KeyTo::Lit(v) => literal(v).len(),
+                    KeyTo::Plus(n) => n.unsigned_abs() as usize,
+                    KeyTo::Neg => 1,
+                };
+                ["rowid", "oid", "_rowid_"][k % 3].to_string()
+            },
+        }
+    }
+
+    /// `name = value`.
+    pub fn sql(&self) -> String {
+        let name = self.name();
+        match &self.to {
+            KeyTo::Lit(v) => format!("{name} = {}", literal(v)),
+            KeyTo::Plus(n) => format!("{name} = ({name} + {n})"),
+            KeyTo::Neg => format!("{name} = -{name}"),
+        }
+    }
 }
 
 /// `UPDATE t{k} SET .. FROM t{table} AS u WHERE u.rowid = {rowid} AND
@@ -973,9 +1081,41 @@ fn columns(cs: impl Iterator<Item = String>) -> String {
     cs.collect::<Vec<_>>().join(", ")
 }
 
+/// A statement as it runs: an INSERT, UPDATE or DELETE without RETURNING
+/// a quarter of the time each (by its text, [`spell`]) after `EXPLAIN
+/// QUERY PLAN` or `EXPLAIN` of itself, which compiles it and lists its
+/// plan or its program without running it (rows nobody reads: a statement
+/// that returns rows is one statement, read as a query).
 impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
+        let quiet = match self {
+            Statement::Insert(s) => s.returning.is_none(),
+            Statement::Update(s) => s.returning.is_none(),
+            Statement::Delete(s) => s.returning.is_none(),
+            _ => false,
+        };
+        if !quiet {
+            return Plain(self).fmt(f);
+        }
+        let text = Plain(self).to_string();
+        // One statement only: `EXPLAIN a; b` would run `b` twice.
+        if text.contains(';') {
+            return write!(f, "{text}");
+        }
+        match spell(&text, 4) {
+            0 => write!(f, "EXPLAIN QUERY PLAN {text}; {text}"),
+            1 => write!(f, "EXPLAIN {text}; {text}"),
+            _ => write!(f, "{text}"),
+        }
+    }
+}
+
+/// A statement as written, without [`Statement`]'s `EXPLAIN`.
+struct Plain<'a>(&'a Statement);
+
+impl fmt::Display for Plain<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
             Statement::Select(s) => {
                 let what = if s.columns.is_empty() { "*".into() } else { columns(s.columns.iter().map(|c| format!("c{c}"))) };
                 write!(f, "SELECT {what} FROM t{}", s.table)?;
@@ -995,10 +1135,20 @@ impl fmt::Display for Statement {
                 if s.select {
                     rows = format!("SELECT * FROM ({rows}){}", if s.upsert.is_empty() { "" } else { " WHERE true" });
                 }
+                // A copy names no columns: SQLite tries its transfer
+                // optimization only then.
+                let names = match s.copy {
+                    Some(from) => {
+                        let cs = (0..s.columns.len()).map(|c| format!("c{c}")).collect::<Vec<_>>().join(", ");
+                        rows = COPY_FORMS[usize::from(s.copy_form) % COPY_FORMS.len()].replace("{t}", &format!("t{from}")).replace("{c}", &cs);
+                        String::new()
+                    },
+                    None => format!(" ({names})"),
+                };
                 match s.or {
-                    Some(Resolve::ReplaceInto) => write!(f, "REPLACE INTO t{} ({names}) {rows}", s.table)?,
-                    Some(r) => write!(f, "INSERT OR {} INTO t{} ({names}) {rows}", r.sql(), s.table)?,
-                    None => write!(f, "INSERT INTO t{} ({names}) {rows}", s.table)?,
+                    Some(Resolve::ReplaceInto) => write!(f, "REPLACE INTO t{}{names} {rows}", s.table)?,
+                    Some(r) => write!(f, "INSERT OR {} INTO t{}{names} {rows}", r.sql(), s.table)?,
+                    None => write!(f, "INSERT INTO t{}{names} {rows}", s.table)?,
                 }
                 write!(f, "{}", upsert_sql(&s.upsert))?;
                 returning(f, &s.returning)
@@ -1014,6 +1164,10 @@ impl fmt::Display for Statement {
                     VectorSet::Row if s.sets.len() > 1 => format!("({}) = ({})", names(), values()),
                     VectorSet::Select if s.sets.len() > 1 => format!("({}) = (SELECT {})", names(), values()),
                     _ => columns(s.sets.iter().enumerate().map(|(k, (c, v))| format!("c{c} = {}", value(k, v)))),
+                };
+                let sets = match &s.key {
+                    Some(k) => format!("{}, {sets}", k.sql()),
+                    None => sets,
                 };
                 match s.or {
                     Some(r) => write!(f, "UPDATE OR {} t{} SET {sets}", r.sql(), s.table)?,
@@ -1035,17 +1189,25 @@ impl fmt::Display for Statement {
                 returning(f, &s.returning)
             },
             Statement::Delete(s) => {
-                write!(f, "DELETE FROM t{}", s.table)?;
+                // An alias a quarter of the time (`xfullname ::= nm AS nm`):
+                // the statement names its columns bare.
+                let alias = if spell(&format!("{s:?}"), 4) == 0 { " AS d" } else { "" };
+                write!(f, "DELETE FROM t{}{alias}", s.table)?;
                 where_clause(f, &s.filter)?;
                 returning(f, &s.returning)
             },
             Statement::Vacuum => write!(f, "VACUUM"),
             Statement::IncrementalVacuum(n) => write!(f, "PRAGMA incremental_vacuum({n})"),
+            // Without a table, a check now and then bounds the errors it
+            // reports (`(0)` and `(-1)`: the default, 100).
             Statement::Check { quick, table } => {
                 write!(f, "PRAGMA {}", if *quick { "quick_check" } else { "integrity_check" })?;
                 match table {
                     Some(t) => write!(f, "(t{t})"),
-                    None => Ok(()),
+                    None => match spell(&format!("check{quick}"), 3) {
+                        0 => write!(f, "({})", if *quick { "-1" } else { "0" }),
+                        _ => Ok(()),
+                    },
                 }
             },
             Statement::Count { table, filter } => {
@@ -1054,10 +1216,33 @@ impl fmt::Display for Statement {
             },
             // A TEMP table as `CREATE TEMP TABLE t5` or `CREATE TABLE
             // temp.t5`, by its number; one in aux as `aux.t5`.
-            Statement::CreateTable { table, def } => match def.db {
-                Db::Main => write!(f, "{}", create_table_named(&format!("t{table}"), def, Some(&format!("t{table}")))),
-                Db::Temp if table.is_multiple_of(2) => write!(f, "{}", create_table_named(&format!("t{table}"), def, Some(&format!("t{table}"))).replacen("CREATE TABLE", "CREATE TEMP TABLE", 1)),
-                db => write!(f, "{}", create_table_named(&format!("{}.t{table}", db.name()), def, Some(&format!("t{table}")))),
+            Statement::CreateTable { table, def } => {
+                let mut sql = match def.db {
+                    Db::Main => create_table_named(&format!("t{table}"), def, Some(&format!("t{table}"))),
+                    Db::Temp if table.is_multiple_of(2) => create_table_named(&format!("t{table}"), def, Some(&format!("t{table}"))).replacen("CREATE TABLE", "CREATE TEMP TABLE", 1),
+                    db => create_table_named(&format!("{}.t{table}", db.name()), def, Some(&format!("t{table}"))),
+                };
+                // Half the WITHOUT ROWID tables also have `UNIQUE(..)` of
+                // their primary key's columns, after it or before it: the
+                // same index, which `sqlite3CreateIndex` merges into the
+                // primary key (whose conflict clause it keeps). Never after
+                // a key of one column: with that column INTEGER, SQLite
+                // (3.51.0, trunk 3769f60be38b) then fails every RENAME
+                // COLUMN of it ("error in table t after rename: no such
+                // column"; candidate
+                // sqlite-rename-without-rowid-integer-pk-unique).
+                if let Key::WithoutRowid(pk) = &def.key {
+                    let cols = columns(pk.iter().map(|c| format!("c{c}")));
+                    match spell(&sql, 4) {
+                        0 if pk.len() > 1 => sql = sql.replacen(") WITHOUT ROWID", &format!(", UNIQUE({cols})) WITHOUT ROWID"), 1),
+                        1 => {
+                            let at = sql.rfind("PRIMARY KEY(").and_then(|p| sql[..p].rfind(", ")).expect("a column before the key");
+                            sql.insert_str(at + 2, &format!("UNIQUE({cols}), "));
+                        },
+                        _ => {},
+                    }
+                }
+                write!(f, "{sql}")
             },
             Statement::DropTable(t) => write!(f, "DROP TABLE t{t}"),
             Statement::CreateIndex { table, index, def, db } => {
@@ -1076,6 +1261,12 @@ impl fmt::Display for Statement {
                     Db::Main if spell(&format!("{cols}{index}"), 4) == 0 => "main.",
                     _ => "",
                 };
+                // A fifth of the time after another index, first that one
+                // again under IF NOT EXISTS (its name is there: nothing is
+                // done, `sqlite3CreateIndex` stops at the name).
+                if *index > 0 && spell(&format!("{index}{cols}"), 5) == 0 {
+                    write!(f, "CREATE INDEX IF NOT EXISTS {schema}t{table}_i{} ON t{table}({cols}); ", index - 1)?;
+                }
                 write!(f, "CREATE {unique}INDEX {ine}{schema}t{table}_i{index} ON t{table}({cols})")?;
                 match &def.filter {
                     Some(p) => write!(f, " WHERE {}", Sql(&pred_expr(p), At::TOP)),
@@ -1086,11 +1277,22 @@ impl fmt::Display for Statement {
                 0 => write!(f, "DROP INDEX IF EXISTS {}.t{table}_i{index}", db.name()),
                 _ => write!(f, "DROP INDEX t{table}_i{index}"),
             },
-            Statement::CacheSize(n) => write!(f, "PRAGMA cache_size = {n}"),
+            // Half the time as a call (`PRAGMA cache_size(-2000)`).
+            Statement::CacheSize(n) => {
+                if spell(&n.to_string(), 2) == 0 {
+                    write!(f, "PRAGMA cache_size({n})")?;
+                } else {
+                    write!(f, "PRAGMA cache_size = {n}")?;
+                }
+                read_back(f, &["cache_size", "main.cache_size", "default_cache_size", "main.default_cache_size", "page_size = 0"])
+            },
             Statement::Analyze(None) => write!(f, "ANALYZE"),
             Statement::Analyze(Some((t, None))) => write!(f, "ANALYZE t{t}"),
             Statement::Analyze(Some((t, Some(i)))) => write!(f, "ANALYZE t{t}_i{i}"),
-            Statement::AnalysisLimit(n) => write!(f, "PRAGMA analysis_limit = {n}"),
+            Statement::AnalysisLimit(n) => {
+                write!(f, "PRAGMA analysis_limit = {n}")?;
+                read_back(f, &["analysis_limit", "max_page_count", "main.max_page_count = -1", "max_page_count = 0xffffffffff"])
+            },
             Statement::Optimize(None) => write!(f, "PRAGMA optimize"),
             Statement::Optimize(Some(mask)) => write!(f, "PRAGMA optimize({mask:#x})"),
             Statement::AutomaticIndex(on) => write!(f, "PRAGMA automatic_index = {}", u8::from(*on)),
@@ -1131,10 +1333,20 @@ impl fmt::Display for Statement {
                 if let Some((src, long)) = def.generated {
                     // Unnamed in its long form, which SQLite reads as
                     // the end of a type name (`sqlite3AddColumn`).
-                    write!(f, " {}AS (c{src}) VIRTUAL", if long { "GENERATED ALWAYS ".to_string() } else { named("ge") })?;
+                    // VIRTUAL left out half the time: the default.
+                    let virt = if spell(&format!("{key}v"), 2) == 0 { "" } else { " VIRTUAL" };
+                    write!(f, " {}AS (c{src}){virt}", if long { "GENERATED ALWAYS ".to_string() } else { named("ge") })?;
                 }
+                // A default not a blob now and then in parentheses or
+                // after a `+` (the same value: SQLite keeps the literal).
                 if let Some(v) = &def.default {
-                    write!(f, " {}DEFAULT {}", named("df"), literal(v))?;
+                    let lit = literal(v);
+                    let lit = match spell(&format!("{key}d"), 4) {
+                        0 if !matches!(v, Value::Blob(_)) => format!("({lit})"),
+                        1 if !matches!(v, Value::Blob(_)) && !lit.starts_with('-') => format!("+{lit}"),
+                        _ => lit,
+                    };
+                    write!(f, " {}DEFAULT {lit}", named("df"))?;
                 }
                 match &def.references {
                     Some(r) => write!(f, " {}REFERENCES t{}(c{}){}", named("fk"), r.parent, r.parent_columns[0], fk_tail(r)),
@@ -1186,34 +1398,81 @@ impl fmt::Display for Statement {
             Statement::Reindex(Reindex::Table(t)) => write!(f, "REINDEX t{t}"),
             Statement::Reindex(Reindex::Index(t, i)) => write!(f, "REINDEX t{t}_i{i}"),
             Statement::Reindex(Reindex::Coll(k)) => write!(f, "REINDEX {}", k.name()),
-            Statement::JournalMode(j) => write!(f, "PRAGMA journal_mode = {}", j.name()),
+            Statement::JournalMode(j) => {
+                write!(f, "PRAGMA journal_mode = {}", j.name())?;
+                read_back(f, &["journal_mode", "main.journal_mode", "journal_mode = query", "locking_mode", "main.locking_mode"])
+            },
             Statement::WalCheckpoint(None) => write!(f, "PRAGMA wal_checkpoint"),
             Statement::WalCheckpoint(Some(c)) => write!(f, "PRAGMA wal_checkpoint({})", c.name()),
-            Statement::SecureDelete(n) => match n {
-                2 => write!(f, "PRAGMA secure_delete = FAST"),
-                n => write!(f, "PRAGMA secure_delete = {n}"),
+            // Of every schema, then of main alone again (`PRAGMA
+            // main.secure_delete`, which spares the others) half the time.
+            Statement::SecureDelete(n) => {
+                let v = if *n == 2 { "FAST".to_string() } else { n.to_string() };
+                write!(f, "PRAGMA secure_delete = {v}")?;
+                if spell(&format!("secure{n}"), 2) == 0 {
+                    write!(f, "; PRAGMA main.secure_delete = {v}")?;
+                }
+                read_back(f, &["secure_delete", "main.secure_delete"])
             },
             Statement::CellSizeCheck(on) => write!(f, "PRAGMA cell_size_check = {}", u8::from(*on)),
-            Statement::MmapSize(n) => write!(f, "PRAGMA mmap_size = {n}"),
+            // Now and then of main alone, or the default first (`-1`).
+            Statement::MmapSize(n) => {
+                match spell(&format!("mmap{n}"), 4) {
+                    0 => write!(f, "PRAGMA main.mmap_size = {n}")?,
+                    1 => write!(f, "PRAGMA mmap_size = -1; PRAGMA mmap_size = {n}")?,
+                    _ => write!(f, "PRAGMA mmap_size = {n}")?,
+                }
+                read_back(f, &["mmap_size", "main.mmap_size"])
+            },
             Statement::AutoVacuum(a) => write!(f, "PRAGMA auto_vacuum = {}; VACUUM", a.name()),
-            Statement::TempStore(n) => write!(f, "PRAGMA temp_store = {}", ["DEFAULT", "FILE", "MEMORY"][usize::from(*n).min(2)]),
-            Statement::LockingMode(x) => write!(f, "PRAGMA locking_mode = {}", if *x { "EXCLUSIVE" } else { "NORMAL" }),
-            Statement::JournalSizeLimit(n) => write!(f, "PRAGMA journal_size_limit = {n}"),
-            Statement::WalAutocheckpoint(n) => write!(f, "PRAGMA wal_autocheckpoint = {n}"),
-            Statement::CacheSpill(n) => write!(f, "PRAGMA cache_spill = {n}"),
-            Statement::VacuumInto(memory) => write!(f, "VACUUM INTO '{}'", if *memory { ":memory:" } else { "" }),
+            Statement::TempStore(n) => {
+                write!(f, "PRAGMA temp_store = {}", ["DEFAULT", "FILE", "MEMORY"][usize::from(*n).min(2)])?;
+                read_back(f, &["temp_store", "busy_timeout", "threads", "soft_heap_limit", "hard_heap_limit", "temp_store_directory", "lock_proxy_file"])
+            },
+            Statement::LockingMode(x) => {
+                write!(f, "PRAGMA locking_mode = {}", if *x { "EXCLUSIVE" } else { "NORMAL" })?;
+                read_back(f, &["locking_mode", "main.locking_mode", "temp.locking_mode"])
+            },
+            Statement::JournalSizeLimit(n) => {
+                write!(f, "PRAGMA journal_size_limit = {n}")?;
+                read_back(f, &["journal_size_limit", "main.journal_size_limit"])
+            },
+            Statement::WalAutocheckpoint(n) => {
+                write!(f, "PRAGMA wal_autocheckpoint = {n}")?;
+                read_back(f, &["wal_autocheckpoint", "database_list", "pragma_list", "module_list", "collation_list"])
+            },
+            Statement::CacheSpill(n) => {
+                write!(f, "PRAGMA cache_spill = {n}")?;
+                read_back(f, &["cache_spill", "main.cache_spill", "function_list"])
+            },
+            Statement::VacuumInto(true) => write!(f, "VACUUM main INTO ':memory:'"),
+            Statement::VacuumInto(false) => write!(f, "VACUUM INTO ''"),
             Statement::Begin(b) => write!(f, "BEGIN {}; SAVEPOINT s0", b.name()),
             Statement::Commit => write!(f, "COMMIT"),
-            Statement::Synchronous(n) => write!(f, "PRAGMA synchronous = {}", ["OFF", "NORMAL", "FULL", "EXTRA"][usize::from(*n).min(3)]),
+            Statement::Synchronous(n) => {
+                write!(f, "PRAGMA synchronous = {}", ["OFF", "NORMAL", "FULL", "EXTRA"][usize::from(*n).min(3)])?;
+                read_back(f, &["synchronous", "main.synchronous", "temp.synchronous", "case_sensitive_like = 0", "defer_foreign_keys = OFF", "writable_schema = RESET"])
+            },
             Statement::ShrinkMemory => write!(f, "PRAGMA shrink_memory"),
+            // Named by a URI (`sqlite3ParseUri`: an authority, `%`
+            // escapes, an escaped NUL ending the path, an empty key, `vfs`,
+            // `mode`, `cache`, a parameter for the pager, a fragment; the
+            // connections open with SQLITE_OPEN_URI): the same private
+            // database in memory, or in a temporary file (an empty path).
+            Statement::Attach(false) if spell("attach uri", 2) == 0 => write!(f, "ATTACH DATABASE 'file://localhost/aux%2Dnp%00x?=np&vfs=unix&mode=memory&cache=private&psow=1#np' AS aux"),
+            Statement::Attach(true) if spell("attach uri", 2) == 0 => write!(f, "ATTACH 'file:?cache=private&mode=rwc&psow=0' AS aux"),
             Statement::Attach(false) => write!(f, "ATTACH DATABASE ':memory:' AS aux"),
             Statement::Attach(true) => write!(f, "ATTACH '' AS aux"),
             Statement::Detach => write!(f, "DETACH DATABASE aux"),
             Statement::AnalyzeDb(db) => write!(f, "ANALYZE {}", db.name()),
             Statement::Virtual { s, kind } => write!(f, "{}", crate::vtabs::render(s, kind)),
+            // A pragma of a table half the time also reads its index
+            // as `index_xinfo` of the table's name (a WITHOUT ROWID
+            // table's primary key, nothing for a rowid table).
             Statement::DbPragma { db, k, table } => {
                 write!(f, "PRAGMA {}.{}", db.name(), DB_PRAGMAS[*k % DB_PRAGMAS.len()].0)?;
                 match table {
+                    Some(t) if spell(&format!("dbp{k}.{t}"), 2) == 0 => write!(f, "(t{t}); PRAGMA {}.index_{}info(t{t})", db.name(), if *k % 2 == 0 { "x" } else { "" }),
                     Some(t) => write!(f, "(t{t})"),
                     None => Ok(()),
                 }
@@ -1276,7 +1535,7 @@ mod tests {
     /// have the same effect; one set is always plain.
     #[test]
     fn vector_sets_render_and_agree() {
-        let base = Update { table: 0, sets: vec![(1, Value::Int(7)), (0, Value::Text("a".into()))], filter: None, or: None, returning: None, vector: VectorSet::Plain, from: None };
+        let base = Update { table: 0, sets: vec![(1, Value::Int(7)), (0, Value::Text("a".into()))], filter: None, or: None, returning: None, vector: VectorSet::Plain, from: None, key: None };
         let mut seen = Vec::new();
         for (vector, sql) in [
             (VectorSet::Plain, "UPDATE t0 SET c1 = 7, c0 = 'a'"),

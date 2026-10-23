@@ -1,0 +1,22 @@
+# name: test/sql/join/pair_dependent_full_join_cross_product_side.test
+# group: [join]
+
+statement ok
+CREATE TABLE t(a INT, b DOUBLE);
+
+statement ok
+INSERT INTO t VALUES (1, 2);
+
+statement ok
+SET disabled_optimizers='projection_pullup';
+
+query I
+SELECT y.a FROM t x CROSS JOIN t y FULL JOIN t z ON (SELECT x.b + y.b + z.b) > 0;
+----
+1
+
+query I rowsort
+SELECT y.a FROM t x CROSS JOIN t y FULL JOIN t z ON (SELECT x.b + y.b + z.b) < 0;
+----
+1
+NULL

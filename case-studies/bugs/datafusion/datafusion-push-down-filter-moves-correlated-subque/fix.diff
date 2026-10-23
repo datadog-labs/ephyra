@@ -1,0 +1,132 @@
+diff --git a/datafusion/optimizer/src/push_down_filter.rs b/datafusion/optimizer/src/push_down_filter.rs
+index becc789d8..af17e98ae 100644
+--- a/datafusion/optimizer/src/push_down_filter.rs
++++ b/datafusion/optimizer/src/push_down_filter.rs
+@@ -489,7 +489,10 @@ fn push_down_all_join(
+ 
+     let mut on_filter_join_conditions = vec![];
+     for on in on_filter {
+-        if on_left_preserved && checker.is_left_only(&on) {
++        if subquery_correlates_on(&on, &join.schema) {
++            // the side checks cannot see the subquery's outer columns
++            on_filter_join_conditions.push(on)
++        } else if on_left_preserved && checker.is_left_only(&on) {
+             left_push.push(on)
+         } else if on_right_preserved && checker.is_right_only(&on) {
+             right_push.push(on)
+@@ -849,6 +852,34 @@ fn references_any_column(expr: &Expr, names: &HashSet<String>) -> bool {
+     found
+ }
+ 
++/// Whether a subquery inside `expr` correlates on a column of `schema`.
++///
++/// Such a column appears only in `Subquery::outer_ref_columns` and in the
++/// subquery's plan, never as an `Expr::Column` of `expr` itself.
++fn subquery_correlates_on(expr: &Expr, schema: &DFSchema) -> bool {
++    let mut found = false;
++    expr.apply(|e| {
++        let outer_refs = match e {
++            Expr::Exists(exists) => &exists.subquery.outer_ref_columns,
++            Expr::InSubquery(in_subquery) => &in_subquery.subquery.outer_ref_columns,
++            Expr::ScalarSubquery(subquery) => &subquery.outer_ref_columns,
++            Expr::SetComparison(set_comparison) => {
++                &set_comparison.subquery.outer_ref_columns
++            }
++            _ => return Ok(TreeNodeRecursion::Continue),
++        };
++        if outer_refs.iter().any(|outer_ref| {
++            matches!(outer_ref, Expr::OuterReferenceColumn(_, c) if schema.has_column(c))
++        }) {
++            found = true;
++            return Ok(TreeNodeRecursion::Stop);
++        }
++        Ok(TreeNodeRecursion::Continue)
++    })
++    .expect("traversal is infallible");
++    found
++}
++
+ impl OptimizerRule for PushDownFilter {
+     fn name(&self) -> &str {
+         "push_down_filter"
+@@ -942,6 +973,38 @@ impl OptimizerRule for PushDownFilter {
+             ));
+         }
+ 
++        // Predicates whose subqueries correlate on this filter's input stay
++        // here: the column rewrites below (e.g. through a `SubqueryAlias`)
++        // and the join side checks do not see the subquery's outer columns,
++        // so moving such a predicate would leave dangling outer references.
++        let (correlated, pushable): (Vec<_>, Vec<_>) =
++            split_conjunction_owned(filter.predicate.clone())
++                .into_iter()
++                .partition(|p| subquery_correlates_on(p, filter.input.schema()));
++        if !correlated.is_empty() {
++            let pushed = match conjunction(pushable) {
++                Some(pushable) => {
++                    let input = Arc::clone(&filter.input);
++                    self.rewrite(
++                        LogicalPlan::Filter(Filter::try_new(pushable, input)?),
++                        config,
++                    )?
++                }
++                None => Transformed::no(LogicalPlan::default()),
++            };
++            if !pushed.transformed {
++                return Ok(Transformed::new(
++                    LogicalPlan::Filter(filter),
++                    predicates_changed || reorder_changed,
++                    TreeNodeRecursion::Continue,
++                ));
++            }
++            return pushed.map_data(|plan| {
++                Filter::try_new(conjunction(correlated).unwrap(), Arc::new(plan))
++                    .map(LogicalPlan::Filter)
++            });
++        }
++
+         let result = match Arc::unwrap_or_clone(filter.input) {
+             LogicalPlan::Filter(mut child_filter) => {
+                 // Child filters first to preserve execution order.
+diff --git a/datafusion/sqllogictest/test_files/subquery.slt b/datafusion/sqllogictest/test_files/subquery.slt
+index cec26bcc3..05b5da958 100644
+--- a/datafusion/sqllogictest/test_files/subquery.slt
++++ b/datafusion/sqllogictest/test_files/subquery.slt
+@@ -3575,3 +3575,37 @@ DROP TABLE unnest_outer;
+ 
+ statement ok
+ DROP TABLE unnest_inner;
++
++# A quantified comparison in a JOIN ON clause becomes EXISTS subqueries
++# correlated on the join inputs; push_down_filter must not move them below an
++# alias or to the side that lacks the correlated column
++statement ok
++CREATE TABLE sq_on_l (c0 BIGINT, c1 VARCHAR) AS VALUES (1, 'x'), (2, 'y');
++
++statement ok
++CREATE TABLE sq_on_r (c0 BIGINT) AS VALUES (1), (3);
++
++query ITI rowsort
++SELECT * FROM sq_on_l AS a JOIN sq_on_r AS b ON a.c0 = ANY (SELECT c0 FROM sq_on_r);
++----
++1 x 1
++1 x 3
++
++query ITI rowsort
++SELECT * FROM sq_on_l AS a JOIN sq_on_r AS b ON b.c0 > ALL (SELECT c0 - 3 FROM sq_on_r);
++----
++1 x 1
++1 x 3
++2 y 1
++2 y 3
++
++query ITI rowsort
++SELECT * FROM sq_on_l AS a JOIN sq_on_r AS b ON a.c0 = b.c0 AND a.c0 = ANY (SELECT c0 FROM sq_on_r);
++----
++1 x 1
++
++statement ok
++DROP TABLE sq_on_l;
++
++statement ok
++DROP TABLE sq_on_r;

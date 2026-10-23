@@ -1,0 +1,100 @@
+diff --git a/src/uu/split/src/strategy.rs b/src/uu/split/src/strategy.rs
+index 99c614869..021b8b254 100644
+--- a/src/uu/split/src/strategy.rs
++++ b/src/uu/split/src/strategy.rs
+@@ -248,6 +248,16 @@ impl StrategyError {
+     }
+ }
+ 
++/// Parse a number of lines: a plain decimal count, without the size
++/// suffixes or base prefixes that `-b` and `-C` accept. Values too large
++/// for a `u64` saturate, as for the other sizes.
++fn parse_lines(s: &str) -> Result<u64, ParseSizeError> {
++    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
++        return Err(ParseSizeError::ParseFailure(s.quote().to_string()));
++    }
++    Ok(s.parse().unwrap_or(u64::MAX))
++}
++
+ impl Strategy {
+     /// Parse a strategy from the command-line arguments.
+     pub fn from(matches: &ArgMatches, obs_lines: Option<&str>) -> Result<Self, StrategyError> {
+@@ -255,6 +265,7 @@ impl Strategy {
+             matches: &ArgMatches,
+             option: &'static str,
+             short: char,
++            parse: fn(&str) -> Result<u64, ParseSizeError>,
+             strategy: fn(u64) -> Strategy,
+             error: fn(ParseSizeError, Option<OptionValue>) -> StrategyError,
+         ) -> Result<Strategy, StrategyError> {
+@@ -262,7 +273,7 @@ impl Strategy {
+             // `None` for a size that did not come from an option, such as the
+             // obsolete `split -22` spelling: there is nothing to point at.
+             let origin = || Some(OptionValue::new(s, short, option));
+-            let n = parse_size_u64_max(s).map_err(|e| error(e, origin()))?;
++            let n = parse(s).map_err(|e| error(e, origin()))?;
+             if n > 0 {
+                 Ok(strategy(n))
+             } else {
+@@ -281,7 +292,7 @@ impl Strategy {
+             matches.value_source(options::NUMBER) == Some(ValueSource::CommandLine),
+         ) {
+             (Some(v), false, false, false, false) => {
+-                let v = parse_size_u64_max(v).map_err(|_| {
++                let v = parse_lines(v).map_err(|_| {
+                     StrategyError::Lines(ParseSizeError::ParseFailure(v.to_string()), None)
+                 })?;
+                 if v > 0 {
+@@ -298,6 +309,7 @@ impl Strategy {
+                 matches,
+                 options::LINES,
+                 'l',
++                parse_lines,
+                 Self::Lines,
+                 StrategyError::Lines,
+             ),
+@@ -305,6 +317,7 @@ impl Strategy {
+                 matches,
+                 options::BYTES,
+                 'b',
++                parse_size_u64_max,
+                 Self::Bytes,
+                 StrategyError::Bytes,
+             ),
+@@ -312,6 +325,7 @@ impl Strategy {
+                 matches,
+                 options::LINE_BYTES,
+                 'C',
++                parse_size_u64_max,
+                 Self::LineBytes,
+                 StrategyError::Bytes,
+             ),
+diff --git a/tests/by-util/test_split.rs b/tests/by-util/test_split.rs
+index 29a6a7dad..98257795b 100644
+--- a/tests/by-util/test_split.rs
++++ b/tests/by-util/test_split.rs
+@@ -436,6 +436,24 @@ fn test_split_lines_number() {
+         .args(&["--lines", "file"])
+         .fails_with_code(1)
+         .stderr_only("split: invalid number of lines: 'file'\n");
++    // NUMBER is a plain decimal count: no SIZE units, no base prefixes.
++    for arg in ["1k", "2b", "1KiB", "0x10"] {
++        scene
++            .ucmd()
++            .args(&["--lines", arg, "file"])
++            .fails_with_code(1)
++            .stderr_only(format!("split: invalid number of lines: '{arg}'\n"));
++    }
++}
++
++#[test]
++fn test_split_lines_leading_zero_is_decimal() {
++    let (at, mut ucmd) = at_and_ucmd!();
++    ucmd.args(&["-l", "010"])
++        .pipe_in("1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n")
++        .succeeds();
++    assert_eq!(at.read("xaa"), "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n");
++    assert_eq!(at.read("xab"), "11\n12\n");
+ }
+ 
+ /// Test interference between split line size and IO buffer capacity.

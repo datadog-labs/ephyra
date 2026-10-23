@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9927 (https://github.com/tursodatabase/turso/issues/9927) (line 1 corrected 2026-10-21).
 
 Title: json() rewrites every "9.0e+999" in its output, even inside strings; json_set/json_insert write an infinite REAL as 9.0e+999 where SQLite writes 9e999
 

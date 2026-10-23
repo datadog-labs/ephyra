@@ -1,0 +1,30 @@
+# name: test/optimizer/statistics/abs_double_stats_zero_bound.test
+# group: [statistics]
+
+statement ok
+CREATE TABLE t(c DOUBLE);
+
+statement ok
+INSERT INTO t VALUES (-1), (0);
+
+query IT
+SELECT c, if(c > 5, 5, abs(c)) = 0 FROM t ORDER BY c;
+----
+-1.0	false
+0.0	true
+
+query I
+SELECT count(*) FROM t WHERE if(c > 5, 5, abs(c)) = 0;
+----
+1
+
+statement ok
+CREATE TABLE f(c FLOAT);
+
+statement ok
+INSERT INTO f VALUES (-1), (-0.0);
+
+query I
+SELECT count(*) FROM f WHERE if(c > 5, 5, abs(c)) = 0;
+----
+1

@@ -1,0 +1,26 @@
+# name: test/sql/subquery/scalar/correlated_in_list_single_join.test
+# group: [scalar]
+
+statement ok
+CREATE TABLE t(b BOOLEAN);
+
+statement ok
+INSERT INTO t VALUES (false);
+
+query I
+SELECT b FROM t WHERE (1 IN ((SELECT max(1) WHERE b), 1)) <> b;
+----
+false
+
+query I
+SELECT b FROM t WHERE (1 NOT IN ((SELECT max(1) WHERE b), 1)) = b;
+----
+false
+
+statement ok
+SET disabled_optimizers='deliminator';
+
+query I
+SELECT b FROM t WHERE (1 IN ((SELECT max(1) WHERE b), 1)) <> b;
+----
+false

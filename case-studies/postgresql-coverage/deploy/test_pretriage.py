@@ -100,7 +100,8 @@ class Registry(unittest.TestCase):
         self.assertEqual(ids, {"unrecognized-node-10", "toast-missing-chunk-vacuum-full", "btree-gist-infinite-date", "huge-expr-timeout",
                                "hashsetop-out-of-memory", "cluster-subxact-row-loss", "window-exclude-ties-mark",
                                "parallel-material-dup-toc", "viewdef-negated-sort-constant", "viewdef-sublink-paren",
-                               "toast-v7-recently-dead-assert"})
+                               "toast-v7-recently-dead-assert",
+                               "heap-update-locked-only-assert"})
 
     def test_matching(self):
         f = finding(message="statement 4: SELECT 1: unrecognized node type: 10 (XX000)", signature="model-statement-SELECT-XX000")

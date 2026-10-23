@@ -1,0 +1,37 @@
+diff --git a/src/uu/sort/src/sort.rs b/src/uu/sort/src/sort.rs
+index af39628..e1bfd51 100644
+--- a/src/uu/sort/src/sort.rs
++++ b/src/uu/sort/src/sort.rs
+@@ -2285,7 +2285,8 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
+     }
+ 
+     settings.dictionary_order = dictionary_order;
+-    settings.ignore_non_printing = ignore_non_printing;
++    // -i has no effect when the stronger -d is also given, matching the per-key handling.
++    settings.ignore_non_printing = ignore_non_printing && !dictionary_order;
+     settings.ignore_case = ignore_case;
+ 
+     // WASI doesn't support threads, so we ignore the corresponding option
+diff --git a/tests/by-util/test_sort.rs b/tests/by-util/test_sort.rs
+index bcc4bbc..77477a0 100644
+--- a/tests/by-util/test_sort.rs
++++ b/tests/by-util/test_sort.rs
+@@ -636,6 +636,18 @@ fn test_non_printing_chars() {
+         .stdout_only("a👦🏻aa\naaaa\n"); // spell-checker:disable-line
+ }
+ 
++#[test]
++fn test_dictionary_order_overrides_non_printing() {
++    // -i has no effect when -d is also given, so the tab is kept.
++    for args in [&["-d", "-i"][..], &["-i", "-d"], &["-di"]] {
++        new_ucmd!()
++            .args(args)
++            .pipe_in("\tK\n7\n")
++            .succeeds()
++            .stdout_only("\tK\n7\n");
++    }
++}
++
+ #[test]
+ fn test_exponents_general() {
+     test_helper("exponents_general", &["-g"]);

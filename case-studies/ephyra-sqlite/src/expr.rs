@@ -115,11 +115,19 @@ pub enum BinOp {
     Arrow,
     /// `j ->> p`: that element as an SQL value.
     Arrow2,
+    /// `a & b`, `a | b`, `a << b`, `a >> b`: of both read as integers, an
+    /// integer (NULL of a NULL), never an error; a negative shift shifts
+    /// the other way, one of 64 or more gives 0 or -1.
+    BitAnd,
+    BitOr,
+    Shl,
+    Shr,
 }
 
 impl BinOp {
     pub const CMP: [BinOp; 6] = [BinOp::Eq, BinOp::Ne, BinOp::Lt, BinOp::Le, BinOp::Gt, BinOp::Ge];
     pub const ARITH: [BinOp; 5] = [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Rem];
+    pub const BITS: [BinOp; 4] = [BinOp::BitAnd, BinOp::BitOr, BinOp::Shl, BinOp::Shr];
 
     pub fn sql(self) -> &'static str {
         match self {
@@ -139,6 +147,10 @@ impl BinOp {
             BinOp::Div => "/",
             BinOp::Rem => "%",
             BinOp::Concat => "||",
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::Shl => "<<",
+            BinOp::Shr => ">>",
             BinOp::Like => "LIKE",
             BinOp::NotLike => "NOT LIKE",
             BinOp::Glob => "GLOB",
@@ -1159,10 +1171,24 @@ pub struct At {
     /// `temp.a0.c0`, `aux.a1.c2`.
     pub temp: u8,
     pub aux: u8,
+    /// The columns (one bit each, the first 64) that a bare name in this
+    /// query reads from source [`At::using_src`]: the columns of the USING
+    /// clause of its one join, of the left source for an inner or LEFT
+    /// join, of the right one for a RIGHT join (`lookupName`: two sources
+    /// with the name joined by USING are one; for a FULL join it is the
+    /// `coalesce` of both, which no column is). 0 elsewhere.
+    pub using: u64,
+    pub using_src: u8,
 }
 
 impl At {
-    pub const TOP: At = At { depth: 0, sources: 1, noindex: false, inline: false, named: false, main: 0, temp: 0, aux: 0 };
+    pub const TOP: At = At { depth: 0, sources: 1, noindex: false, inline: false, named: false, main: 0, temp: 0, aux: 0, using: 0, using_src: 0 };
+
+    /// Every column of the query qualified (where a bare name could be read
+    /// as a result column's).
+    fn qualified(self) -> At {
+        At { sources: self.sources.max(2), using: 0, ..self }
+    }
 
     /// The schema of source `k`'s table, as a prefix: `main.`, `temp.`,
     /// `aux.`.
@@ -1210,6 +1236,16 @@ impl fmt::Display for Sql<'_> {
             Expr::Col(c) if c.col == ROWID && c.up == 0 && at.sources == 1 => write!(f, "rowid"),
             Expr::Col(c) if c.col == ROWID => write!(f, "{}.rowid", alias(at.depth.saturating_sub(c.up), c.src)),
             Expr::Col(c) if c.up == 0 && at.sources == 1 => write!(f, "{}", quoted(&format!("c{}", c.col))),
+            // A column of a USING join's, bare half the time (by its text).
+            Expr::Col(c)
+                if c.up == 0
+                    && c.col < 64
+                    && c.src == usize::from(at.using_src)
+                    && at.using >> c.col & 1 == 1
+                    && spell(&format!("using {}.c{}", alias(at.depth, c.src), c.col), 2) == 0 =>
+            {
+                write!(f, "{}", quoted(&format!("c{}", c.col)))
+            },
             Expr::Col(c) => {
                 let a = alias(at.depth.saturating_sub(c.up), c.src);
                 let name = quoted(&format!("c{}", c.col));
@@ -1224,6 +1260,20 @@ impl fmt::Display for Sql<'_> {
             Expr::Bin(op @ (BinOp::Like | BinOp::NotLike), a, b) if matches!(&**b, Expr::Lit(Value::Text(p)) if spell(p, 3) == 0) => {
                 let Expr::Lit(Value::Text(p)) = &**b else { unreachable!() };
                 write!(f, "({} {} {} ESCAPE '!')", s(a), op.sql(), literal(&Value::Text(escaped(p))))
+            },
+            // The right operand of a bitwise operator a quarter of the
+            // time as `~(~b)`: the integer `b` reads as (`OP_BitNot` and
+            // the operator both take `sqlite3VdbeIntValue`; NULL of NULL),
+            // so the same value. Picked by the operands' sizes, not their
+            // text, which differs where a column is qualified: an ORDER BY
+            // term must be its item's expression as written.
+            Expr::Bin(op, x, y) if BinOp::BITS.contains(op) => {
+                let (a, b) = (s(x), s(y));
+                if spell(&format!("~{}.{}.{}", op_sql(*op, ""), x.cost(), y.cost()), 4) == 0 {
+                    write!(f, "({a} {} (~(~{b})))", op_sql(*op, &a))
+                } else {
+                    write!(f, "({a} {} {b})", op_sql(*op, &a))
+                }
             },
             Expr::Bin(op, a, b) => {
                 let (a, b) = (s(a), s(b));
@@ -1286,11 +1336,21 @@ impl fmt::Display for Sql<'_> {
                 list(f, args, at)?;
                 write!(f, ")")
             },
+            // A third of the aggregates (by their argument's size: an
+            // ORDER BY term must be its item as written) with a FILTER
+            // that keeps the rows they read: `count(*) FILTER (WHERE 1)`,
+            // and `FILTER (WHERE e IS NOT NULL)` of an argument `e`, whose
+            // NULLs count, min, max and sum leave out anyway.
+            Expr::Agg(a, None) if spell(&format!("filter {}", a.name()), 3) == 0 => write!(f, "{}(*) FILTER (WHERE 1)", a.name()),
             Expr::Agg(a, None) => write!(f, "{}(*)", a.name()),
+            Expr::Agg(a, Some(e)) if spell(&format!("filter {}.{}", a.name(), e.cost()), 3) == 0 => {
+                let e = s(e);
+                write!(f, "{}({e}) FILTER (WHERE ({e}) IS NOT NULL)", a.name())
+            },
             Expr::Agg(a, Some(e)) => write!(f, "{}({})", a.name(), s(e)),
             Expr::Ordered(o) => {
                 // Qualified columns in its ORDER BY, as in a query's.
-                let qualified = At { sources: at.sources.max(2), ..at };
+                let qualified = at.qualified();
                 write!(f, "{}({}", o.func.name(), if o.distinct { "DISTINCT " } else { "" })?;
                 list(f, &o.args, at)?;
                 write!(f, " ORDER BY {})", order_sql(&o.order, &|e| Sql(e, qualified).to_string()))
@@ -2117,7 +2177,8 @@ impl Vtab {
     /// expression of a column is no constraint on it.
     pub fn sql(&self, noindex: bool) -> String {
         if let Vtab::Virtual(v) = self {
-            return virtual_kind(v.vt()).map_or_else(String::new, |k| v.sql(&k, noindex));
+            let pending = VINFO.with(|i| i.borrow().get(v.vt()).is_some_and(|i| i.pending));
+            return virtual_kind(v.vt()).map_or_else(String::new, |k| v.sql_in(&k, noindex, pending));
         }
         let plus = if matches!(self, Vtab::Dbstat { .. }) { "+" } else { "" };
         let items: Vec<String> = self.columns().iter().enumerate().map(|(k, c)| format!("{plus}{c} AS c{k}")).collect();
@@ -2157,7 +2218,7 @@ impl Vtab {
                 }
             }
             let by_column = by_column.into_iter().map(|c| c.into_iter().filter(|x| short(x) && value_ok(x)).collect()).collect();
-            return Some(TableInfo { columns: width, rows, samples, by_column, shared: Vec::new(), key: RowKey::None, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), coll: vec![Some(Coll::Binary); width], aff: vec![Affinity::None; width] });
+            return Some(TableInfo { columns: width, rows, samples, by_column, shared: Vec::new(), key: RowKey::None, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), index_cols: Vec::new(), coll: vec![Some(Coll::Binary); width], aff: vec![Affinity::None; width] });
         }
         let text = |s: &str| Value::Text(s.to_string());
         let ints = |n: usize| (0..n.min(6) as i64).map(Value::Int).collect::<Vec<_>>();
@@ -2311,7 +2372,7 @@ impl Vtab {
                 samples.push(v.clone());
             }
         }
-        Some(TableInfo { columns: width, rows, samples, by_column, shared: Vec::new(), key: RowKey::None, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), coll: vec![Some(Coll::Binary); width], aff })
+        Some(TableInfo { columns: width, rows, samples, by_column, shared: Vec::new(), key: RowKey::None, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), index_cols: Vec::new(), coll: vec![Some(Coll::Binary); width], aff })
     }
 }
 
@@ -2385,7 +2446,7 @@ impl Cte {
                 // Its column, of a literal (`SELECT {start} AS c0 UNION ALL
                 // ..`), has no declared sequence: a reference to it has
                 // BINARY (`sqlite3ExprCollSeq` of a column).
-                Some(TableInfo { columns: 1, rows, samples: values, by_column, shared: Vec::new(), key: RowKey::None, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), coll: vec![Some(Coll::Binary)], aff: Vec::new() })
+                Some(TableInfo { columns: 1, rows, samples: values, by_column, shared: Vec::new(), key: RowKey::None, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), index_cols: Vec::new(), coll: vec![Some(Coll::Binary)], aff: Vec::new() })
             },
             // `columns` unset: its items are always named.
             CteBody::Vtab(v) => if self.columns { None } else { v.info(schema) },
@@ -2444,7 +2505,7 @@ impl Cte {
                         _ => Affinity::None,
                     })
                     .collect();
-                Some(TableInfo { columns: by_column.len(), rows, samples, by_column, shared, key: RowKey::None, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), coll, aff })
+                Some(TableInfo { columns: by_column.len(), rows, samples, by_column, shared, key: RowKey::None, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), index_cols: Vec::new(), coll, aff })
             },
         }
     }
@@ -2763,7 +2824,13 @@ impl Query {
             let of = |db: Db| self.sources().iter().take(8).enumerate().filter(|(_, t)| d.0.get(**t) == Some(&db)).fold(0, |m, (k, _)| m | 1 << k) & main;
             (of(Db::Temp), of(Db::Aux))
         });
-        At { depth, sources: 1 + self.joins.len(), main, temp, aux, ..At::TOP }
+        let (using, using_src) = match self.joins.as_slice() {
+            [Join { kind: JoinKind::Using(op, cols), .. }] if *op != JoinOp::Full => {
+                (cols.iter().filter(|&&c| c < 64).fold(0u64, |m, &c| m | 1 << c), u8::from(*op == JoinOp::Right))
+            },
+            _ => (0, 0),
+        };
+        At { depth, sources: 1 + self.joins.len(), main, temp, aux, using, using_src, ..At::TOP }
     }
 
     /// `e`, an expression of this query, rendered at nesting `depth`.
@@ -2800,6 +2867,13 @@ impl Query {
     /// The items at `at`.
     fn items_at(&self, at: At) -> String {
         match &self.items {
+            // A third of the time each source's columns by its alias
+            // (`a0.*, a1.*`, `selectExpander`'s `TABLE.*` path): the same
+            // columns in the same order, but for a USING or NATURAL join,
+            // whose `*` leaves the right source's copies of its columns out.
+            Items::Star if spell(&format!("star{:?}.{}", self.sources(), at.depth), 3) == 0 && !self.joins.iter().any(|j| matches!(j.kind, JoinKind::Using(..) | JoinKind::Natural(_))) => {
+                (0..=self.joins.len()).map(|k| format!("{}.*", alias(at.depth, k))).collect::<Vec<_>>().join(", ")
+            },
             Items::Star => "*".to_string(),
             Items::Exprs(es) if at.named => {
                 es.iter().enumerate().map(|(k, e)| format!("{} AS c{k}", Sql(e, At { named: false, ..at }))).collect::<Vec<_>>().join(", ")
@@ -2862,7 +2936,26 @@ impl Query {
             // compound, from being flattened: a co-routine or a
             // materialized view, and the WHERE terms pushed down into it.
             let limit = if spell(&format!("limit{t}.{}.{k}", at.depth), 2) == 0 { " LIMIT -1" } else { "" };
-            format!("(SELECT * FROM {}{hint}{limit}) AS {}", source_name(t, at, k), alias(at.depth, k))
+            let name = source_name(t, at, k);
+            // Of the others, a third split in two: the rows whose `c0` is
+            // NULL, then the others (`UNION ALL`, each row once, the
+            // columns' affinities and collating sequences the table's in
+            // both), which the flattener turns into a compound of the
+            // whole query, one SELECT per arm (its compound-subquery
+            // flattening, restrictions (17) to (18)), where it can.
+            if limit.is_empty() && spell(&format!("union{t}.{}.{k}", at.depth), 3) == 0 {
+                return format!("(SELECT * FROM {name}{hint} WHERE c0 IS NULL UNION ALL SELECT * FROM {name}{hint} WHERE c0 IS NOT NULL) AS {}", alias(at.depth, k));
+            }
+            // Of the rest, a third (by the query's sources too: by the
+            // source alone, few would ever be) in an order of their first
+            // column, which the rows of a query of several sources or with
+            // an ORDER BY of its own do not keep (SQLite drops it: "omit
+            // superfluous ORDER BY on FROM-clause subquery"), nor does a
+            // multiset.
+            if limit.is_empty() && spell(&format!("order{:?}.{}.{k}", self.sources(), at.depth), 3) == 0 {
+                return format!("(SELECT * FROM {name}{hint} ORDER BY 1) AS {}", alias(at.depth, k));
+            }
+            format!("(SELECT * FROM {name}{hint}{limit}) AS {}", alias(at.depth, k))
         } else {
             let name = source_name(t, at, k);
             let a = alias(at.depth, k);
@@ -2970,7 +3063,7 @@ impl Query {
     /// An ORDER BY key of the top-level query as an expression, its columns
     /// qualified (for a result column: its number).
     pub fn key_sql(&self, key: &OrderKey) -> String {
-        self.key_at(key, At { sources: 2, ..self.at(0) })
+        self.key_at(key, self.at(0).qualified())
     }
 
     /// ORDER BY and LIMIT at `at`.
@@ -3000,7 +3093,7 @@ impl Query {
             return windows;
         }
         // Qualified columns: a bare name could be read as a result column's.
-        let qualified = At { sources: at.sources.max(2), ..at };
+        let qualified = at.qualified();
         let terms: Vec<String> = self
             .order
             .iter()
@@ -4723,6 +4816,15 @@ pub struct TableInfo {
     /// leads with: an equality of one is a lookup the planner can make
     /// ([`draw_on`] joins on them).
     pub leading: Vec<usize>,
+    /// The columns of its indexes of two or more columns (not expression
+    /// indexes) and of a WITHOUT ROWID table's primary key of several, in
+    /// order: an equality of a prefix and a comparison of the next column
+    /// is a range or a list of lookups the planner can make on the index
+    /// ([`index_prefix`]). With each, the values of those columns in up
+    /// to 6 of its rows (spread over them; short values only): a prefix
+    /// equal to one row's values and a range of the next column that holds
+    /// its value select that row at least.
+    pub index_cols: Vec<(Vec<usize>, Vec<Vec<Value>>)>,
     /// Each column's collating sequence as SQLite gives a reference to it
     /// (`sqlite3ExprCollSeq`): a table column's declared one, BINARY where
     /// none is declared, none for an INTEGER PRIMARY KEY (a reference to it
@@ -4913,6 +5015,26 @@ impl Schema {
                             Key::Rowid => None,
                         })
                         .collect(),
+                    index_cols: t
+                        .indexes
+                        .iter()
+                        .filter(|i| i.expr.is_none() && i.columns.len() > 1)
+                        .map(|i| i.columns.iter().map(|c| c.0).collect::<Vec<_>>())
+                        .chain(match &t.key {
+                            Key::WithoutRowid(pk) if pk.len() > 1 => Some(pk.clone()),
+                            _ => None,
+                        })
+                        .map(|cols| {
+                            let mut rows: Vec<Vec<Value>> = Vec::new();
+                            for row in t.rows.iter().step_by((t.rows.len() / 6).max(1)).take(6) {
+                                let vs: Vec<Value> = cols.iter().map(|&c| column_value(t, row, c)).collect();
+                                if vs.iter().all(|v| short(v) && value_ok(v)) && !rows.contains(&vs) {
+                                    rows.push(vs);
+                                }
+                            }
+                            (cols, rows)
+                        })
+                        .collect(),
                     coll: (0..t.columns).map(|c| (!matches!(t.key, Key::IntegerPrimaryKey(k) if k == c)).then(|| column_coll(t, c))).collect(),
                     aff: (0..t.columns).map(|c| affinity(t, c)).collect(),
                 }
@@ -4967,7 +5089,7 @@ impl Schema {
             })
             .collect::<Vec<_>>();
         DBS.with(|d| *d.borrow_mut() = (m.tables.iter().map(|t| t.db).collect(), m.session.aux));
-        VINFO.with(|i| *i.borrow_mut() = crate::vtabs::summary(&m.vtabs));
+        VINFO.with(|i| *i.borrow_mut() = crate::vtabs::summary(&m.vtabs, m.savepoints.first().map(|s| &s.vtabs[..])));
         let mut schema = Schema { tables, ctes: Vec::new(), catalog: catalog.into() };
         // Each column's distinct non-NULL values among its first 256 rows,
         // as hashes that keep storage classes apart.
@@ -6421,20 +6543,20 @@ pub const ALL_CONVERSIONS: &str = "%Y-%m-%d %H:%M:%S.%f %j %J %s %w %u %W %U %V 
 
 /// A choice stream of its own, seeded by a hash of what was drawn
 /// (`key`, `salt`): content chosen from it moves no draw of the source.
-struct Side(u64);
+pub(crate) struct Side(u64);
 
 impl Side {
-    fn of(key: &str, salt: u64) -> Side {
+    pub(crate) fn of(key: &str, salt: u64) -> Side {
         Side(key.bytes().fold(0xcbf2_9ce4_8422_2325u64 ^ salt, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)))
     }
 
     /// A choice of `n`.
-    fn take(&mut self, n: usize) -> usize {
+    pub(crate) fn take(&mut self, n: usize) -> usize {
         self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         ((self.0 >> 33) % n as u64) as usize
     }
 
-    fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
+    pub(crate) fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
         &xs[self.take(xs.len())]
     }
 }
@@ -6722,10 +6844,73 @@ fn draw_sub(g: &mut Source, cx: &Cx, kind: Kind, depth: usize) -> Option<Expr> {
         Kind::In => {
             let rows = Cx { budget: 0, ..cx.clone() };
             let left = if g.bool_with(0.7) { term(g, cx, depth) } else { draw_expr(g, &rows, depth.saturating_sub(1)) };
-            Expr::InSelect(bx(left), Box::new(q), not)
+            Expr::InSelect(bx(left), Box::new(bare_in(cx, q, kind)), not)
         },
         _ => Expr::Scalar(Box::new(q)),
     })
+}
+
+/// The subquery `q` of an IN (`kind`: of one column, or a row value's)
+/// drawn in `cx`, a quarter of the time (by a [`Side`] stream of `q`: no
+/// draw moves) in its bare form, `SELECT c FROM t`, of `q`'s first table:
+/// columns an index or the key leads with two thirds of the time, the
+/// rowid now and then, else any. Only that form is SQLite's candidate to
+/// read the IN's right side from an index or the table itself in place of
+/// a temporary b-tree (`isCandidateForInOpt`, `sqlite3FindInIndex`: "USING
+/// INDEX .. FOR IN-OPERATOR", "USING ROWID SEARCH"). `q` where the bare
+/// form is not valid there.
+fn bare_in(cx: &Cx, q: Query, kind: Kind) -> Query {
+    let mut side = Side::of(&q.sql(), 0x0062_6172_655f_696e);
+    let n = match kind {
+        Kind::Row(n) => n,
+        _ => 1,
+    };
+    let Some(info) = cx.schema.info(q.table).filter(|_| side.take(8) == 0 && q.table < CTE && q.with.is_empty()) else {
+        return q;
+    };
+    if info.columns < n {
+        return q;
+    }
+    let mut cols: Vec<usize> = Vec::new();
+    if n == 1 && info.key == RowKey::Rowid && side.take(5) == 0 {
+        cols.push(ROWID);
+    } else if !info.leading.is_empty() && side.take(3) != 0 {
+        cols.push(*side.pick(&info.leading));
+    }
+    while cols.len() < n {
+        let c = side.take(info.columns);
+        if !cols.contains(&c) {
+            cols.push(c);
+        }
+    }
+    // Of several columns, none past a WITHOUT ROWID table's primary key:
+    // SQLite probes the key's b-tree with them too (`sqlite3FindInIndex`),
+    // reading a column ADD COLUMN added from rows written before it,
+    // "database disk image is malformed" (the known SQLite bug
+    // sqlite-wr-in-index-added-column; `query_plans_agree`).
+    if let RowKey::Columns(pk) = &info.key {
+        if n > 1 && cols.iter().any(|c| !pk.contains(c)) {
+            return q;
+        }
+    }
+    let bare = Query {
+        with: Vec::new(),
+        table: q.table,
+        joins: Vec::new(),
+        distinct: false,
+        items: Items::Exprs(cols.into_iter().map(|c| Expr::Col(Col::here(0, c))).collect()),
+        filter: None,
+        group: Vec::new(),
+        having: None,
+        compound: Vec::new(),
+        order: Vec::new(),
+        limit: None,
+    };
+    if bare.valid_in(cx.schema, &cx.levels, kind) {
+        bare
+    } else {
+        q
+    }
 }
 
 /// Any expression of at most `depth` levels (a leaf at 1).
@@ -6770,7 +6955,16 @@ pub fn draw_expr(g: &mut Source, cx: &Cx, depth: usize) -> Expr {
             let l = (0..g.int(1..=4)).map(|_| sub(g)).collect();
             Expr::In(bx(sub(g)), l, g.bool_with(0.3))
         },
-        7 => Expr::bin(*g.pick(&BinOp::ARITH), sub(g), sub(g)),
+        // Two fifths of the time (by a side stream of the drawn expression:
+        // no draw moves) a bitwise operator in place of the arithmetic one.
+        7 => {
+            let e = Expr::bin(*g.pick(&BinOp::ARITH), sub(g), sub(g));
+            let mut side = Side::of(&format!("{e:?}"), 0x6269_7473);
+            match e {
+                Expr::Bin(_, a, b) if side.take(5) < 2 => Expr::Bin(*side.pick(&BinOp::BITS), a, b),
+                e => e,
+            }
+        },
         8 => Expr::bin(BinOp::Concat, sub(g), sub(g)),
         9 => {
             let glob = g.bool_with(0.4);
@@ -6972,6 +7166,189 @@ pub fn draw_pred(g: &mut Source, cx: &Cx, depth: usize) -> Expr {
     }
 }
 
+/// A predicate on a prefix of an index of several columns of a source of
+/// the query of `cx` ([`TableInfo::index_cols`]): each of its first one or
+/// two columns equal to a literal (the first, a fifth of the time, IN a
+/// list of them), ANDed with a comparison of the next one: a range (`<`,
+/// `<=`, `>`, `>=`, one or two of them, or BETWEEN), IN a list, IS NULL or
+/// an equality. The planner seeks the index on the prefix and scans the
+/// range or loops over the list on the next column (`whereLoopAddBtreeIndex`,
+/// `whereRangeScanEst`, `codeINTerm` on a column past the first). The
+/// literals as comparisons draw them ([`lit_for`]).
+fn index_prefix(g: &mut Source, cx: &Cx, depth: usize, wide: bool) -> Expr {
+    // A third of the time two of them ORed, each an index's range on its
+    // own (`exprAnalyzeOrTerm`, `whereLoopAddOr`: the OR-by-union plan).
+    if g.bool_with(0.35) {
+        let (x, y) = (index_prefix_one(g, cx, depth, true, wide), index_prefix_one(g, cx, depth, true, wide));
+        return Expr::bin(BinOp::Or, x, y);
+    }
+    index_prefix_one(g, cx, depth, false, wide)
+}
+
+/// One predicate of [`index_prefix`], a branch of an OR when `or`: then
+/// no IN on a WITHOUT ROWID table's columns, whose MULTI-INDEX OR plan
+/// misses rows after ANALYZE (`a = -1 OR (a = -5 AND b IN (1, 2))` on a
+/// key of `(a, b)` returns only the first branch's row; candidate
+/// sqlite-wr-multi-or-in-misses-row, norec burn seed 11200162).
+fn index_prefix_one(g: &mut Source, cx: &Cx, depth: usize, or: bool, wide: bool) -> Expr {
+    let mut picks = Vec::new();
+    for (k, &t) in cx.here().iter().enumerate() {
+        for (cols, rows) in &cx.schema.info(t).unwrap().index_cols {
+            picks.push((k, cols.clone(), rows.clone()));
+        }
+    }
+    let (k, cols, rows) = g.pick(&picks).clone();
+    let no_in = or && matches!(cx.schema.info(cx.here()[k]).unwrap().key, RowKey::Columns(_));
+    let n = if cols.len() > 2 && g.bool_with(0.3) { 2 } else { 1 };
+    // Most of the time the values of one of the table's rows: its prefix
+    // equal to them and the next column's range holding its value, so that
+    // the rows the predicate selects reach the query's other expressions
+    // (its JSON, date and FTS5 calls run on them).
+    let row = (!rows.is_empty() && g.bool_with(0.7)).then(|| g.pick(&rows).clone());
+    let at = |g: &mut Source, i: usize, e: &Expr| match &row {
+        Some(r) => Expr::Lit(r[i].clone()),
+        None => lit_for(g, cx, e, depth),
+    };
+    // Wide (`wide`, with rows): the first column IN every value the rows
+    // hold of it, the next one bounded on one side by the least or the
+    // greatest of them, or IS NOT NULL: the planner seeks the index as
+    // before, over most of the table's rows, on which the query's other
+    // terms run.
+    if wide && !rows.is_empty() {
+        let held = |i: usize| {
+            let mut vs: Vec<Value> = Vec::new();
+            for r in &rows {
+                if r[i] != Value::Null && !vs.contains(&r[i]) {
+                    vs.push(r[i].clone());
+                }
+            }
+            vs
+        };
+        let mut terms = Vec::new();
+        for (i, &c) in cols[..n].iter().enumerate() {
+            let a = Expr::col(k, c);
+            let vs = held(i);
+            terms.push(match vs.len() {
+                0 => Expr::IsNull(bx(a), false),
+                1 => Expr::bin(BinOp::Eq, a, Expr::Lit(vs[0].clone())),
+                _ if no_in => Expr::bin(BinOp::Eq, a, Expr::Lit(g.pick(&vs).clone())),
+                _ => Expr::In(bx(a), vs.into_iter().map(Expr::Lit).collect(), false),
+            });
+        }
+        let b = Expr::col(k, cols[n]);
+        let vs = held(n);
+        let coll = cx.schema.info(cx.here()[k]).unwrap().coll_of(cols[n]);
+        let ord = |x: &Value, y: &Value| crate::model::compare_coll(x, y, crate::model::Encoding::Utf8, coll);
+        terms.push(match (g.int(0..3), vs.iter().min_by(|x, y| ord(x, y)), vs.iter().max_by(|x, y| ord(x, y))) {
+            (0, Some(lo), _) => Expr::bin(BinOp::Ge, b, Expr::Lit(lo.clone())),
+            (1, _, Some(hi)) => Expr::bin(BinOp::Le, b, Expr::Lit(hi.clone())),
+            _ => Expr::IsNull(bx(b), true),
+        });
+        shuffle(g, &mut terms);
+        return terms.into_iter().reduce(|x, y| Expr::bin(BinOp::And, x, y)).unwrap();
+    }
+    let mut terms = Vec::new();
+    for (i, &c) in cols[..n].iter().enumerate() {
+        let a = Expr::col(k, c);
+        terms.push(if row.as_ref().is_some_and(|r| r[i] == Value::Null) {
+            Expr::IsNull(bx(a), false)
+        } else if i == 0 && g.bool_with(0.2) && !no_in {
+            let mut l: Vec<Expr> = (0..g.int(2..=3)).map(|_| lit_for(g, cx, &a, depth)).collect();
+            if row.is_some() {
+                let j = g.int(0..=l.len() - 1);
+                l[j] = at(g, i, &a);
+            }
+            Expr::In(bx(a), l, false)
+        } else {
+            let l = at(g, i, &a);
+            Expr::bin(BinOp::Eq, a, l)
+        });
+    }
+    let b = Expr::col(k, cols[n]);
+    let anchor = |g: &mut Source| at(g, n, &b);
+    // A bound now and then a constant expression of the literal (a CAST,
+    // `lower`, `upper`): the planner evaluates it to estimate the range
+    // from the statistics (`valueFromExpr`, `valueFromFunction`).
+    let lit = |g: &mut Source| {
+        let l = lit_for(g, cx, &b, depth);
+        match g.int(0..12) {
+            0 => Expr::Cast(bx(l), CastType::Integer),
+            1 => Expr::Cast(bx(l), CastType::Real),
+            2 => Expr::Cast(bx(l), CastType::Text),
+            3 => Expr::Cast(bx(l), CastType::Numeric),
+            4 => Expr::Call(Func::Lower, vec![l]),
+            5 => Expr::Call(Func::Upper, vec![l]),
+            _ => l,
+        }
+    };
+    // With a row, its value of the next column: a bound that holds it
+    // (`>=`, `<=`, one BETWEEN bound or both), a member of the list, an
+    // equality; IS NOT NULL in place of IS NULL. A NULL value: IS NULL.
+    let held = row.as_ref().map(|r| r[n].clone());
+    let last = match g.int(0..10) {
+        _ if held == Some(Value::Null) => Expr::IsNull(bx(b.clone()), false),
+        0..=3 if held.is_some() => {
+            let both = g.bool();
+            let (lo, hi) = if both { (anchor(g), anchor(g)) } else if g.bool() { (anchor(g), lit(g)) } else { (lit(g), anchor(g)) };
+            let lower = Expr::bin(BinOp::Ge, b.clone(), lo);
+            let upper = Expr::bin(BinOp::Le, b.clone(), hi);
+            match g.int(0..3) {
+                0 => Expr::bin(BinOp::Ge, b.clone(), anchor(g)),
+                1 => Expr::bin(BinOp::Le, b.clone(), anchor(g)),
+                _ => Expr::bin(BinOp::And, lower, upper),
+            }
+        },
+        4 | 5 if held.is_some() => {
+            let (lo, hi) = match g.int(0..3) {
+                0 => (anchor(g), anchor(g)),
+                1 => (anchor(g), lit(g)),
+                _ => (lit(g), anchor(g)),
+            };
+            Expr::Between(bx(b.clone()), bx(lo), bx(hi), false)
+        },
+        6 if held.is_some() && !no_in => {
+            let mut l: Vec<Expr> = (0..g.int(2..=4)).map(|_| lit(g)).collect();
+            let j = g.int(0..=l.len() - 1);
+            l[j] = anchor(g);
+            Expr::In(bx(b.clone()), l, false)
+        },
+        8 if held.is_some() => Expr::IsNull(bx(b.clone()), true),
+        6 | 9 if held.is_some() => Expr::bin(BinOp::Eq, b.clone(), anchor(g)),
+        0..=3 => {
+            let lower = Expr::bin(*g.pick(&[BinOp::Gt, BinOp::Ge]), b.clone(), lit(g));
+            let upper = Expr::bin(*g.pick(&[BinOp::Lt, BinOp::Le]), b.clone(), lit(g));
+            match g.int(0..3) {
+                0 => lower,
+                1 => upper,
+                _ => Expr::bin(BinOp::And, lower, upper),
+            }
+        },
+        4 | 5 => Expr::Between(bx(b.clone()), bx(lit(g)), bx(lit(g)), false),
+        // IN a subquery not correlated with the query, now and then in its
+        // bare form (`bare_in`), which the planner may read from an index
+        // (`sqlite3FindInIndex`), the column's index looping over its rows.
+        6 | 7 if no_in => Expr::bin(BinOp::Eq, b.clone(), lit(g)),
+        7 if cx.can_nest() => {
+            let budget = cx.budget.max(ROW_BUDGET / 10);
+            match draw_select(g, cx.schema, &cx.levels, cx.levels.len(), budget, Kind::In, depth.saturating_sub(1).max(2)) {
+                Some(q) => Expr::InSelect(bx(b.clone()), Box::new(bare_in(cx, q, Kind::In)), false),
+                None => Expr::In(bx(b.clone()), (0..g.int(2..=4)).map(|_| lit(g)).collect(), false),
+            }
+        },
+        6 | 7 => Expr::In(bx(b.clone()), (0..g.int(2..=4)).map(|_| lit(g)).collect(), false),
+        8 => Expr::IsNull(bx(b.clone()), false),
+        _ => Expr::bin(BinOp::Eq, b.clone(), lit(g)),
+    };
+    terms.push(last);
+    shuffle(g, &mut terms);
+    terms.into_iter().reduce(|x, y| Expr::bin(BinOp::And, x, y)).unwrap()
+}
+
+/// Whether `e` calls one of `fs` (not looking into subqueries).
+fn calls_any(e: &Expr, fs: &[Func]) -> bool {
+    matches!(e, Expr::Call(f, _) if fs.contains(f)) || e.children().into_iter().any(|c| calls_any(c, fs))
+}
+
 /// A row value predicate ([`Expr::RowCmp`], [`Expr::RowBetween`],
 /// [`Expr::RowIn`], [`Expr::RowInSelect`]) of two terms (or three, a
 /// quarter of the time): half the time, outside an aggregate query, a
@@ -6998,6 +7375,27 @@ fn draw_row_pred(g: &mut Source, cx: &Cx, depth: usize) -> Expr {
     while left.len() < n {
         left.push(if g.bool_with(0.8) { term(g, cx, depth) } else { draw_expr(g, cx, depth.min(2)) });
     }
+    // A row value that starts with a WITHOUT ROWID table's key column has
+    // no later column of that table past the key bare: SQLite would seek
+    // the key's b-tree with it too (`whereRangeVectorLen`), reading a column
+    // ADD COLUMN added from rows written before it, "database disk image is
+    // malformed" or rows missed (the known SQLite bug
+    // sqlite-wr-rowvalue-added-column; `query_plans_agree`). Such a column
+    // is cast to TEXT, which no index holds.
+    if let Expr::Col(first) = &left[0] {
+        if let RowKey::Columns(pk) = &cx.table_of(first).key {
+            if pk.contains(&first.col) {
+                let first = *first;
+                for e in left.iter_mut().skip(1) {
+                    if let Expr::Col(c) = e {
+                        if c.up == first.up && c.src == first.src && !pk.contains(&c.col) {
+                            *e = Expr::Cast(bx(e.clone()), CastType::Text);
+                        }
+                    }
+                }
+            }
+        }
+    }
     let lits = |g: &mut Source, left: &[Expr]| left.iter().map(|c| lit_for(g, cx, c, depth)).collect::<Vec<_>>();
     match g.int(0..10) {
         0..=4 => {
@@ -7019,7 +7417,7 @@ fn draw_row_pred(g: &mut Source, cx: &Cx, depth: usize) -> Expr {
             let (min_level, budget) =
                 if correlated { (cx.min_level, cx.budget) } else { (cx.levels.len(), cx.budget.max(ROW_BUDGET / 10)) };
             match cx.can_nest().then(|| draw_select(g, cx.schema, &cx.levels, min_level, budget, Kind::Row(n), depth.saturating_sub(1).max(2))).flatten() {
-                Some(q) => Expr::RowInSelect(left, Box::new(q), g.bool_with(0.3)),
+                Some(q) => Expr::RowInSelect(left, Box::new(bare_in(cx, q, Kind::Row(n))), g.bool_with(0.3)),
                 None => {
                     let right = lits(g, &left);
                     Expr::RowCmp(BinOp::Eq, left, right)
@@ -7265,8 +7663,8 @@ pub fn draw_select(
             0..=5 => q.distinct = g.bool_with(0.3),
             6..=11 => {
                 let mut items: Vec<Expr> = (0..g.int(1..=3)).map(|_| item(g, depth - 1)).collect();
-                // Window functions in half of these (none with DISTINCT).
-                if g.bool_with(0.5) {
+                // Window functions in three quarters of these (none with DISTINCT).
+                if g.bool_with(0.75) {
                     for _ in 0..g.int(1..=3) {
                         let w = draw_window(g, &cx);
                         let k = g.int(0..=items.len());
@@ -7352,6 +7750,28 @@ pub fn draw_select(
         };
         if f.depth() <= MAX_DEPTH {
             q.filter = Some(f);
+        }
+    }
+    // A third of the queries of a source with an index of several columns
+    // AND a predicate on a prefix of it ([`index_prefix`]), drawn from a
+    // source of its own seeded by the query's text so far (by `spell`), so
+    // that no draw of the query moves.
+    if cx.here().iter().any(|&t| !schema.info(t).unwrap().index_cols.is_empty()) {
+        let text = format!("prefix {:?} {}", sources, q.filter.as_ref().map_or(String::new(), |f| Sql(f, q.at(0)).to_string()));
+        if spell(&text, 2) == 0 {
+            // Wide most of the time in a query that calls JSON or date and
+            // time functions, else now and then ([`index_prefix_one`]).
+            let heavy = q.items.exprs().into_iter().chain(q.filter.iter()).any(|e| calls_any(e, &Func::JSON) || calls_any(e, &Func::DATE));
+            let wide = spell(&format!("{text} wide"), 10) < if heavy { 8 } else { 2 };
+            let p = index_prefix(&mut Source::new(spell(&text, u64::MAX), g.size()), &cx, depth.saturating_sub(1).max(2), wide);
+            let f = match q.filter.clone() {
+                Some(f) if spell(&format!("{text} last"), 2) == 0 => Expr::bin(BinOp::And, f, p),
+                Some(f) => Expr::bin(BinOp::And, p, f),
+                None => p,
+            };
+            if f.depth() <= MAX_DEPTH {
+                q.filter = Some(f);
+            }
         }
     }
     // The join condition of a CROSS join (60%), an inner one (15%) or a
@@ -7817,10 +8237,10 @@ pub fn draw_body(g: &mut Source, schema: &Schema, depth: usize) -> Option<Query>
     } else {
         let d = depth.saturating_sub(1).max(1);
         let mut items: Vec<Expr> = (0..n).map(|_| if g.bool_with(0.6) { Expr::Col(cx.draw_col(g)) } else { draw_expr(g, &cx, d) }).collect();
-        // A window item 30% of the time: read through the CTE, inlined as
+        // A window item half the time: read through the CTE, inlined as
         // a subquery in FROM whose window the outer WHERE may not push
         // into (`pushDownWindowCheck`), or materialized.
-        if g.bool_with(0.3) {
+        if g.bool_with(0.5) {
             let w = draw_window(g, &cx);
             let k = g.int(0..=items.len());
             items.insert(k, w);
@@ -8597,7 +9017,7 @@ impl Gen for Schemas {
                 // A WITHOUT ROWID table a quarter of the time, keyed by its
                 // first one or two columns.
                 let key = if g.bool_with(0.25) { RowKey::Columns((0..g.int(1..=columns.min(2))).collect()) } else { RowKey::Rowid };
-                let empty = TableInfo { columns, rows, samples: Vec::new(), by_column: vec![Vec::new(); columns], shared: Vec::new(), key, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), coll: Vec::new(), aff: Vec::new() };
+                let empty = TableInfo { columns, rows, samples: Vec::new(), by_column: vec![Vec::new(); columns], shared: Vec::new(), key, exprs: Vec::new(), partial: Vec::new(), leading: Vec::new(), index_cols: Vec::new(), coll: Vec::new(), aff: Vec::new() };
                 let samples: Vec<Value> = (0..g.int(0..=8)).map(|_| draw_value(g, &empty)).collect();
                 let by_column = (0..columns).map(|_| samples.iter().filter(|_| g.bool()).cloned().collect()).collect();
                 TableInfo { samples, by_column, ..empty }
@@ -8941,7 +9361,7 @@ mod tests {
         }
         let cx_schema = Schema { tables: vec![TableInfo {
             columns: 1, rows: 2, samples: vec![], by_column: vec![vec![Value::Text("ab".into())]], shared: vec![], key: RowKey::Rowid,
-            exprs: vec![], partial: vec![], leading: vec![], coll: vec![None], aff: Vec::new(),
+            exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![None], aff: Vec::new(),
         }], ctes: vec![], catalog: Default::default() };
         let cx = Cx { schema: &cx_schema, levels: vec![vec![0]], min_level: 0, budget: 0, grouped: None };
         let mut drawn = 0;
@@ -8963,7 +9383,7 @@ mod tests {
         q.filter = Some(Expr::Exists(Box::new(sub), false));
         q.group = vec![Expr::col(1, 0)];
         q.having = Some(Expr::bin(BinOp::Gt, Expr::Agg(Agg::Count, None), Expr::Lit(Value::Int(1))));
-        let schema = Schema { tables: vec![TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] }; 2], ctes: vec![], catalog: Default::default() };
+        let schema = Schema { tables: vec![TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] }; 2], ctes: vec![], catalog: Default::default() };
         assert!(q.valid(&schema));
         assert_eq!(
             q.sql(),
@@ -8996,7 +9416,7 @@ mod tests {
 
     #[test]
     fn renders_orders_and_limits() {
-        let info = |key| TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let info = |key| TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         let schema = Schema { tables: vec![info(RowKey::Rowid), info(RowKey::Columns(vec![1]))], ctes: vec![], catalog: Default::default() };
         let mut q = Query::simple(0, false, Items::Star, None);
         q.joins.push(Join { table: 1, kind: JoinKind::Cross });
@@ -9037,7 +9457,7 @@ mod tests {
 
     #[test]
     fn renders_compounds() {
-        let info = TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let info = TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         let schema = Schema { tables: vec![info.clone(), TableInfo { columns: 1, ..info }], ctes: vec![], catalog: Default::default() };
         let mut q = Query::simple(0, false, Items::Star, Some(Expr::IsNull(bx(Expr::col(0, 1)), false)));
         let member = Query::simple(1, true, Items::Exprs(vec![Expr::col(0, 0), Expr::Lit(Value::Int(1))]), None);
@@ -9101,7 +9521,7 @@ mod tests {
 
     #[test]
     fn renders_outer_and_using_joins() {
-        let info = |columns| TableInfo { columns, rows: 3, samples: vec![], by_column: vec![vec![]; columns], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let info = |columns| TableInfo { columns, rows: 3, samples: vec![], by_column: vec![vec![]; columns], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         let schema = Schema { tables: vec![info(3), info(2)], ctes: vec![], catalog: Default::default() };
         let mut q = Query::simple(0, false, Items::Star, None);
         q.joins.push(Join { table: 1, kind: JoinKind::Using(JoinOp::Full, vec![1, 0]) });
@@ -9185,7 +9605,7 @@ mod tests {
             let pretty = Expr::Call(Func::JsonPretty, vec![doc.clone(), indent]);
             let read = Expr::Call(Func::JsonExtract, vec![pretty, Expr::Lit(Value::Text("$".into()))]);
             let q = Query::simple(0, false, Items::Exprs(vec![read]), None);
-            let schema = Schema { tables: vec![TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] }], ctes: vec![], catalog: Default::default() };
+            let schema = Schema { tables: vec![TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] }], ctes: vec![], catalog: Default::default() };
             assert!(!q.valid(&schema), "{}", q.sql());
         }
     }
@@ -9242,7 +9662,7 @@ mod tests {
             };
             let e = db.query_row(&q.sql(), [], |r| r.get::<_, rusqlite::types::Value>(0)).unwrap_err();
             assert!(e.to_string().contains("malformed JSON"), "SQLite may clear the subtype now: {e}");
-            let schema = Schema { tables: vec![TableInfo { columns: 2, rows: 1, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] }], ctes: vec![], catalog: Default::default() };
+            let schema = Schema { tables: vec![TableInfo { columns: 2, rows: 1, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] }], ctes: vec![], catalog: Default::default() };
             assert!(!q.valid(&schema), "{}", q.sql());
         }
         // A scalar subquery of one, even unblobbed: never a value argument.
@@ -9425,7 +9845,7 @@ mod tests {
     /// one-term row are invalid; shrinking reaches the scalar forms.
     #[test]
     fn renders_row_values() {
-        let info = TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Columns(vec![1, 0]), exprs: vec![], partial: vec![], leading: vec![1], coll: vec![], aff: vec![] };
+        let info = TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Columns(vec![1, 0]), exprs: vec![], partial: vec![], leading: vec![1], index_cols: vec![], coll: vec![], aff: vec![] };
         let schema = Schema { tables: vec![info.clone(), info], ctes: vec![], catalog: Default::default() };
         let (c0, c1) = (Expr::col(0, 0), Expr::col(0, 1));
         let int = |i| Expr::Lit(Value::Int(i));
@@ -9462,7 +9882,7 @@ mod tests {
 
     #[test]
     fn renders_windows() {
-        let info = |key| TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let info = |key| TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         let schema = Schema { tables: vec![info(RowKey::Rowid), info(RowKey::Columns(vec![1]))], ctes: vec![], catalog: Default::default() };
         let term = |e: Expr, desc| Order { key: OrderKey::Expr(e), desc, nulls: None, by: By::Number };
         let w = Window {
@@ -9509,7 +9929,7 @@ mod tests {
 
     #[test]
     fn renders_ctes() {
-        let info = TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let info = TableInfo { columns: 2, rows: 3, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         let schema = Schema { tables: vec![info.clone(); 2], ctes: vec![], catalog: Default::default() };
         let body = Query::simple(1, false, Items::Exprs(vec![Expr::col(0, 1)]), Some(Expr::IsNull(bx(Expr::col(0, 0)), true)));
         let sub = Query::simple(CTE + 1, false, Items::Star, Some(Expr::bin(BinOp::Eq, Expr::col(0, 0), Expr::Col(Col { up: 1, src: 0, col: 0 }))));
@@ -9579,7 +9999,7 @@ mod tests {
         assert!(!date_args_ok(Func::Date, &[]));
         // Drawn calls of time literals: SQLite answers each without an
         // error, the same in two statements, and not mostly NULL.
-        let schema = Schema { tables: vec![TableInfo { columns: 1, rows: 1, samples: vec![], by_column: vec![vec![]], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] }], ctes: vec![], catalog: Default::default() };
+        let schema = Schema { tables: vec![TableInfo { columns: 1, rows: 1, samples: vec![], by_column: vec![vec![]], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] }], ctes: vec![], catalog: Default::default() };
         let cx = Cx { schema: &schema, levels: vec![vec![0]], min_level: 0, budget: 0, grouped: None };
         let db = rusqlite::Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE t0(c0); INSERT INTO t0 VALUES (NULL)").unwrap();
@@ -9671,7 +10091,7 @@ mod tests {
             db
         };
         let (a, b) = (open(false), open(true));
-        let info = TableInfo { columns: 2, rows: 10, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let info = TableInfo { columns: 2, rows: 10, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         let schema = Schema { tables: vec![info], ctes: vec![], catalog: Default::default() };
         let cx = Cx { schema: &schema, levels: vec![vec![0]], min_level: 0, budget: 0, grouped: Some(vec![]) };
         let mut ordered = 0;
@@ -9715,7 +10135,7 @@ mod tests {
              CREATE TABLE t1(c0 INTEGER PRIMARY KEY COLLATE NOCASE, c1 COLLATE NOCASE, c2); INSERT INTO t1 VALUES (1, 'B', 1), (2, 'a', 2);",
         )
         .unwrap();
-        let info = |coll| TableInfo { columns: 3, rows: 2, samples: vec![], by_column: vec![vec![]; 3], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll, aff: vec![] };
+        let info = |coll| TableInfo { columns: 3, rows: 2, samples: vec![], by_column: vec![vec![]; 3], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll, aff: vec![] };
         let schema = Schema { tables: vec![info(vec![Some(Coll::Binary); 3]), info(vec![None, Some(Coll::Nocase), Some(Coll::Binary)])], ctes: vec![], catalog: Default::default() };
         let (c0, c1, c2) = (Expr::col(0, 0), Expr::col(0, 1), Expr::col(0, 2));
         let under = |e: &Expr, k| Expr::Collate(bx(e.clone()), k);
@@ -9869,7 +10289,7 @@ mod tests {
         let patch = Expr::Call(Func::JsonPatch, vec![text("{$_b:[0x10,],c:'d'}"), text("{\"c\":\"\\n\",\"x y\":\"a b\"}")]);
         let typeof_c0 = Expr::Call(Func::Typeof, vec![Expr::col(0, 0)]);
         let replace = Expr::Call(Func::JsonbReplace, vec![patch, Expr::Lit(Value::Null), typeof_c0]);
-        let info = TableInfo { columns: 1, rows: 6, samples: vec![], by_column: vec![vec![]], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let info = TableInfo { columns: 1, rows: 6, samples: vec![], by_column: vec![vec![]], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         let schema = Schema { tables: vec![info], ctes: vec![], catalog: Default::default() };
         let item = |e: Expr| Query::simple(0, false, Items::Exprs(vec![e]), None).valid(&schema);
         let json = |e: Expr| Expr::Call(Func::Json, vec![e]);
@@ -9936,7 +10356,7 @@ mod tests {
     /// ranking; over 50 rows frames of the whole partition are drawn.
     #[test]
     fn windows_read_their_frames_within_budget() {
-        let table = |rows, key| TableInfo { columns: 2, rows, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let table = |rows, key| TableInfo { columns: 2, rows, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         for (rows, key) in [(5000, RowKey::Rowid), (5000, RowKey::None), (50, RowKey::Rowid)] {
             let schema = Schema { tables: vec![table(rows, key.clone())], ctes: vec![], catalog: Default::default() };
             let cx = Cx { schema: &schema, levels: vec![vec![0]], min_level: 0, budget: 0, grouped: None };
@@ -9975,7 +10395,7 @@ mod tests {
              CREATE TABLE t1(c0 INTEGER PRIMARY KEY, c1 REFERENCES t0(c0)); INSERT INTO t0 VALUES (1, 'a', 2), (3, 'B', x'00');",
         )
         .unwrap();
-        let info = |columns, rows| TableInfo { columns, rows, samples: vec![], by_column: vec![vec![]; columns], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], coll: vec![], aff: vec![] };
+        let info = |columns, rows| TableInfo { columns, rows, samples: vec![], by_column: vec![vec![]; columns], shared: vec![], key: RowKey::Rowid, exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll: vec![], aff: vec![] };
         let catalog = vec![Catalog { types: vec!["INT", "TEXT", ""], indexes: vec![2, 1, 1], fks: vec![], pages: 0 }, Catalog { types: vec!["INTEGER", ""], indexes: vec![], fks: vec![1], pages: 0 }];
         let schema = Schema { tables: vec![info(3, 2), info(2, 0)], ctes: vec![], catalog: catalog.into() };
         let doc = r#"{"a":[1,2,{"b":null}],"c":"x"}"#.to_string();

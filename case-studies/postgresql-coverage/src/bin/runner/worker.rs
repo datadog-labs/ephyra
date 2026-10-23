@@ -84,8 +84,12 @@ pub const LOST_EXIT: i32 = 3;
 /// no record and no restart counted. A backend that lives for days gets
 /// slower (2026-10-18: 69 inputs/s after 4 h, 37 after 33 h, with catalogs
 /// vacuumed and the database small), so no session outlives a few hours.
+/// Since the generator writes triggers (PL/pgSQL functions, one set per
+/// input), a backend slows within minutes (2026-10-21: 11.9 inputs/s at
+/// 19 min, 4.1 at 2 h 20 min, back to 17.5 right after a renewal), so
+/// sessions are renewed every 500 inputs.
 pub const RENEW_EXIT: i32 = 4;
-pub const RENEW_EVERY: u64 = 5000;
+pub const RENEW_EVERY: u64 = 500;
 
 /// Timeouts saved per worker process (unshrunk).
 const SAVED_TIMEOUTS: u64 = 5;

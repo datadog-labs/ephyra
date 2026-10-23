@@ -49,6 +49,10 @@
 //!   it changes: that row's check and the key's action also fire in
 //!   physical row order, the check first raising `23503`, the action
 //!   first rewriting the row so that the check skips it ([`write`]).
+//! - No SET NULL or CASCADE action whose UPDATE a BEFORE trigger turns
+//!   back to the row's old reference: PostgreSQL skips the check of an
+//!   unchanged key on a row older than the transaction and keeps the
+//!   orphan, which the docs leave to the trigger's author ([`write`]).
 //! - `SET NULL (..)` and `SET DEFAULT (..)` column lists only with MATCH
 //!   SIMPLE (a partly NULL key would fail MATCH FULL).
 //! - Inside a transaction, a table that may have deferred trigger events
@@ -59,7 +63,7 @@
 
 use std::{cmp::Ordering, collections::BTreeSet};
 
-use crate::model::{compare, identical, Action, Deferral, ForeignKey, Model, Row, Table, TrigAction, Trigger, Type, Value};
+use crate::model::{compare, identical, Action, Deferral, ForeignKey, Index, Model, Row, Table, TrigAction, Trigger, Type, Value};
 
 /// How many rounds of actions one write may take before the model gives
 /// up (the statement is then not generated).
@@ -93,6 +97,15 @@ pub enum Code {
     NotNull,
     Check,
     Unique,
+    /// The errors of `ALTER COLUMN .. TYPE` (`crate::semantics::convert`):
+    /// `22003`, `22P02`, `42804` (no assignment cast and no USING), `22008`
+    /// (a date past the last timestamp), `0A000` (NaN or infinity to an
+    /// integer). Never a write's.
+    OutOfRange,
+    InvalidText,
+    Mismatch,
+    DatetimeOverflow,
+    Unsupported,
 }
 
 impl Code {
@@ -106,6 +119,11 @@ impl Code {
             Code::NotNull => "not_null_violation",
             Code::Check => "check_violation",
             Code::Unique => "unique_violation",
+            Code::OutOfRange => "numeric_value_out_of_range",
+            Code::InvalidText => "invalid_text_representation",
+            Code::Mismatch => "datatype_mismatch",
+            Code::DatetimeOverflow => "datetime_field_overflow",
+            Code::Unsupported => "feature_not_supported",
         }
     }
 }
@@ -166,7 +184,7 @@ pub fn def_ok(tables: &[Table], child: &Table, fk: &ForeignKey) -> bool {
         && (fk.parent != child.id || fk.columns.iter().all(|c| !fk.parent_columns.contains(c)))
         // Not a self-reference on a partitioned table: an UPDATE that moves
         // a row to another partition checks the moved row before the
-        // cascade updates it (`../bugs/candidates/pg-partition-selfref-cascade-move`).
+        // cascade updates it (`../bugs/postgresql/pg-partition-selfref-cascade-move`).
         && (fk.parent != child.id || child.partitioning.is_none())
         && (fk.delete_set.is_empty() || matches!(fk.on_delete, Action::SetNull | Action::SetDefault) && !fk.full)
         && distinct(&fk.delete_set)
@@ -288,6 +306,31 @@ pub fn referenced_column(tables: &[Table], t: u32, column: u32) -> bool {
     tables.iter().any(|c| c.fk.as_ref().is_some_and(|f| f.parent == t && f.parent_columns.contains(&column)))
 }
 
+/// Whether index `i` of table `t` may be the one a foreign key referencing
+/// `t` depends on. PostgreSQL picks the first unique index (by OID) with
+/// neither a predicate nor expressions whose key columns are the
+/// referenced ones in any order (`transformFkeyCheckAttrs`), and the
+/// constraint depends on it: dropping it, or a column it reads (a key or
+/// an `INCLUDE` column), needs CASCADE (`2BP01`), even when the column is
+/// the referencing one of a self-reference. The model does not track which
+/// index that was, so it takes every one that qualifies.
+pub fn may_back(tables: &[Table], t: u32, i: &Index) -> bool {
+    let mut cols: Vec<u32> = i.columns.iter().map(|c| c.column).collect();
+    cols.sort();
+    i.unique
+        && i.filter.is_none()
+        && i.expr.is_none()
+        && tables.iter().any(|c| {
+            c.fk.as_ref().is_some_and(|f| {
+                f.parent == t && {
+                    let mut p = f.parent_columns.clone();
+                    p.sort();
+                    p == cols
+                }
+            })
+        })
+}
+
 /// A row change on one table, for the actions it sets off.
 enum Event {
     Deleted(Row),
@@ -407,11 +450,20 @@ pub fn before_row(t: &Table, kind: usize, mut row: Row, setcols: &[u32]) -> Opti
 /// fires INSERT and DELETE row triggers on the partitions, which the
 /// model does not follow); a column a trigger sets is not one a foreign
 /// key references ([`trigger_sets`]).
+/// Whether a column of `t` is of a domain type.
+pub fn has_domain(t: &Table) -> bool {
+    t.columns.iter().any(|c| c.dom.is_some())
+}
+
 pub fn trigger_ok(tables: &[Table], t: &Table, tr: &Trigger) -> bool {
     let n_events = tr.events.iter().filter(|e| **e).count();
     let cols_ok = tr.update_of.iter().all(|c| t.column(*c).is_some()) && distinct(&tr.update_of) && (tr.update_of.is_empty() || tr.events[1]);
     let when_ok = tr.when.as_ref().is_none_or(|p| tr.row && crate::semantics::pred_valid(t, p));
-    let base = n_events >= 1 && (!tr.events[2] || n_events == 1) && cols_ok && when_ok && !is_target(tables, t.id) && t.partitioning.is_none() && t.triggers.iter().all(|x| x.id != tr.id || x == tr);
+    let base = n_events >= 1 && (!tr.events[2] || n_events == 1) && cols_ok && when_ok && !is_target(tables, t.id) && t.partitioning.is_none() && t.triggers.iter().all(|x| x.id != tr.id || x == tr)
+        // Not on a table with a domain column, nor writing to one (see
+        // `crate::semantics::set_domain`).
+        && !has_domain(t)
+        && audit_target(tr).is_none_or(|a| tables.iter().find(|x| x.id == a).is_none_or(|x| !has_domain(x)));
     base && match &tr.action {
         TrigAction::Set(c, v) => {
             tr.before
@@ -476,10 +528,10 @@ pub fn row_errors(t: &Table, rows: &[Row], e: &mut Errors) {
             e.other = true;
             return;
         }
-        if r.iter().zip(&t.columns).any(|(v, c)| *v == Value::Null && (c.not_null || c.identity || t.key.contains(&c.id))) {
+        if r.iter().zip(&t.columns).any(|(v, c)| *v == Value::Null && (c.refuses_null() || t.key.contains(&c.id))) {
             e.not_null = true;
         }
-        if t.checks.iter().any(|p| crate::semantics::eval(t, r, p) == Some(false)) {
+        if t.all_checks().any(|p| crate::semantics::eval(t, r, p) == Some(false)) {
             e.check = true;
         }
         if let Some(p) = &t.partitioning {
@@ -728,8 +780,31 @@ pub fn write(m: &Model, top: u32, change: Change) -> Write {
                         }
                         // The action's UPDATE goes through the child's
                         // BEFORE triggers (none of which skips an update).
+                        let set: Vec<Value> = cp.iter().map(|&x| n[x].clone()).collect();
                         match before_row(&shape, 1, n, &set_ids) {
                             Some(n) => {
+                                // A BEFORE trigger that sets the row's
+                                // reference back to its old key (equal by
+                                // the type's equality, no NULL): the check
+                                // `RI_FKey_fk_upd_check_required` skips it
+                                // unless the row was written in this
+                                // transaction, so PostgreSQL either raises
+                                // `23503` or leaves the row referencing a
+                                // key that is gone (documented: "it is the
+                                // trigger programmer's responsibility",
+                                // trigger.sgml). The model tracks neither
+                                // which rows this transaction wrote nor
+                                // violated states: excluded. SET DEFAULT
+                                // re-checks the old key (`ri_restrict`),
+                                // which the model's final check matches.
+                                let got: Vec<Value> = cp.iter().map(|&x| n[x].clone()).collect();
+                                if action != Action::SetDefault
+                                    && !set.iter().zip(&got).all(|(a, b)| identical(a, b))
+                                    && got.iter().all(|v| *v != Value::Null)
+                                    && key_cmp(&got, &k).is_eq()
+                                {
+                                    errors.other = true;
+                                }
                                 log.push((c, 1, Some(r.clone()), Some(n.clone()), set_ids.clone()));
                                 versions.push((c, n.clone()));
                                 next.push(Event::Updated(r, n.clone()));

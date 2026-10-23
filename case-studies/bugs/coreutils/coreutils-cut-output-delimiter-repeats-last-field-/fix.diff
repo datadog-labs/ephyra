@@ -1,0 +1,47 @@
+diff --git a/src/uu/cut/src/cut.rs b/src/uu/cut/src/cut.rs
+index 6eebd6d43..3aa9ae1db 100644
+--- a/src/uu/cut/src/cut.rs
++++ b/src/uu/cut/src/cut.rs
+@@ -502,7 +502,7 @@ fn write_fields_line<W: Write, M: Matcher>(
+         return Ok(());
+     }
+ 
+-    for &Range { low, high } in ranges {
++    'ranges: for &Range { low, high } in ranges {
+         if low - fields_pos > 0 {
+             // current field is not in the range, so jump to the field corresponding to the
+             // beginning of the range if any
+@@ -538,7 +538,8 @@ fn write_fields_line<W: Write, M: Matcher>(
+                 if line[line.len() - 1] == newline_char {
+                     return Ok(());
+                 }
+-                break;
++                // the line is exhausted: later ranges must not print it again
++                break 'ranges;
+             }
+         }
+     }
+diff --git a/tests/by-util/test_cut.rs b/tests/by-util/test_cut.rs
+index d4bc05782..d16584e63 100644
+--- a/tests/by-util/test_cut.rs
++++ b/tests/by-util/test_cut.rs
+@@ -264,6 +264,19 @@ fn test_output_delimiter() {
+     }
+ }
+ 
++#[test]
++fn test_output_delimiter_unterminated_last_field_not_repeated() {
++    // the last field of an unterminated line must not be printed again
++    // for a later range
++    for list in ["-f1-2,3", "-f-2,3-4"] {
++        new_ucmd!()
++            .args(&["--output-delimiter=:", list])
++            .pipe_in("a\tb")
++            .succeeds()
++            .stdout_only("a:b\n");
++    }
++}
++
+ #[test]
+ fn test_output_delimiter_starting_with_hyphen() {
+     for args in [

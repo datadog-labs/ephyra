@@ -1,0 +1,13 @@
+FAIL -s ':-:'  (3-byte separator)
+  expected: $'     1:-:a\n         \n     2:-:b\n'
+  actual:   $'     1:-:a\n       \n     2:-:b\n'
+FAIL -s '  '   (2-byte separator)
+  expected: $'     1  a\n        \n     2  b\n'
+  actual:   $'     1  a\n       \n     2  b\n'
+FAIL -s ''     (empty separator)
+  expected: $'     1a\n      \n     2b\n'
+  actual:   $'     1a\n       \n     2b\n'
+FAIL -s ':-:' -w 3
+  expected: $'  1:-:a\n      \n  2:-:b\n'
+  actual:   $'  1:-:a\n    \n  2:-:b\n'
+ok   default TAB separator (control)

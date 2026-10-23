@@ -10,7 +10,9 @@ known-bugs.json (python3, standard library only).
     pretriage.py --expected [BUG ...]           # a bug's check output on its patched CLI
 
 Every finding example (`findings/<signature>/w<worker>-<n>/`, those with a
-`message.txt`; crashes, hangs, timeouts and generator panics have none) that
+`message.txt`; crashes, hangs, timeouts and generator panics have none; a
+statement error's `unshrunk/`, the runner's copy of the input before
+shrinking, inside an example, is never one) that
 has no `triage.json` is replayed with the CLIs build-clis.sh built
 (RUN_ROOT/clis/current: `trunk/sqlite3` and one `<bug>/sqlite3` per open bug
 with its fix applied), each on its own copy of `after.db`, one statement per
@@ -178,6 +180,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SQL_DIR = os.path.dirname(os.path.dirname(HERE))
 # Findings without an oracle message.
 LOST = {"crashes", "hangs", "timeouts", "generator-panics"}
+# Inside a statement error's example: the input before shrinking (the
+# runner's findings.rs), for reading by hand; not an example.
+UNSHRUNK = "unshrunk"
 
 # The current oracles' skip lists: ephyra-sqlite src/sqlancer.rs, overflow(),
 # limit() and json_error() (test_pretriage.py checks that they match).
@@ -2305,7 +2310,7 @@ def examples(findings):
             continue
         for ex in sorted(os.listdir(sdir)):
             edir = os.path.join(sdir, ex)
-            if os.path.isdir(edir) and os.path.exists(os.path.join(edir, "message.txt")):
+            if ex != UNSHRUNK and os.path.isdir(edir) and os.path.exists(os.path.join(edir, "message.txt")):
                 yield sig, ex, edir
 
 

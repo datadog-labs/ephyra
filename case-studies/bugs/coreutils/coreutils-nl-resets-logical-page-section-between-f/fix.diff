@@ -1,0 +1,89 @@
+diff --git a/src/uu/nl/src/nl.rs b/src/uu/nl/src/nl.rs
+index c94a684c1..59340ec3e 100644
+--- a/src/uu/nl/src/nl.rs
++++ b/src/uu/nl/src/nl.rs
+@@ -56,6 +56,8 @@ impl Default for Settings {
+ struct Stats {
+     line_number: Option<i64>,
+     consecutive_empty_lines: u64,
++    // The logical page section continues across files.
++    section: SectionDelimiter,
+ }
+ 
+ impl Stats {
+@@ -63,6 +65,7 @@ impl Stats {
+         Self {
+             line_number: Some(starting_line_number),
+             consecutive_empty_lines: 0,
++            section: SectionDelimiter::Body,
+         }
+     }
+ }
+@@ -160,6 +163,7 @@ impl NumberFormat {
+     }
+ }
+ 
++#[derive(Clone, Copy)]
+ enum SectionDelimiter {
+     Header,
+     Body,
+@@ -389,7 +393,6 @@ fn write_line(writer: &mut impl Write, line: &[u8]) -> io::Result<()> {
+ /// `nl` implements the main functionality for an individual buffer.
+ fn nl<T: Read>(reader: &mut BufReader<T>, stats: &mut Stats, settings: &Settings) -> UResult<()> {
+     let mut writer = BufWriter::new(stdout());
+-    let mut current_numbering_style = &settings.body_numbering;
+     let mut line = Vec::new();
+     // Written before every unnumbered line. Capped to avoid OOM on 32-bit targets
+     // when -w i32::MAX is passed (allocating 2 GiB would panic).
+@@ -420,21 +423,18 @@ fn nl<T: Read>(reader: &mut BufReader<T>, stats: &mut Stats, settings: &Settings
+             stats.consecutive_empty_lines = 0;
+         }
+ 
+-        let new_numbering_style = match SectionDelimiter::parse(&line, &settings.section_delimiter)
+-        {
+-            Some(SectionDelimiter::Header) => Some(&settings.header_numbering),
+-            Some(SectionDelimiter::Body) => Some(&settings.body_numbering),
+-            Some(SectionDelimiter::Footer) => Some(&settings.footer_numbering),
+-            None => None,
+-        };
+-
+-        if let Some(new_style) = new_numbering_style {
+-            current_numbering_style = new_style;
++        if let Some(section) = SectionDelimiter::parse(&line, &settings.section_delimiter) {
++            stats.section = section;
+             if settings.renumber {
+                 stats.line_number = Some(settings.starting_line_number);
+             }
+             writeln!(writer).map_err_context(|| translate!("nl-error-could-not-write"))?;
+         } else {
++            let current_numbering_style = match stats.section {
++                SectionDelimiter::Header => &settings.header_numbering,
++                SectionDelimiter::Body => &settings.body_numbering,
++                SectionDelimiter::Footer => &settings.footer_numbering,
++            };
+             let is_line_numbered = match current_numbering_style {
+                 // consider $join_blank_lines consecutive empty lines to be one logical line
+                 // for numbering, and only number the last one
+diff --git a/tests/by-util/test_nl.rs b/tests/by-util/test_nl.rs
+index ad4fd2b1f..b4f3491f9 100644
+--- a/tests/by-util/test_nl.rs
++++ b/tests/by-util/test_nl.rs
+@@ -665,6 +665,18 @@ fn test_section_delimiter() {
+     }
+ }
+ 
++#[test]
++fn test_section_continues_across_files() {
++    let (at, mut ucmd) = at_and_ucmd!();
++
++    at.write("a.txt", "a\n\\:\n");
++    at.write("b.txt", "b\n\\:\\:\nc");
++
++    ucmd.args(&["a.txt", "b.txt"])
++        .succeeds()
++        .stdout_is("     1\ta\n\n       b\n\n     1\tc\n");
++}
++
+ #[test]
+ #[cfg(unix)]
+ #[cfg_attr(wasi_runner, ignore = "WASI: argv/filenames must be valid UTF-8")]

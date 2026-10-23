@@ -7,6 +7,28 @@ use ephyra::{Gen, Source};
 use ephyra_sqlite::{files::Files, integrity_ok, reader, SqliteFile};
 use sqlite_coverage::{control, open};
 
+/// `sql` without its constraint names (`CONSTRAINT nn3 NOT NULL` as `NOT NULL`): the control is
+/// built from the model, which keeps no names, and SQLite treats a named constraint as the same
+/// constraint.
+fn unnamed(sql: &str) -> String {
+    let mut out = String::new();
+    let mut rest = sql;
+    while let Some(at) = rest.find("CONSTRAINT ") {
+        out.push_str(&rest[..at]);
+        let name = &rest[at + "CONSTRAINT ".len()..];
+        let end = match name.chars().next() {
+            Some(q @ ('[' | '"' | '`')) => {
+                let close = if q == '[' { ']' } else { q };
+                name[1..].find(close).map_or(name.len(), |i| i + 2)
+            }
+            _ => name.find(' ').unwrap_or(name.len()),
+        };
+        rest = name[end..].trim_start();
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Every table's rows, rowid first, as SQLite reads them from `file`.
 fn contents(file: &SqliteFile) -> Vec<Vec<String>> {
     if file.0.is_empty() {
@@ -30,7 +52,7 @@ fn contents(file: &SqliteFile) -> Vec<Vec<String>> {
             };
             let mut stmt = db.prepare(&format!("SELECT {key}* FROM {t}")).unwrap();
             let n = stmt.column_count();
-            let mut out = vec![format!("{t}: {sql}")];
+            let mut out = vec![format!("{t}: {}", unnamed(sql))];
             let mut rows = stmt.query([]).unwrap();
             while let Some(row) = rows.next().unwrap() {
                 out.push(format!(

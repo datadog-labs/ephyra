@@ -1,0 +1,5 @@
+ok   -s ':-:'  (3-byte separator)
+ok   -s '  '   (2-byte separator)
+ok   -s ''     (empty separator)
+ok   -s ':-:' -w 3
+ok   default TAB separator (control)

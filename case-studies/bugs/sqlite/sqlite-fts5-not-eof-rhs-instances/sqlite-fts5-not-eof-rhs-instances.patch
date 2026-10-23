@@ -1,0 +1,48 @@
+--- a/ext/fts5/fts5_expr.c
++++ b/ext/fts5/fts5_expr.c
+@@ -1523,6 +1523,12 @@
+       default:
+         assert( pNode->eType==FTS5_NOT );
+         pNode->bEof = pNode->apChild[0]->bEof;
++        if( pNode->bEof ){
++          /* The NOT node is at EOF, so fts5ExprNodeTest() below does not
++          ** call fts5ExprNodeTest_NOT(). Zero the position lists of the
++          ** phrases on the right-hand side here instead, as it would. */
++          fts5ExprNodeZeroPoslist(pNode->apChild[1]);
++        }
+         break;
+     }
+   }
+--- a/ext/fts5/test/fts5aux2.test
++++ b/ext/fts5/test/fts5aux2.test
+@@ -67,5 +67,30 @@
+   SELECT fts5_test_rowcount(x1) FROM x1
+ } {4 4 4 4}
+ 
++#-------------------------------------------------------------------------
++# If the left-hand side of a NOT is at EOF from the start, the phrases on
++# its right-hand side must not report instances for rows matched by
++# other parts of the query.
++#
++foreach {tn detail} {1 full 2 column 3 none} {
++  do_execsql_test 2.$tn.0 "
++    CREATE VIRTUAL TABLE t2_${tn} USING fts5(a, detail=$detail);
++    INSERT INTO t2_${tn}(rowid, a) VALUES(1, 'g b');
++  "
++  foreach {tn2 order} {1 "" 2 "ORDER BY rowid DESC" 3 "ORDER BY rank"} {
++    do_execsql_test 2.$tn.$tn2 "
++      SELECT rowid, highlight(t2_${tn}, 0, '\[', '\]')
++      FROM t2_${tn}('g OR (zz NOT b)') $order;
++    " {1 {[g] b}}
++  }
++  do_execsql_test 2.$tn.4 "
++    SELECT bm25(t2_$tn) = (SELECT bm25(t2_$tn) FROM t2_${tn}('g'))
++    FROM t2_${tn}('g OR (zz NOT b)');
++  " {1}
++  do_execsql_test 2.$tn.5 "
++    SELECT rowid, highlight(t2_${tn}, 0, '\[', '\]')
++    FROM t2_${tn}('g OR ((zz OR yy) NOT b)');
++  " {1 {[g] b}}
++}
+ 
+ finish_test

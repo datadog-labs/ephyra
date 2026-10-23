@@ -539,6 +539,45 @@ class FixedTarget(unittest.TestCase):
             shutil.rmtree(root)
 
 
+    def test_unshrunk_input_is_not_an_example(self):
+        """A statement error's example keeps the input before shrinking in
+        unshrunk/ (message.txt and all): pre-triage triages the example only."""
+        root = tempfile.mkdtemp(prefix="pretriage-test-")
+        try:
+            run = os.path.join(root, "run")
+            sig = os.path.join(run, "findings", "plans-statement_N__x")
+            ex = os.path.join(sig, "w0-1")
+            un = os.path.join(ex, P.UNSHRUNK)
+            os.makedirs(un)
+            with open(os.path.join(run, "run.json"), "w") as f:
+                json.dump({"run_id": "r1", "campaign": "c", "work_tag": "t", "version_id": "v", "target_id": "bbbbbbbbbbbb", "config": {}}, f)
+            for d in (ex, un):
+                with open(os.path.join(d, "message.txt"), "w") as f:
+                    f.write(self.MSG)
+                with open(os.path.join(d, "example.json"), "w") as f:
+                    json.dump({"oracle": "plans", "profile": "gen", "storage": "memory", "target": "bbbbbbbbbbbb"}, f)
+            self.assertEqual([e for _, e, _ in P.examples(os.path.join(run, "findings"))], ["w0-1"])
+            # Even a signature dir given as the findings dir.
+            self.assertEqual(list(P.examples(sig)), [])
+
+            class Sink:
+                def count(self, name, n, tags):
+                    pass
+
+            class Args:
+                force, budget = False, 0
+
+            tri = self.triage({(c, "SELECT 1"): self.ERR for c in ("trunk", "bug-a", "bug-b")})
+            P.triage_dir(os.path.join(run, "findings"), run, tri, Args(), Sink(), "", None)
+            self.assertTrue(os.path.exists(os.path.join(ex, "triage.json")))
+            self.assertFalse(os.path.exists(os.path.join(un, "triage.json")))
+            with open(os.path.join(run, "triage.jsonl")) as f:
+                self.assertEqual(len(f.read().splitlines()), 1)
+            with open(os.path.join(run, "triage.md")) as f:
+                self.assertNotIn(P.UNSHRUNK, f.read())
+        finally:
+            shutil.rmtree(root)
+
 class ReferenceSides(unittest.TestCase):
     """setops-def and window-def: the side the runner computed in Rust from
     other queries' rows is recomputed with each CLI from the same queries,
@@ -710,17 +749,21 @@ class Registry(unittest.TestCase):
                      "sqlite-balanced-merge-dedup-collation", "sqlite-temp-rename-column-twice",
                      "sqlite-vtab-create-rollback-to-savepoint", "sqlite-fts5-tokendata-missing-term-dlidx-corrupt",
                      "sqlite-rtree-update-set-rowid-ignored", "sqlite-fts5-secure-delete-dlidx-walks-next-term",
-                     "sqlite-fts5-contentless-unindexed-drop-rename"):
+                     "sqlite-fts5-contentless-unindexed-drop-rename",
+                     "sqlite-fts5-unindexed-detail-none-instances"):
             self.assertNotIn(name, opened)
         for name in ("sqlite-partial-index-constant-affinity", "sqlite-right-join-using-star-ambiguous",
                      "sqlite-propagate-const-real-minint",
                      "sqlite-wr-rowvalue-added-column", "sqlite-concat-blob-utf16-length",
                      "sqlite-wr-in-index-added-column", "sqlite-fts5-eq-constprop-aux-cursor",
-                     "sqlite-fts5-match-rowid-eq-nonint", "sqlite-fts5-unindexed-detail-none-instances",
+                     "sqlite-fts5-match-rowid-eq-nonint",
                      "sqlite-geopoly-rowid-eq-nonint", "sqlite-geopoly-update-rowid-nochange",
                      "sqlite-fts5-locale-contentless-unindexed-insert",
                      "sqlite-fts5vocab-term-range-utf16-order", "sqlite-fts5-detail-none-secure-delete-replaced-rowid",
-                     "sqlite-fts5-secure-delete-merge-drops-marker"):
+                     "sqlite-fts5-secure-delete-merge-drops-marker", "sqlite-fts5-near-nomatch-stale-poslist",
+                     "sqlite-drop-constraint-fk-set-default", "sqlite-drop-not-null-not-deferrable",
+                     "sqlite-fts5-and-nomatch-clears-later-row", "sqlite-fts5vocab-rowid-or-right-join",
+                     "sqlite-fts5-trigram-like-unindexed", "sqlite-wr-multi-or-seekscan", "sqlite-rename-column-ipk-unique"):
             self.assertIn(name, opened)
 
     def test_propagate_const_patterns(self):

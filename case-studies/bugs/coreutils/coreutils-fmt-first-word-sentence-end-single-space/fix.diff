@@ -1,0 +1,111 @@
+diff --git a/src/uu/fmt/src/linebreak.rs b/src/uu/fmt/src/linebreak.rs
+index da6d7340f..8bb2e7376 100644
+--- a/src/uu/fmt/src/linebreak.rs
++++ b/src/uu/fmt/src/linebreak.rs
+@@ -76,6 +76,9 @@ pub fn break_lines(
+     // does this paragraph require uniform spacing?
+     let uniform = para.mail_header || opts.uniform;
+ 
++    // the first word may end a sentence, which affects spacing before the second word
++    let first_punct = winfo.ends_punct;
++
+     let mut break_args = BreakArgs {
+         opts,
+         init_len: p_init_len,
+@@ -86,9 +89,9 @@ pub fn break_lines(
+     };
+ 
+     if opts.quick || para.mail_header {
+-        break_simple(p_words_words, &mut break_args)
++        break_simple(p_words_words, &mut break_args, first_punct)
+     } else {
+-        break_knuth_plass(p_words_words, &mut break_args)
++        break_knuth_plass(p_words_words, &mut break_args, first_punct)
+     }
+ }
+ 
+@@ -97,8 +100,9 @@ pub fn break_lines(
+ fn break_simple<'a, T: Iterator<Item = &'a WordInfo<'a>>>(
+     mut iter: T,
+     args: &mut BreakArgs<'a>,
++    first_punct: bool,
+ ) -> std::io::Result<()> {
+-    iter.try_fold((args.init_len, false), |(l, prev_punct), winfo| {
++    iter.try_fold((args.init_len, first_punct), |(l, prev_punct), winfo| {
+         accum_words_simple(args, l, prev_punct, winfo)
+     })?;
+     args.ostream.write_all(b"\n")
+@@ -137,13 +141,14 @@ fn accum_words_simple<'a>(
+ fn break_knuth_plass<'a, T: Clone + Iterator<Item = &'a WordInfo<'a>>>(
+     mut iter: T,
+     args: &mut BreakArgs<'a>,
++    first_punct: bool,
+ ) -> std::io::Result<()> {
+     // run the algorithm to get the breakpoints
+-    let breakpoints = find_kp_breakpoints(iter.clone(), args);
++    let breakpoints = find_kp_breakpoints(iter.clone(), args, first_punct);
+ 
+     // iterate through the breakpoints (note that breakpoints is in reverse break order, so we .rev() it
+     let result: std::io::Result<(bool, bool)> = breakpoints.iter().rev().try_fold(
+-        (false, false),
++        (first_punct, false),
+         |(mut prev_punct, mut fresh), &(next_break, break_before)| {
+             if fresh {
+                 write_newline(args.indent, args.ostream)?;
+@@ -218,6 +223,7 @@ struct LineBreak<'a> {
+ fn find_kp_breakpoints<'a, T: Clone + Iterator<Item = &'a WordInfo<'a>>>(
+     iter: T,
+     args: &BreakArgs<'a>,
++    first_punct: bool,
+ ) -> Vec<(&'a WordInfo<'a>, bool)> {
+     let mut iter = iter.peekable();
+     // set up the initial null linebreak
+@@ -242,7 +248,7 @@ fn find_kp_breakpoints<'a, T: Clone + Iterator<Item = &'a WordInfo<'a>>>(
+         args.opts.goal.max(stretch + 1) - stretch
+     };
+     let mut new_linebreaks = vec![];
+-    let mut is_sentence_start = false;
++    let mut prev_punct = first_punct;
+     while let Some(w) = iter.next() {
+         let next_word_sentence_final = is_next_word_sentence_final(iter.clone());
+         // if this is the last word, we don't add additional demerits for this break
+@@ -256,7 +262,7 @@ fn find_kp_breakpoints<'a, T: Clone + Iterator<Item = &'a WordInfo<'a>>>(
+         };
+ 
+         // should we be adding extra space at the beginning of the next sentence?
+-        let slen = compute_slen(args.uniform, w.new_line, is_sentence_start, false);
++        let slen = compute_slen(args.uniform, w.new_line, w.sentence_start, prev_punct);
+ 
+         let mut best_active_demerits = i64::MAX;
+         let mut ld_idx = 0;
+@@ -376,8 +382,7 @@ fn find_kp_breakpoints<'a, T: Clone + Iterator<Item = &'a WordInfo<'a>>>(
+         }
+         // swap in new list of active breaks
+         mem::swap(&mut active_breaks, &mut next_active_breaks);
+-        // If this was the last word in a sentence, the next one must be the first in the next.
+-        is_sentence_start = is_sentence_end;
++        prev_punct = w.ends_punct;
+     }
+ 
+     // return the best path
+diff --git a/tests/by-util/test_fmt.rs b/tests/by-util/test_fmt.rs
+index ecff20dd4..184173e86 100644
+--- a/tests/by-util/test_fmt.rs
++++ b/tests/by-util/test_fmt.rs
+@@ -535,3 +535,16 @@ fn test_fmt_goal_only_defaults_width_to_goal_plus_ten() {
+         .succeeds()
+         .stdout_is("this is a file with one word per line\n");
+ }
++
++#[test]
++fn test_fmt_first_word_sentence_end_at_line_end() {
++    // A first word ending a sentence at end of line is followed by two spaces when joined.
++    for args in [&[][..], &["-u"], &["-q"]] {
++        new_ucmd!()
++            .args(args)
++            .pipe_in("a.\nz\n")
++            .succeeds()
++            .stdout_is("a.  z\n");
++    }
++    new_ucmd!().pipe_in(".\nz").succeeds().stdout_is(".  z\n");
++}

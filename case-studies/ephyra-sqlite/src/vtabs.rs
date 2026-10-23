@@ -1525,15 +1525,19 @@ const GEO_GROUP: u32 = 1 << 31;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VInfo {
     pub kind: Option<Kind>,
+    /// Whether the table was written (made, or its rows changed) in a
+    /// transaction still open: FTS5 may hold its writes in memory.
+    pub pending: bool,
     pub rows: usize,
     /// Up to 6 values per column (rowid first).
     pub by_column: Vec<Vec<Value>>,
 }
 
-pub fn summary(vtabs: &[VTable]) -> Vec<VInfo> {
+pub fn summary(vtabs: &[VTable], saved: Option<&[VTable]>) -> Vec<VInfo> {
     vtabs
         .iter()
-        .map(|t| {
+        .enumerate()
+        .map(|(k, t)| {
             let w = t.kind.width();
             let mut by_column = vec![Vec::new(); 1 + w];
             let step = (t.rows.len() / 6).max(1);
@@ -1550,7 +1554,8 @@ pub fn summary(vtabs: &[VTable]) -> Vec<VInfo> {
                 Kind::Vocab { of, .. } => vtabs.get(*of).map_or(0, |f| f.rows.len() * if matches!(f.kind, Kind::Fts5 { tok, .. } if tok.trigram()) { 100 } else { 40 } + 60),
                 _ => t.rows.len(),
             };
-            VInfo { kind: Some(t.kind.clone()), rows, by_column }
+            let pending = saved.is_some_and(|s| s.get(k) != Some(t));
+            VInfo { kind: Some(t.kind.clone()), pending, rows, by_column }
         })
         .collect()
 }
@@ -1704,7 +1709,7 @@ impl VQuery {
                 c.extend((0..GEO_ITEMS.len()).filter(|i| items & (1 << i) != 0).map(|i| GEO_ITEMS[i].to_string()));
                 c
             },
-            (VQuery::Fts { items, form, .. }, k @ Kind::Fts5 { cols, detail, unindexed, .. }) => {
+            (VQuery::Fts { items, form, .. }, k @ Kind::Fts5 { cols, detail, unindexed, tok, .. }) => {
                 // snippet of every column (-1) with an UNINDEXED one and
                 // detail column or none fails ("database disk image is
                 // malformed", 3.51.0 and trunk 5bd093e261a7;
@@ -1717,6 +1722,14 @@ impl VQuery {
                 // sqlite-fts5-match-rowid-eq-nonint).
                 let mut c = vec![if *form == 4 { "rowid" } else { "+rowid" }.to_string()];
                 c.extend(k.columns());
+                // A trigram table's UNINDEXED column as `+s1`: a LIKE or GLOB
+                // of it in the outer query, pushed down to the table, would
+                // be answered from the index, which holds none of its tokens
+                // (no rows; the known SQLite bug
+                // sqlite-fts5-trigram-like-unindexed, run 20261022-0005).
+                if *unindexed && *cols > 1 && tok.trigram() {
+                    c[*cols] = format!("+{}", c[*cols]);
+                }
                 // The auxiliary functions only over a MATCH: with `vt = 'q'`
                 // (or the table-valued function's argument, the same
                 // constraint) an outer WHERE term of one fails ("no such
@@ -1749,7 +1762,19 @@ impl VQuery {
     /// virtual table (`+col`): what the virtual table returns unfiltered,
     /// SQLite filters.
     pub fn sql(&self, kind: &Kind, noindex: bool) -> String {
+        self.sql_in(kind, noindex, false)
+    }
+
+    /// [`VQuery::sql`] of a table with FTS5 writes pending in an open
+    /// transaction (`pending`, [`VInfo::pending`]): then, on a
+    /// `tokendata=1` table with a prefix index, its full-text query without
+    /// prefix terms (`v*` read as `v`). A prefix query opened before a term
+    /// query there reads freed memory, the term query flushing the pending
+    /// terms under it ("database disk image is malformed"; the known SQLite
+    /// bug sqlite-fts5-tokendata-prefix-corrupt, run 20261022-0005).
+    pub fn sql_in(&self, kind: &Kind, noindex: bool, pending: bool) -> String {
         let vt = self.vt();
+        let unprefixed = pending && matches!(kind, Kind::Fts5 { prefix, opts, .. } if *prefix != 0 && opts & 1 != 0);
         let items: Vec<String> = self.columns(kind).iter().enumerate().map(|(k, c)| format!("{c} AS c{k}")).collect();
         let plus = if noindex { "+" } else { "" };
         let rowid_range = |w: &mut Vec<String>, r: &Option<(i64, i64)>| {
@@ -1785,7 +1810,7 @@ impl VQuery {
                 rowid_range(&mut wh, rowid);
             },
             VQuery::Fts { query, form, top, rowid, items, extra, .. } => {
-                let q = literal(&Value::Text(query.clone()));
+                let q = literal(&Value::Text(if unprefixed { query.replace('*', "") } else { query.clone() }));
                 match form {
                     0 => wh.push(format!("vt{vt} MATCH {q}")),
                     1 => wh.push(format!("vt{vt} = {q}")),
@@ -2039,6 +2064,34 @@ pub fn draw_query(g: &mut Source, info: &[VInfo]) -> Option<VQuery> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two known FTS5 bugs a virtual table's query keeps from: a
+    /// trigram table's UNINDEXED column is read as `+s1`, so an outer GLOB
+    /// of it is not pushed down to the table (which answers it with no
+    /// rows, sqlite-fts5-trigram-like-unindexed); a `tokendata=1` table
+    /// with a prefix index and writes pending in an open transaction is
+    /// queried without prefix terms (sqlite-fts5-tokendata-prefix-corrupt).
+    #[test]
+    fn fts5_queries_keep_from_the_known_bugs() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        db.execute_batch("CREATE VIRTUAL TABLE vt0 USING fts5(s0, s1 UNINDEXED, tokenize=trigram); INSERT INTO vt0 VALUES ('apple', 'CONDITIONAL');").unwrap();
+        let tri = Kind::Fts5 { cols: 2, tok: Tok::Trigram, prefix: 0, detail: Detail::Full, columnsize: true, contentless: false, unindexed: true, opts: 0 };
+        let q = VQuery::Fts { vt: 0, query: String::new(), form: 4, items: 0, top: None, rowid: None, extra: 0 };
+        let body = q.sql(&tri, false);
+        assert!(body.contains("+s1 AS c2"), "{body}");
+        assert_eq!(count(&format!("WITH x AS ({body}) SELECT count(*) FROM x WHERE c2 GLOB '*CONDITIO*'")), 1);
+        assert_eq!(count("WITH x AS (SELECT s1 AS c2 FROM vt0) SELECT count(*) FROM x WHERE c2 GLOB '*CONDITIO*'"), 0);
+        db.execute_batch("CREATE VIRTUAL TABLE vt1 USING fts5(s0, tokendata=1, prefix=1); INSERT INTO vt1 VALUES ('vv aa'); BEGIN; INSERT INTO vt1 VALUES ('vv aa');").unwrap();
+        let td = Kind::Fts5 { cols: 1, tok: Tok::Unicode61, prefix: 2, detail: Detail::Full, columnsize: true, contentless: false, unindexed: false, opts: 1 };
+        let q = VQuery::Fts { vt: 1, query: "v* AND aa".into(), form: 0, items: 0, top: None, rowid: None, extra: 0 };
+        assert!(q.sql(&td, false).contains("'v* AND aa'"));
+        let body = q.sql_in(&td, false, true);
+        assert!(body.contains("'v AND aa'"), "{body}");
+        assert_eq!(count(&format!("WITH x AS ({body}) SELECT count(*) FROM x")), 0);
+        let vv = VQuery::Fts { vt: 1, query: "vv* AND aa".into(), form: 0, items: 0, top: None, rowid: None, extra: 0 };
+        assert_eq!(count(&format!("WITH x AS ({}) SELECT count(*) FROM x", vv.sql_in(&td, false, true))), 2);
+    }
 
     /// An fts5vocab table's `term` range in a UTF-16 database takes terms
     /// in their UTF-8 order, its own constraint's or one a query around it

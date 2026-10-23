@@ -1,0 +1,46 @@
+--- a/ext/fts5/test/fts5vocab.test
++++ b/ext/fts5/test/fts5vocab.test
+@@ -620,4 +620,43 @@
+   SELECT term FROM v2 WHERE term > 123 ORDER BY term;
+ } {alpha beta gamma}
+ 
++#-------------------------------------------------------------------------
++# The rowid of an fts5vocab row must not depend on the constraints used
++# to find it. The core uses the rowid to remove duplicates from the scans
++# of a MULTI-INDEX OR plan and to find the unmatched rows of a RIGHT JOIN.
++#
++foreach {tn detail} {1 full 2 column 3 none} {
++  reset_db
++  do_execsql_test 14.$tn.0 "
++    CREATE VIRTUAL TABLE t1 USING fts5(a, b, detail=$detail);
++    INSERT INTO t1 VALUES('adopt zeta', 'apricot');
++    INSERT INTO t1 VALUES('bandit', 'banana cherry');
++    CREATE VIRTUAL TABLE vr USING fts5vocab(t1, 'row');
++    CREATE VIRTUAL TABLE vc USING fts5vocab(t1, 'col');
++    CREATE VIRTUAL TABLE vi USING fts5vocab(t1, 'instance');
++    CREATE TABLE x1(t);
++    INSERT INTO x1 VALUES('cherry');
++  "
++
++  foreach v {vr vc vi} {
++    do_execsql_test 14.$tn.$v.1 "
++      SELECT term FROM $v WHERE term='apricot' OR term<'c' ORDER BY 1
++    " {adopt apricot banana bandit}
++
++    do_execsql_test 14.$tn.$v.2 "
++      SELECT term FROM $v WHERE term='zeta' OR term>='c' ORDER BY 1
++    " {cherry zeta}
++
++    do_execsql_test 14.$tn.$v.3 "
++      SELECT x1.t, $v.term FROM x1 RIGHT JOIN $v ON $v.term=x1.t
++    " {cherry cherry {} adopt {} apricot {} banana {} bandit {} zeta}
++
++    do_execsql_test 14.$tn.$v.4 "
++      SELECT term, rowid FROM $v WHERE term>='banana'
++      EXCEPT
++      SELECT term, rowid FROM $v
++    " {}
++  }
++}
++
+ finish_test

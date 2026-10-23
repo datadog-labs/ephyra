@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "--numeric-suffixes=100"
+  ],
+  "aspect": "exit",
+  "message": "split -a 1 --hex-suffixes=15  <stdin \"\"  | uu: code=Some(0) out=\"\" err=\"\" | gnu: code=Some(1) out=\"\" err=\"split: numerical suffix start value is too large for the suffix length\\nTry 'split --help' for more information.\\n\"",
+  "oracle": "diff",
+  "seed": "1:11400714819323198508",
+  "signature": "diff__split_exit",
+  "util": "split"
+}

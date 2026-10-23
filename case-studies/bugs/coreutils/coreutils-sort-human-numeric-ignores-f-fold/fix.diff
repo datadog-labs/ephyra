@@ -1,0 +1,121 @@
+diff --git a/src/uu/sort/src/numeric_str_cmp.rs b/src/uu/sort/src/numeric_str_cmp.rs
+index 0d665aced..01f4f0f61 100644
+--- a/src/uu/sort/src/numeric_str_cmp.rs
++++ b/src/uu/sort/src/numeric_str_cmp.rs
+@@ -30,6 +30,8 @@ pub struct NumInfo {
+ #[derive(Debug, PartialEq, Eq, Clone)]
+ pub struct NumInfoParseSettings {
+     pub accept_si_units: bool,
++    /// `-f`: lowercase SI units count as their uppercase equivalents.
++    pub fold_case: bool,
+     pub thousands_separator: Option<u8>,
+     pub decimal_pt: Option<u8>,
+ }
+@@ -38,6 +40,7 @@ impl Default for NumInfoParseSettings {
+     fn default() -> Self {
+         Self {
+             accept_si_units: false,
++            fold_case: false,
+             thousands_separator: None,
+             decimal_pt: Some(b'.'),
+         }
+@@ -80,8 +83,13 @@ impl NumInfo {
+ 
+             if Self::is_invalid_char(char, &mut had_decimal_pt, parse_settings) {
+                 return if let Some(start) = start {
++                    let unit = if parse_settings.fold_case {
++                        char.to_ascii_uppercase()
++                    } else {
++                        char
++                    };
+                     let has_si_unit =
+-                        parse_settings.accept_si_units && b"kKMGTPEZYRQ".contains(&char);
++                        parse_settings.accept_si_units && b"kKMGTPEZYRQ".contains(&unit);
+                     (
+                         Self { exponent, sign },
+                         start..if has_si_unit { idx + 1 } else { idx },
+@@ -167,9 +175,10 @@ impl NumInfo {
+ fn get_unit(unit: Option<u8>) -> u8 {
+     match unit {
+         Some(b'k') => 1,
++        // A lowercase unit other than `k` only gets here with `-f`.
+         Some(u) => b"KMGTPEZYRQ"
+             .iter()
+-            .position(|&c| c == u)
++            .position(|&c| c == u.to_ascii_uppercase())
+             .map_or(0, |pos| (pos + 1) as u8),
+         None => 0,
+     }
+diff --git a/src/uu/sort/src/sort.rs b/src/uu/sort/src/sort.rs
+index af39628f1..e393dc44c 100644
+--- a/src/uu/sort/src/sort.rs
++++ b/src/uu/sort/src/sort.rs
+@@ -336,9 +336,10 @@ impl Default for NumericLocaleSettings {
+ }
+ 
+ impl NumericLocaleSettings {
+-    fn num_info_settings(self, accept_si_units: bool) -> NumInfoParseSettings {
++    fn num_info_settings(self, accept_si_units: bool, fold_case: bool) -> NumInfoParseSettings {
+         NumInfoParseSettings {
+             accept_si_units,
++            fold_case,
+             thousands_separator: self.thousands_sep,
+             decimal_pt: self.decimal_pt,
+         }
+@@ -790,7 +791,11 @@ impl<'a> Line<'a> {
+                     // find out which range is used for numeric comparisons
+                     let mut parse_settings = settings
+                         .numeric_locale
+-                        .num_info_settings(selector.settings.mode == SortMode::HumanNumeric);
++                        .num_info_settings(
++                            selector.settings.mode == SortMode::HumanNumeric,
++                            // GNU underlines the untranslated key, so `-f` does not extend it.
++                            false,
++                        );
+                     // Debug annotations should ignore thousands separators to match GNU output.
+                     parse_settings.thousands_separator = None;
+                     let (_, num_range) =
+@@ -1375,7 +1380,10 @@ impl FieldSelector {
+             // Parse NumInfo for this number.
+             let (info, num_range) = NumInfo::parse(
+                 range_str,
+-                &numeric_locale.num_info_settings(self.settings.mode == SortMode::HumanNumeric),
++                &numeric_locale.num_info_settings(
++                    self.settings.mode == SortMode::HumanNumeric,
++                    self.settings.ignore_case,
++                ),
+             );
+             // Shorten the range to what we need to pass to numeric_str_cmp later.
+             range_str = &range_str[num_range];
+diff --git a/tests/by-util/test_sort.rs b/tests/by-util/test_sort.rs
+index bcc4bbc6c..edfc9d4bc 100644
+--- a/tests/by-util/test_sort.rs
++++ b/tests/by-util/test_sort.rs
+@@ -740,6 +740,27 @@ fn test_human_block_sizes2() {
+     }
+ }
+ 
++#[test]
++fn test_human_numeric_ignore_case() {
++    // With -f, lowercase SI suffixes count as their uppercase equivalents.
++    new_ucmd!()
++        .args(&["-h", "-f"])
++        .pipe_in("1e\n2m\n1K\n3g\n5\n")
++        .succeeds()
++        .stdout_only("5\n1K\n2m\n3g\n1e\n");
++    new_ucmd!()
++        .arg("-k2,2hf")
++        .pipe_in("a 1e\nb 1K\n")
++        .succeeds()
++        .stdout_only("b 1K\na 1e\n");
++    // Without -f, a lowercase suffix other than k is not a suffix.
++    new_ucmd!()
++        .arg("-h")
++        .pipe_in("1e\n1K\n")
++        .succeeds()
++        .stdout_only("1e\n1K\n");
++}
++
+ #[test]
+ fn test_human_numeric_zero_stable() {
+     let input = "0M\n0K\n-0K\n-P\n-0M\n";

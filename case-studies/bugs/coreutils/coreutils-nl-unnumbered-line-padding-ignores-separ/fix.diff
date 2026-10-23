@@ -1,0 +1,46 @@
+diff --git a/src/uu/nl/src/nl.rs b/src/uu/nl/src/nl.rs
+index c94a684c1..ff3dbda66 100644
+--- a/src/uu/nl/src/nl.rs
++++ b/src/uu/nl/src/nl.rs
+@@ -391,9 +391,12 @@ fn nl<T: Read>(reader: &mut BufReader<T>, stats: &mut Stats, settings: &Settings
+     let mut writer = BufWriter::new(stdout());
+     let mut current_numbering_style = &settings.body_numbering;
+     let mut line = Vec::new();
+-    // Written before every unnumbered line. Capped to avoid OOM on 32-bit targets
+-    // when -w i32::MAX is passed (allocating 2 GiB would panic).
+-    let blank_width = settings.number_width + 1;
++    // Written before every unnumbered line: as wide as the number plus the separator.
++    // Capped to avoid OOM on 32-bit targets when -w i32::MAX is passed (allocating
++    // 2 GiB would panic).
++    let blank_width = settings
++        .number_width
++        .saturating_add(settings.number_separator.len());
+     let space_buf = vec![b' '; blank_width.min(4096)];
+ 
+     loop {
+diff --git a/tests/by-util/test_nl.rs b/tests/by-util/test_nl.rs
+index ad4fd2b1f..5f629f153 100644
+--- a/tests/by-util/test_nl.rs
++++ b/tests/by-util/test_nl.rs
+@@ -230,6 +230,21 @@ fn test_number_separator() {
+     }
+ }
+ 
++#[test]
++fn test_number_separator_unnumbered_line_padding() {
++    // unnumbered lines are padded to the width of the number plus the separator
++    new_ucmd!()
++        .args(&["-s", ":-:"])
++        .pipe_in("a\n\nb\n")
++        .succeeds()
++        .stdout_is("     1:-:a\n         \n     2:-:b\n");
++    new_ucmd!()
++        .args(&["-s", ""])
++        .pipe_in("a\n\n")
++        .succeeds()
++        .stdout_is("     1a\n      \n");
++}
++
+ #[test]
+ #[cfg(unix)]
+ #[cfg_attr(wasi_runner, ignore = "WASI: argv/filenames must be valid UTF-8")]

@@ -1,0 +1,18 @@
+# name: test/optimizer/pushdown/left_join_false_condition_subquery.test
+# group: [pushdown]
+
+query II
+SELECT count(*), count(DISTINCT r.a) FROM range(1) t LEFT JOIN range(1) r(a) ON false AND r.a IN (SELECT 3) WHERE true;
+----
+1	0
+
+statement ok
+CREATE TABLE t(c INTEGER);
+
+statement ok
+INSERT INTO t VALUES (1), (2);
+
+query II
+SELECT count(*), count(DISTINCT length(r.a)) FROM t LEFT JOIN (SELECT 'x' AS a) r ON (false AND r.a IN (SELECT 'y')) WHERE true;
+----
+2	0

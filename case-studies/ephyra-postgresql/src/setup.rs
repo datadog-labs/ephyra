@@ -987,7 +987,7 @@ pub fn draw_partitioning(g: &mut Source, t: &Table, pool: Option<&Pool>) -> Opti
     if strategy != Strategy::Hash && g.bool_with(if strategy == Strategy::List { 0.5 } else { 0.4 }) {
         parts.push(PartBound::Default);
     }
-    let p = Partitioning { strategy, column: col.id, parts };
+    let p = Partitioning { strategy, column: col.id, parts, names: Vec::new() };
     crate::model::partitioning_ok(&p, col.ty).then_some(p)
 }
 

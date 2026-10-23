@@ -1,0 +1,18 @@
+--- a/ext/fts5/fts5_index.c
++++ b/ext/fts5/fts5_index.c
+@@ -7454,6 +7454,15 @@
+       bTokendata = 0;
+     }
+ 
++    /* fts5SetupTokendataIter() flushes the in-memory hash table to disk.
++    ** This may reallocate the segment arrays of the cached structure that
++    ** iterators opened earlier point to, for example an iterator opened
++    ** by a prefix index query in the same MATCH expression. So, on a
++    ** tokendata=1 table, flush before any iterator is opened.  */
++    if( pConfig->bTokendata ){
++      fts5IndexFlush(p);
++    }
++
+     /* Figure out which index to search and set iIdx accordingly. If this
+     ** is a prefix query for which there is no prefix index, set iIdx to
+     ** greater than pConfig->nPrefix to indicate that the query will be

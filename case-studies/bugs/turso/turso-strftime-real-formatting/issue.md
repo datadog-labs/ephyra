@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9888 (https://github.com/tursodatabase/turso/issues/9888) (line 1 corrected 2026-10-21).
 
 # strftime(): `%J` and a REAL format argument are printed with more digits than SQLite
 

@@ -1,0 +1,47 @@
+diff --git a/src/uucore/src/lib/features/format/spec.rs b/src/uucore/src/lib/features/format/spec.rs
+index 069d3069a..63db03b15 100644
+--- a/src/uucore/src/lib/features/format/spec.rs
++++ b/src/uucore/src/lib/features/format/spec.rs
+@@ -369,10 +369,17 @@ impl Spec {
+                 // For now, we let printf panic when we truncate within a code point.
+                 // TODO: We need to not use Rust's formatting for aligning the output,
+                 // so that we can just write bytes to stdout without panicking.
++                // A `*` precision taken from an argument must fit in an `int`,
++                // like C printf. A precision written in the format is not capped.
++                let from_arg = matches!(precision, Some(CanAsterisk::Asterisk(_)));
+                 let precision = resolve_asterisk_precision(*precision, args);
+                 let os_str = args.next_string(*position);
+                 let bytes = os_str_as_bytes(os_str)?;
+ 
++                if let (true, Some(precision)) = (from_arg, precision) {
++                    check_precision(precision)?;
++                }
++
+                 let truncated = match precision {
+                     Some(p) if p < os_str.len() => &bytes[..p],
+                     _ => bytes,
+diff --git a/tests/by-util/test_printf.rs b/tests/by-util/test_printf.rs
+index 32c51d7a4..86133e537 100644
+--- a/tests/by-util/test_printf.rs
++++ b/tests/by-util/test_printf.rs
+@@ -1055,13 +1055,19 @@ fn format_spec_zero_fails() {
+ #[test]
+ fn invalid_precision_tests() {
+     // It is invalid to have length of output string greater than i32::MAX
+-    for format in ["%.*d", "%.*f"] {
++    for format in ["%.*d", "%.*f", "%.*s", "%.*sX"] {
+         let expected_error = "printf: invalid precision: '2147483648'\n";
+         new_ucmd!()
+             .args(&[format, "2147483648", "0"])
+             .fails()
++            .no_stdout()
+             .stderr_is(expected_error);
+     }
++    // A precision written in the format itself is not capped.
++    new_ucmd!()
++        .args(&["%.4294967296sX", "a"])
++        .succeeds()
++        .stdout_only("aX");
+ }
+ 
+ // The following padding-tests test for the cases in which flags in ['0', ' '] are given.

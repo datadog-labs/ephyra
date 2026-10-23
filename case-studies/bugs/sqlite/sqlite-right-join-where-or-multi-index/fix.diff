@@ -1,0 +1,11 @@
+--- a/src/where.c
++++ b/src/where.c
+@@ -4866,6 +4866,8 @@
+      && (pTerm->u.pOrInfo->indexable & pNew->maskSelf)!=0
+      && (!ExprHasProperty(pTerm->pExpr, EP_OuterON)
+           || pTerm->pExpr->w.iJoin==iCur)
++     && ((pItem->fg.jointype & JT_LTORJ)==0
++          || ExprHasProperty(pTerm->pExpr, EP_OuterON|EP_InnerON))
+     ){
+       WhereClause * const pOrWC = &pTerm->u.pOrInfo->wc;
+       WhereTerm * const pOrWCEnd = &pOrWC->a[pOrWC->nTerm];

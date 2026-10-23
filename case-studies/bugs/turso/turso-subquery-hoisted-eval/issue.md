@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9851 (https://github.com/tursodatabase/turso/issues/9851) (line 1 corrected 2026-10-21).
 
 # An uncorrelated scalar subquery runs before the scan, so it raises errors SQLite never reaches
 

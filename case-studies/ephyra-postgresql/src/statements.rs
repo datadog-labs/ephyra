@@ -73,6 +73,36 @@ pub enum Statement {
     /// `ALTER TABLE t ALTER COLUMN c SET DEFAULT v` (`DROP DEFAULT` with
     /// none): only later INSERTs change.
     SetDefault { table: u32, column: u32, value: Option<Value> },
+    /// `ALTER TABLE t ALTER COLUMN c TYPE ty [USING c::ty]`: the table
+    /// rewritten with every value converted, its indexes and constraints
+    /// on the column rebuilt (see `crate::semantics::alter_type`).
+    AlterType { table: u32, column: u32, ty: Type, using: bool },
+    /// A schema change and its undoing in one `DO` block (see [`Trip`]):
+    /// nothing logical, the catalogs as they were.
+    Trip { table: u32, op: Trip },
+    /// `DO $$BEGIN CREATE DOMAIN t{t}_d{n} AS ty [NOT NULL] [CONSTRAINT
+    /// t{t}_d{n}_k CHECK (..)]; ALTER TABLE t ALTER COLUMN c TYPE t{t}_d{n};
+    /// END$$` (`ty` the column's type): see `crate::semantics::set_domain`.
+    SetDomain { table: u32, column: u32, ty: Type, dom: crate::model::Domain },
+    /// `ALTER TABLE t ADD CONSTRAINT t{t}_pkey PRIMARY KEY (c, ..)`, or
+    /// `.. PRIMARY KEY USING INDEX t{t}_i{k}` (the index becomes the key's).
+    AddKey { table: u32, columns: Vec<u32>, using: Option<u32> },
+    /// `ALTER TABLE t DROP CONSTRAINT t{t}_pkey`.
+    DropKey(u32),
+    /// `ALTER DOMAIN t{t}_d{name} ..` of the domain of column `c{column}`.
+    AlterDomain { table: u32, column: u32, name: u32, op: DomOp },
+    /// `DO $$BEGIN ALTER TABLE t DETACH PARTITION t{t}_p{name}; DROP TABLE
+    /// t{t}_p{name}; END$$`: the partition's rows leave the table.
+    DropPartition { table: u32, name: u32 },
+    /// `CREATE TABLE t{t}_p{name} PARTITION OF t bound`, the table holding
+    /// rows already.
+    AddPartition { table: u32, name: u32, bound: PartBound },
+    /// `ALTER TABLE t ADD CONSTRAINT t{t}_k{id} CHECK (p) [NOT VALID]`.
+    AddCheck { table: u32, id: u32, pred: Pred, not_valid: bool },
+    /// `ALTER TABLE t DROP CONSTRAINT t{t}_k{id}`.
+    DropCheck { table: u32, id: u32 },
+    /// `ALTER TABLE t VALIDATE CONSTRAINT t{t}_k{id}`.
+    ValidateCheck { table: u32, id: u32 },
     /// `VACUUM [(FULL, FREEZE, ANALYZE)] t, ..`: outside a transaction only;
     /// nothing logical. Always of named tables: a database-wide VACUUM also
     /// processes the shared catalogs, where sessions of other databases
@@ -703,6 +733,40 @@ pub fn literal(v: &Value) -> String {
     }
 }
 
+/// `ALTER DOMAIN` of a column's domain.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DomOp {
+    /// `ADD CONSTRAINT .. CHECK (..) [NOT VALID]` (NOT VALID only when the
+    /// rows satisfy it too).
+    AddCheck(Pred, bool),
+    DropCheck,
+    Validate,
+    /// `SET NOT NULL` (`DROP NOT NULL` when false).
+    NotNull(bool),
+}
+
+impl Pred {
+    /// The predicate with each column written as `name` says.
+    pub fn sql_with(&self, name: &dyn Fn(u32) -> String) -> String {
+        match self {
+            Pred::Cmp(c, op, v) => format!("{} {} {v}", name(*c), op.sql()),
+            Pred::IsNull(c, false) => format!("{} IS NULL", name(*c)),
+            Pred::IsNull(c, true) => format!("{} IS NOT NULL", name(*c)),
+            Pred::Between(c, lo, hi) => format!("{} BETWEEN {lo} AND {hi}", name(*c)),
+            Pred::And(a, b) => format!("({} AND {})", a.sql_with(name), b.sql_with(name)),
+            Pred::Or(a, b) => format!("({} OR {})", a.sql_with(name), b.sql_with(name)),
+            Pred::Not(a) => format!("NOT ({})", a.sql_with(name)),
+        }
+    }
+
+    /// Whether it reads a column other than `c{column}`.
+    pub fn reads_other(&self, column: u32) -> bool {
+        let mut cols = Vec::new();
+        self.leaves(&mut cols);
+        cols.iter().any(|&c| c != column)
+    }
+}
+
 impl fmt::Display for Pred {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -839,15 +903,9 @@ pub fn create_table(t: &Table, with: &str, unlogged: bool) -> String {
         Strategy::Hash => "HASH",
     };
     s.push_str(&format!(" PARTITION BY {strategy} (c{})", p.column));
-    let edge = |v: &Option<Value>, none: &str| v.as_ref().map_or(none.to_string(), literal);
     for (k, b) in p.parts.iter().enumerate() {
-        let bound = match b {
-            PartBound::Range(lo, hi) => format!("FOR VALUES FROM ({}) TO ({})", edge(lo, "MINVALUE"), edge(hi, "MAXVALUE")),
-            PartBound::List(vs) => format!("FOR VALUES IN ({})", list(vs.iter().map(literal))),
-            PartBound::Hash(m, r) => format!("FOR VALUES WITH (MODULUS {m}, REMAINDER {r})"),
-            PartBound::Default => "DEFAULT".into(),
-        };
-        s.push_str(&format!("; CREATE TABLE t{}_p{k} PARTITION OF t{} {bound}", t.id, t.id));
+        let bound = bound_sql(b);
+        s.push_str(&format!("; CREATE TABLE t{}_p{} PARTITION OF t{} {bound}", t.id, p.name(k), t.id));
     }
     s
 }
@@ -993,6 +1051,44 @@ impl fmt::Display for Statement {
             },
             Statement::SetDefault { table, column, value: Some(v) } => write!(f, "ALTER TABLE t{table} ALTER COLUMN c{column} SET DEFAULT {}", literal(v)),
             Statement::SetDefault { table, column, value: None } => write!(f, "ALTER TABLE t{table} ALTER COLUMN c{column} DROP DEFAULT"),
+            Statement::Trip { table, op } => write!(f, "{}", op.sql(*table)),
+            Statement::AddCheck { table, id, pred, not_valid } => {
+                write!(f, "ALTER TABLE t{table} ADD CONSTRAINT t{table}_k{id} CHECK ({pred}){}", if *not_valid { " NOT VALID" } else { "" })
+            },
+            Statement::SetDomain { table, column, ty, dom } => {
+                let n = dom.name;
+                write!(f, "DO $d$BEGIN CREATE DOMAIN t{table}_d{n} AS {}", ty.name())?;
+                if dom.not_null {
+                    write!(f, " NOT NULL")?;
+                }
+                if let Some(c) = &dom.check {
+                    write!(f, " CONSTRAINT t{table}_d{n}_k CHECK ({})", c.sql_with(&|_| "VALUE".to_string()))?;
+                }
+                write!(f, "; ALTER TABLE t{table} ALTER COLUMN c{column} TYPE t{table}_d{n}; END$d$")
+            },
+            Statement::AddKey { table, columns, using: None } => write!(f, "ALTER TABLE t{table} ADD CONSTRAINT t{table}_pkey PRIMARY KEY ({})", list(columns.iter().map(|c| format!("c{c}")))),
+            Statement::AddKey { table, using: Some(i), .. } => write!(f, "ALTER TABLE t{table} ADD CONSTRAINT t{table}_pkey PRIMARY KEY USING INDEX t{table}_i{i}"),
+            Statement::DropKey(t) => write!(f, "ALTER TABLE t{t} DROP CONSTRAINT t{t}_pkey"),
+            Statement::AlterDomain { table, name, op, .. } => {
+                let d = format!("t{table}_d{name}");
+                match op {
+                    DomOp::AddCheck(c, nv) => write!(f, "ALTER DOMAIN {d} ADD CONSTRAINT {d}_k CHECK ({}){}", c.sql_with(&|_| "VALUE".to_string()), if *nv { " NOT VALID" } else { "" }),
+                    DomOp::DropCheck => write!(f, "ALTER DOMAIN {d} DROP CONSTRAINT {d}_k"),
+                    DomOp::Validate => write!(f, "ALTER DOMAIN {d} VALIDATE CONSTRAINT {d}_k"),
+                    DomOp::NotNull(on) => write!(f, "ALTER DOMAIN {d} {} NOT NULL", if *on { "SET" } else { "DROP" }),
+                }
+            },
+            Statement::DropPartition { table, name } => write!(f, "DO $$BEGIN ALTER TABLE t{table} DETACH PARTITION t{table}_p{name}; DROP TABLE t{table}_p{name}; END$$"),
+            Statement::AddPartition { table, name, bound } => write!(f, "CREATE TABLE t{table}_p{name} PARTITION OF t{table} {}", bound_sql(bound)),
+            Statement::DropCheck { table, id } => write!(f, "ALTER TABLE t{table} DROP CONSTRAINT t{table}_k{id}"),
+            Statement::ValidateCheck { table, id } => write!(f, "ALTER TABLE t{table} VALIDATE CONSTRAINT t{table}_k{id}"),
+            Statement::AlterType { table, column, ty, using } => {
+                write!(f, "ALTER TABLE t{table} ALTER COLUMN c{column} TYPE {}", ty.name())?;
+                if *using {
+                    write!(f, " USING c{column}::{}", ty.name())?;
+                }
+                Ok(())
+            },
             Statement::Vacuum { tables, full, freeze, analyze } => {
                 write!(f, "VACUUM")?;
                 let opts: Vec<&str> = [(*full, "FULL"), (*freeze, "FREEZE"), (*analyze, "ANALYZE")].into_iter().filter(|(on, _)| *on).map(|(_, o)| o).collect();
@@ -1080,6 +1176,53 @@ pub fn returns_rows(s: &Statement) -> bool {
 /// Whether PostgreSQL refuses to run it inside a transaction block.
 pub fn outside_transaction(s: &Statement) -> bool {
     matches!(s, Statement::Vacuum { .. } | Statement::Reindex { concurrently: true, .. })
+}
+
+/// A round trip through a schema change (`Statement::Trip`): renames
+/// there and back (the model names objects by stable ids, so a name stays
+/// what it was), or a partition detached and attached again with its
+/// bound.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Trip {
+    Column(u32),
+    Table,
+    Index(u32),
+    /// The primary key constraint `t{t}_pkey` (its index is renamed too).
+    Key,
+    /// The foreign key constraint `t{t}_fk`.
+    ForeignKey,
+    Trigger(u32),
+    /// Partition `t{t}_p{k}`, with the table's partitioning to render its
+    /// bound.
+    Partition(usize, crate::model::Partitioning),
+}
+
+impl Trip {
+    pub fn sql(&self, t: u32) -> String {
+        let (a, b) = match self {
+            Trip::Column(c) => (format!("ALTER TABLE t{t} RENAME COLUMN c{c} TO c{c}_r"), format!("ALTER TABLE t{t} RENAME c{c}_r TO c{c}")),
+            Trip::Table => (format!("ALTER TABLE t{t} RENAME TO t{t}_r"), format!("ALTER TABLE t{t}_r RENAME TO t{t}")),
+            Trip::Index(i) => (format!("ALTER INDEX t{t}_i{i} RENAME TO t{t}_i{i}_r"), format!("ALTER TABLE t{t}_i{i}_r RENAME TO t{t}_i{i}")),
+            Trip::Key => (format!("ALTER TABLE t{t} RENAME CONSTRAINT t{t}_pkey TO t{t}_pkey_r"), format!("ALTER INDEX t{t}_pkey_r RENAME TO t{t}_pkey")),
+            Trip::ForeignKey => (format!("ALTER TABLE t{t} RENAME CONSTRAINT t{t}_fk TO t{t}_fk_r"), format!("ALTER TABLE t{t} RENAME CONSTRAINT t{t}_fk_r TO t{t}_fk")),
+            Trip::Trigger(g) => (format!("ALTER TRIGGER t{t}_g{g} ON t{t} RENAME TO t{t}_g{g}_r"), format!("ALTER TRIGGER t{t}_g{g}_r ON t{t} RENAME TO t{t}_g{g}")),
+            Trip::Partition(k, p) => {
+                let n = p.name(*k);
+                (format!("ALTER TABLE t{t} DETACH PARTITION t{t}_p{n}"), format!("ALTER TABLE t{t} ATTACH PARTITION t{t}_p{n} {}", bound_sql(&p.parts[*k])))
+            },
+        };
+        format!("DO $$BEGIN {a}; {b}; END$$")
+    }
+}
+
+pub fn bound_sql(b: &PartBound) -> String {
+    let edge = |v: &Option<Value>, none: &str| v.as_ref().map_or(none.to_string(), literal);
+    match b {
+        PartBound::Range(lo, hi) => format!("FOR VALUES FROM ({}) TO ({})", edge(lo, "MINVALUE"), edge(hi, "MAXVALUE")),
+        PartBound::List(vs) => format!("FOR VALUES IN ({})", list(vs.iter().map(literal))),
+        PartBound::Hash(m, r) => format!("FOR VALUES WITH (MODULUS {m}, REMAINDER {r})"),
+        PartBound::Default => "DEFAULT".into(),
+    }
 }
 
 /// Whether the index method may hold a column of this type (with the

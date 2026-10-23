@@ -1,0 +1,92 @@
+diff --git a/src/uu/unexpand/src/unexpand.rs b/src/uu/unexpand/src/unexpand.rs
+index 1353585a5..b8bab36b2 100644
+--- a/src/uu/unexpand/src/unexpand.rs
++++ b/src/uu/unexpand/src/unexpand.rs
+@@ -643,22 +643,16 @@ fn unexpand_file(
+     options: &Options,
+     lastcol: usize,
+     tab_config: &TabConfig,
++    print_state: &mut PrintState,
+ ) -> UResult<()> {
+     let mut input = open(file)?;
+-    let mut print_state = PrintState {
+-        col: 0,
+-        scol: 0,
+-        leading: true,
+-        pctype: CharType::Other,
+-        pending_wide: Vec::new(),
+-    };
+ 
+     while let buf @ [_, ..] = input
+         .fill_buf()
+         .map_err(|e| e.map_err_context(|| file.maybe_quote().to_string()) as Box<dyn UError>)?
+     {
+         for line in buf.split_inclusive(|b| *b == b'\n') {
+-            unexpand_buf(line, output, options, lastcol, tab_config, &mut print_state)?;
++            unexpand_buf(line, output, options, lastcol, tab_config, print_state)?;
+             if let Some(b'\n') = line.last() {
+                 print_state.new_line();
+             }
+@@ -666,8 +660,7 @@ fn unexpand_file(
+         let len = buf.len();
+         input.consume(len);
+     }
+-    // write out anything remaining
+-    write_tabs(output, tab_config, &mut print_state, options.aflag)
++    Ok(())
+ }
+ 
+ fn unexpand(options: &Options) -> UResult<()> {
+@@ -682,12 +675,30 @@ fn unexpand(options: &Options) -> UResult<()> {
+         0
+     };
+ 
++    // The files are one stream: a line that does not end at the end of a file
++    // continues in the next one, as with `cat FILE... | unexpand`.
++    let mut print_state = PrintState {
++        col: 0,
++        scol: 0,
++        leading: true,
++        pctype: CharType::Other,
++        pending_wide: Vec::new(),
++    };
+     for file in &options.files {
+-        if let Err(e) = unexpand_file(file, &mut output, options, lastcol, tab_config) {
++        if let Err(e) = unexpand_file(
++            file,
++            &mut output,
++            options,
++            lastcol,
++            tab_config,
++            &mut print_state,
++        ) {
+             show!(e);
+             set_exit_code(1);
+         }
+     }
++    // write out anything remaining
++    write_tabs(&mut output, tab_config, &mut print_state, options.aflag)?;
+     output.flush()?;
+     Ok(())
+ }
+diff --git a/tests/by-util/test_unexpand.rs b/tests/by-util/test_unexpand.rs
+index 49a287237..bea66af67 100644
+--- a/tests/by-util/test_unexpand.rs
++++ b/tests/by-util/test_unexpand.rs
+@@ -450,3 +450,16 @@ fn test_buffered_read_edgecase_behaviour() {
+             .stdout_only(String::from_utf8(expected).unwrap());
+     }
+ }
++
++#[test]
++fn test_line_continues_into_next_file() {
++    // The files form one stream, like `cat f1 f2 | unexpand`
++    let (at, mut ucmd) = at_and_ucmd!();
++    at.write("f1", "a");
++    at.write("f2", " \t");
++    ucmd.args(&["f1", "f2"]).succeeds().stdout_is("a \t");
++    let (at, mut ucmd) = at_and_ucmd!();
++    at.write("f1", "    ");
++    at.write("f2", "    x\n");
++    ucmd.args(&["f1", "f2"]).succeeds().stdout_is("\tx\n");
++}

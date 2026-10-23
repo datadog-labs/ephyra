@@ -1,0 +1,7 @@
+CREATE TABLE t(a, b, c);
+CREATE TABLE u(b);
+INSERT INTO t VALUES (1, NULL, 10), (2, 1, 20);
+INSERT INTO u VALUES (2);
+ANALYZE;
+SELECT t1.c, (SELECT t1.c), EXISTS (SELECT 1 WHERE t1.c = 10) FROM t AS t1 JOIN t AS t2 ON t2.b = t1.a LEFT JOIN u ON u.b = t2.a;
+SELECT t1.c, (SELECT t1.c), EXISTS (SELECT 1 WHERE t1.c = 10) FROM t AS t1 JOIN t AS t2 ON t2.b = t1.a JOIN u ON u.b = t2.a;

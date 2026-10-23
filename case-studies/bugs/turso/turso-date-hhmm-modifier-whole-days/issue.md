@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9921 (https://github.com/tursodatabase/turso/issues/9921) (line 1 corrected 2026-10-21).
 
 # `±HH:MM` date modifier with hour 24 adds a day; SQLite adds nothing
 

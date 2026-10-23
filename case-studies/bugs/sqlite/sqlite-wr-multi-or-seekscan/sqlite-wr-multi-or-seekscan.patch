@@ -1,0 +1,72 @@
+--- a/src/wherecode.c
++++ b/src/wherecode.c
+@@ -2146,9 +2146,14 @@
+       SWAP(u8, nBtm, nTop);
+     }
+ 
+-    if( iLevel>0 && (pLoop->wsFlags & WHERE_IN_SEEKSCAN)!=0 ){
++    if( (iLevel>0 || (pWInfo->wctrlFlags & WHERE_OR_SUBCLAUSE)!=0)
++     && (pLoop->wsFlags & WHERE_IN_SEEKSCAN)!=0
++    ){
+       /* In case OP_SeekScan is used, ensure that the index cursor does not
+-      ** point to a valid row for the first iteration of this loop. */
++      ** point to a valid row for the first iteration of this loop. This
++      ** is also required for the sub-loops of a multi-index OR, as the
++      ** index cursor may have been left pointing to a row by an earlier
++      ** OR-term or by an earlier iteration of an outer loop. */
+       sqlite3VdbeAddOp1(v, OP_NullRow, iIdxCur);
+     }
+ 
+--- a/test/seekscan1.test
++++ b/test/seekscan1.test
+@@ -189,6 +189,50 @@
+   }
+ }
+ 
++#-------------------------------------------------------------------------
++# OP_SeekScan in the sub-loop of a multi-index OR on a WITHOUT ROWID
++# table. Sub-loops that search the PRIMARY KEY use the table cursor, so
++# an earlier OR-term, or an earlier iteration of an outer loop, can leave
++# it pointing past the first key of the IN loop.
++#
++reset_db
++do_execsql_test 4.0 {
++  CREATE TABLE t1(a INT, b INT, PRIMARY KEY(a,b)) WITHOUT ROWID;
++  INSERT INTO t1 VALUES(1,1), (2,1), (3,1), (4,1);
++  CREATE TABLE t2(a INT, b INT, PRIMARY KEY(a DESC,b)) WITHOUT ROWID;
++  INSERT INTO t2 SELECT * FROM t1;
++  CREATE TABLE t3(x);
++  INSERT INTO t3 VALUES(1), (2);
++  ANALYZE;
++}
++do_test 4.1 {
++  set res [lsearch [execsql {
++    EXPLAIN SELECT a, b FROM t1 WHERE a=2 OR (a=1 AND b IN (1,2))
++  }] SeekScan]
++  expr $res>=0
++} {1}
++do_execsql_test 4.2 {
++  SELECT a, b FROM t1 WHERE a=2 OR (a=1 AND b IN (1,2)) ORDER BY +a;
++} {1 1 2 1}
++do_execsql_test 4.3 {
++  SELECT a, b FROM t2 WHERE a=2 OR (a=3 AND b IN (1,2)) ORDER BY +a;
++} {2 1 3 1}
++do_execsql_test 4.4 {
++  SELECT x, a, b FROM t3 CROSS JOIN t1
++   WHERE (a=1 AND b IN (1,2)) OR a=x ORDER BY +x, +a;
++} {1 1 1 2 1 1 2 2 1}
++
++# An OR-term that uses a secondary index also moves the table cursor,
++# as it looks up each row by its PRIMARY KEY.
++#
++do_execsql_test 4.5 {
++  CREATE TABLE t4(a INT, b INT, c INT, PRIMARY KEY(a,b)) WITHOUT ROWID;
++  CREATE INDEX t4c ON t4(c);
++  INSERT INTO t4 VALUES(1,1,10), (2,1,20), (3,1,30), (4,1,40);
++  ANALYZE;
++  SELECT a, b FROM t4 WHERE c=30 OR (a=1 AND b IN (1,2)) ORDER BY +a;
++} {1 1 3 1}
++
+ finish_test
+ 
+ 

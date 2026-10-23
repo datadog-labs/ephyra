@@ -1,0 +1,2 @@
+CREATE TABLE t (a BIGINT, b BIGINT) AS VALUES (1, 10), (2, 20);
+SELECT sum(1 + 1) OVER (ORDER BY a + 1), sum(b) OVER (ORDER BY a + 1) FROM t;

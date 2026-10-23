@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9845 (https://github.com/tursodatabase/turso/issues/9845) (line 1 corrected 2026-10-21).
 
 Title: `->`/`->>` ignore the `'[N]'` abbreviated path form, so `'["a","b"]' ->> '[0]'` returns NULL
 

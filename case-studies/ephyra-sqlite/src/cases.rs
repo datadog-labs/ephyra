@@ -19,7 +19,7 @@ use crate::{
     model::{column_value, Action, Coll, ColType, Db, Encoding, ForeignKey, Index, Key, KeyExpr, Layout, Model, Rule, Step, Table, Term, Value, DECLS},
     reader,
     semantics::{self, affinity, comparable, convert, is_key, Affinity},
-    statements::{AutoVac, Begin, Checkpoint, CmpOp, Delete, Journal, Excluded, Insert, NewColumn, Pred, Reindex, Resolve, Select, Stat, StatOf, Statement, Update, UpdateFrom, Upsert, VectorSet},
+    statements::{AutoVac, Begin, Checkpoint, CmpOp, Delete, Journal, Excluded, Insert, NewColumn, Pred, Reindex, Resolve, Select, Stat, StatOf, Statement, Update, UpdateFrom, Upsert, VectorSet, KeySet, KeyTo},
     writer::Rng,
     SqliteFile,
 };
@@ -305,7 +305,7 @@ pub fn draw_statement(g: &mut Source, m: &Model) -> Statement {
             1 => {
                 let t = fk_target(g, m, t, 0.35, |m, k| !m.tables[k].fks.is_empty());
                 match draw_insert(g, m, t) {
-                    Some(s) => Statement::Insert(s),
+                    Some(s) => Statement::Insert(draw_copy(m, s)),
                     None => continue,
                 }
             },
@@ -680,6 +680,26 @@ fn draw_new_table(g: &mut Source, m: &Model, db: Option<Db>) -> Table {
     if t.key != Key::Rowid && g.bool_with(0.2) {
         t.key_conflict = Some(*g.weighted(&[(3, Resolve::Replace), (3, Resolve::Ignore), (1, Resolve::Abort), (1, Resolve::Fail), (1, Resolve::Rollback)]));
     }
+    // A quarter of the time (by a `Side` stream of the drawn table: no
+    // draw moves) the shape of a table there (foreign keys drawn after):
+    // its key, types, collations, NOT NULL constraints (now and then
+    // fewer) and key conflict clause, which `INSERT INTO t SELECT * FROM
+    // t{s}` copies with SQLite's transfer optimization (`draw_copy`).
+    let mut side = crate::expr::Side::of(&format!("{t:?}"), 0x0073_6861_7065);
+    if !m.tables.is_empty() && side.take(4) == 0 {
+        let o = &m.tables[side.take(m.tables.len())];
+        if o.generated.iter().all(Option::is_none) {
+            let not_null = o.not_null.iter().map(|&n| n && side.take(4) != 0).collect();
+            let key_conflict = if side.take(4) == 0 { t.key_conflict.filter(|_| o.key != Key::Rowid) } else { o.key_conflict };
+            t = Table { not_null, key_conflict, db: t.db, ..Table::new(o.columns, o.key.clone()) };
+            t.strict = o.strict.clone();
+            t.decl = o.decl.clone();
+            t.coll = o.coll.clone();
+            if let Key::IntegerPrimaryKey(k) = t.key {
+                t.not_null[k] = o.not_null[k];
+            }
+        }
+    }
     let same: Vec<usize> = (0..m.tables.len()).filter(|&k| db.is_none_or(|d| m.tables[k].db == d)).collect();
     if !same.is_empty() && g.bool_with(0.8) {
         for _ in 0..if g.bool_with(0.3) { 2 } else { 1 } {
@@ -728,6 +748,77 @@ fn draw_plain_table(g: &mut Source) -> Table {
         t.not_null[c] = !matches!(key, Key::IntegerPrimaryKey(k) if k == c) && g.bool_with(0.15);
     }
     t
+}
+
+/// Half the drawn INSERTs (by a [`Side`] stream of the drawn one: no draw
+/// moves), where there is a table to copy, are in its place `INSERT INTO
+/// t{d} SELECT * FROM t{s}` ([`Insert::copy`]) of a table with as many
+/// columns, keeping the conflict clause: into the drawn table when it can
+/// take one, else into another; of the same shape ([`same_shape`]: SQLite's
+/// transfer optimization) two thirds of the time when there is one, its
+/// SELECT spelled one way or another ([`Insert::copy_form`]); only where
+/// [`semantics::copy_ok`] takes it.
+fn draw_copy(m: &Model, ins: Insert) -> Insert {
+    let mut side = crate::expr::Side::of(&format!("{ins:?}"), 0x0000_7866_6572);
+    if side.take(2) != 0 || !ins.upsert.is_empty() {
+        return ins;
+    }
+    // What `copy_ok` asks of the two tables alone, before the rows.
+    let fits = |d: usize, s: usize| {
+        let (dt, st) = (&m.tables[d], &m.tables[s]);
+        d != s
+            && dt.columns == st.columns
+            && !st.rows.is_empty()
+            && dt.generated.iter().chain(&st.generated).all(Option::is_none)
+            && !semantics::fk_relevant(m, d)
+            && match dt.key {
+                Key::Rowid => dt.indexes.is_empty() && st.rows.len() == 1,
+                _ => true,
+            }
+    };
+    // The SELECT spelled as is three tenths of the time, else in each other
+    // form (`COPY_FORMS`) a twentieth of the time (the source's own schema
+    // for a qualified name; a form only one row takes as is otherwise).
+    let form = side.take(20);
+    let copy = |d: usize, s: usize| {
+        let rows = semantics::copy_rows(m, s);
+        let copy_form = match form {
+            7 => 1,
+            8 => 5,
+            9..=17 => form as u8 - 3,
+            18..=19 if rows.len() == 1 => form as u8 - 3,
+            6 => 2 + m.tables[s].db as u8,
+            _ => 0,
+        };
+        Insert { table: d, rowid: false, columns: (0..m.tables[d].columns).collect(), rows, or: ins.or, upsert: Vec::new(), returning: None, select: false, copy: Some(s), copy_form }
+    };
+    let n = m.tables.len();
+    let pairs = |d: usize| (0..n).filter(move |&s| fits(d, s)).map(move |s| copy(d, s)).filter(|c| semantics::valid(m, &Statement::Insert(c.clone()))).collect::<Vec<Insert>>();
+    let mut ok = pairs(ins.table);
+    if ok.is_empty() {
+        let start = side.take(n.max(1));
+        for d in (0..n).map(|k| (start + k) % n).filter(|&d| d != ins.table) {
+            ok = pairs(d);
+            if !ok.is_empty() {
+                break;
+            }
+        }
+    }
+    let same: Vec<&Insert> = ok.iter().filter(|c| same_shape(&m.tables[c.table], &m.tables[c.copy.unwrap()])).collect();
+    if !same.is_empty() && side.take(3) != 0 {
+        return (*side.pick(&same)).clone();
+    }
+    if ok.is_empty() {
+        return ins;
+    }
+    side.pick(&ok).clone()
+}
+
+/// Whether two tables have the shape SQLite's transfer optimization asks
+/// for of its columns: the same key, types, collations, defaults and
+/// STRICT, NOT NULL in `src` where `d` has it.
+fn same_shape(d: &Table, src: &Table) -> bool {
+    d.columns == src.columns && d.key == src.key && d.strict == src.strict && d.decl == src.decl && d.coll == src.coll && d.default == src.default && (0..d.columns).all(|c| !d.not_null[c] || src.not_null[c])
 }
 
 /// An index for `CREATE INDEX` (ascending: see [`semantics::valid`]): 30%
@@ -1177,7 +1268,7 @@ fn draw_insert(g: &mut Source, m: &Model, k: usize) -> Option<Insert> {
     let n = if g.bool_with(0.8) { g.int(1..=3) } else { g.int(4..=8) };
     let (or, upsert) = draw_conflict(g, t);
     let conflicting = or.is_some() || !upsert.is_empty() || t.key_conflict.is_some();
-    let mut ins = Insert { table: k, rowid, columns: columns.clone(), rows: Vec::new(), or, upsert, returning: None, select: g.bool_with(0.12) };
+    let mut ins = Insert { table: k, rowid, columns: columns.clone(), rows: Vec::new(), or, upsert, returning: None, select: g.bool_with(0.12), copy: None, copy_form: 0 };
     for _ in 0..n {
         let mut row = Vec::with_capacity(columns.len() + 1);
         if rowid {
@@ -1571,7 +1662,68 @@ fn draw_update(g: &mut Source, m: &Model, k: usize) -> Option<Update> {
     let returning = draw_returning(g, t);
     let vector = draw_vector_set(g);
     let from = g.bool_with(0.2).then(|| draw_update_from(g, m, k, &mut sets)).flatten();
-    Some(Update { table: k, sets, filter: (!g.bool_with(0.05)).then(|| draw_pred(g, t, 3)), or: draw_update_or(g), returning, vector, from })
+    let u = Update { table: k, sets, filter: (!g.bool_with(0.05)).then(|| draw_pred(g, t, 3)), or: draw_update_or(g), returning, vector, from, key: None };
+    Some(with_key_set(m, u))
+}
+
+/// `u` with a set of its table's key half the time where the model (of three
+/// tries)
+/// takes it ([`semantics::key_update`]), chosen by a [`Side`] stream of the
+/// drawn UPDATE (no draw moves): the rowid (as the INTEGER PRIMARY KEY
+/// column or as `rowid`) to a literal (a row's key, the next one, a
+/// negative one, the ends of the range) or shifted or negated, or a column
+/// of a WITHOUT ROWID table's PRIMARY KEY to a value of that column (often
+/// another row's: under IGNORE or REPLACE, or the key's ON CONFLICT) or a
+/// small integer or text. `u` as it is where the keyed one is invalid.
+fn with_key_set(m: &Model, u: Update) -> Update {
+    let t = &m.tables[u.table];
+    let mut side = crate::expr::Side::of(&format!("{u:?}"), 0x006b_6579_5f73_6574);
+    if side.take(2) != 0 || u.from.is_some() || !semantics::valid(m, &Statement::Update(u.clone())) {
+        return u;
+    }
+    for _ in 0..3 {
+        let keyed = Update { key: Some(draw_key_set(t, &mut side)), ..u.clone() };
+        if semantics::valid(m, &Statement::Update(keyed.clone())) {
+            return keyed;
+        }
+    }
+    u
+}
+
+/// A key set of `t` for [`with_key_set`].
+fn draw_key_set(t: &crate::model::Table, side: &mut crate::expr::Side) -> KeySet {
+    match &t.key {
+        Key::Rowid | Key::IntegerPrimaryKey(_) => {
+            let column = match t.key {
+                Key::IntegerPrimaryKey(c) if side.take(3) != 0 => Some(c),
+                _ => None,
+            };
+            let top = t.rows.last().map_or(0, |r| r.rowid);
+            let any = if t.rows.is_empty() { 1 } else { t.rows[side.take(t.rows.len())].rowid };
+            let to = match side.take(10) {
+                0..=1 => KeyTo::Plus(*side.pick(&[1 << 32, -(1 << 32), 1_000_000, -1_000_000, 4_611_686_018_427_387_904, 1000])),
+                2 => KeyTo::Neg,
+                3 | 4 => KeyTo::Lit(Value::Int(any)),
+                n => KeyTo::Lit(Value::Int(match n {
+                    5 => top.saturating_add(1),
+                    6 => top.saturating_add(1000),
+                    7 => -1 - side.take(1000) as i64,
+                    8 => *side.pick(&[i64::MAX, i64::MIN, 0]),
+                    _ => top.saturating_add(1 + side.take(5) as i64),
+                })),
+            };
+            KeySet { column, to }
+        },
+        Key::WithoutRowid(pk) => {
+            let c = *side.pick(pk);
+            let v = match side.take(4) {
+                0 | 1 if !t.rows.is_empty() => column_value(t, &t.rows[side.take(t.rows.len())], c),
+                2 => Value::Text(format!("k{}", side.take(100))),
+                _ => Value::Int(side.take(200) as i64 - 50),
+            };
+            KeySet { column: Some(c), to: KeyTo::Lit(v) }
+        },
+    }
 }
 
 /// `UPDATE .. FROM` one row of another rowid table (see
@@ -1632,7 +1784,7 @@ fn draw_clashing_update(g: &mut Source, m: &Model, k: usize) -> Option<Update> {
     let filter = Some(Pred::Cmp(c, CmpOp::Eq, column_value(t, &t.rows[a], c)));
     let or = Some(if g.bool_with(0.6) { Resolve::Replace } else { Resolve::Ignore });
     let vector = draw_vector_set(g);
-    Some(Update { table: k, sets, filter, or, returning: draw_returning(g, t), vector, from: None })
+    Some(Update { table: k, sets, filter, or, returning: draw_returning(g, t), vector, from: None, key: None })
 }
 
 // ---------------------------------------------------------------- measure
@@ -1669,12 +1821,13 @@ pub fn statement_cost(s: &Statement) -> u64 {
                 + i.columns.len() as u64
                 + i.rows.iter().map(|r| 1 + r.iter().map(Value::cost).sum::<u64>()).sum::<u64>()
                 + u64::from(i.or.is_some())
+                + u64::from(i.copy.is_some())
                 + i.upsert.iter().map(upsert_cost).sum::<u64>()
                 + returning_cost(&i.returning)
                 + u64::from(i.select)
         },
         Statement::Update(u) => {
-            1 + u.sets.iter().map(|(_, v)| 1 + v.cost()).sum::<u64>() + filter_cost(&u.filter) + u64::from(u.or.is_some()) + returning_cost(&u.returning) + u.from.as_ref().map_or(0, |f| 2 + f.reads.len() as u64 + u64::from(f.sub))
+            1 + u.sets.iter().map(|(_, v)| 1 + v.cost()).sum::<u64>() + filter_cost(&u.filter) + u64::from(u.or.is_some()) + returning_cost(&u.returning) + u.from.as_ref().map_or(0, |f| 2 + f.reads.len() as u64 + u64::from(f.sub)) + u.key.as_ref().map_or(0, |k| 2 + match &k.to { KeyTo::Lit(v) => v.cost(), KeyTo::Plus(n) => 1 + bits(n.unsigned_abs()), KeyTo::Neg => 0 })
         },
         Statement::Delete(d) => 1 + filter_cost(&d.filter) + returning_cost(&d.returning),
         Statement::Vacuum => 0,
@@ -1832,7 +1985,15 @@ pub fn repair(m: &Model, s: &Statement) -> Option<Statement> {
                 .collect();
             let returning = i.returning.as_ref().map(|cs| cs.iter().copied().filter(|&c| c < t.columns).collect());
             let extras = i.or.is_some() || !upsert.is_empty();
-            let mut fixed = Insert { table: i.table, rowid, columns: cols, rows: Vec::new(), or: i.or, upsert, returning, select: i.select };
+            // A copy of a table there takes its rows now, else is the
+            // INSERT of its rows as they were.
+            if let Some(from) = i.copy.filter(|&f| f < m.tables.len()) {
+                let copy = Insert { columns: (0..t.columns).collect(), rows: semantics::copy_rows(m, from), ..i.clone() };
+                if semantics::valid(m, &Statement::Insert(copy.clone())) {
+                    return Some(Statement::Insert(copy));
+                }
+            }
+            let mut fixed = Insert { table: i.table, rowid, columns: cols, rows: Vec::new(), or: i.or, upsert, returning, select: i.select, copy: None, copy_form: 0 };
             for r in &i.rows {
                 let mut row: Vec<Value> = Vec::with_capacity(keep.len() + 1);
                 if rowid {
@@ -1874,7 +2035,15 @@ pub fn repair(m: &Model, s: &Statement) -> Option<Statement> {
                 f.reads = f.reads.iter().filter_map(|&(k, c)| Some((kept.iter().position(|&x| x == k)?, c))).collect();
                 f
             });
-            Statement::Update(Update { table: u.table, sets, filter, or: u.or, returning, vector: u.vector, from })
+            // The key set where it still names the table's key, else none.
+            let key = u.key.clone().filter(|k| match (&t.key, k.column) {
+                (Key::Rowid | Key::IntegerPrimaryKey(_), None) => true,
+                (Key::IntegerPrimaryKey(c), Some(x)) => *c == x,
+                (Key::WithoutRowid(pk), Some(x)) => pk.contains(&x),
+                _ => false,
+            });
+            let key = key.filter(|_| from.is_none());
+            Statement::Update(Update { table: u.table, sets, filter, or: u.or, returning, vector: u.vector, from, key })
         },
         Statement::Delete(d) => {
             let t = m.tables.get(d.table)?;
@@ -2116,6 +2285,15 @@ fn simpler_statements(s: &Statement) -> Vec<Statement> {
                 out.push(with(&|c| c.filter = f.clone()));
             }
         },
+        Statement::Insert(i) if i.copy.is_some() => {
+            out.push(Statement::Insert(Insert { copy: None, copy_form: 0, ..i.clone() }));
+            if i.copy_form != 0 {
+                out.push(Statement::Insert(Insert { copy_form: 0, ..i.clone() }));
+            }
+            if i.or.is_some() {
+                out.push(Statement::Insert(Insert { or: None, ..i.clone() }));
+            }
+        },
         Statement::Insert(i) => {
             if i.or.is_some() {
                 out.push(Statement::Insert(Insert { or: None, ..i.clone() }));
@@ -2166,6 +2344,9 @@ fn simpler_statements(s: &Statement) -> Vec<Statement> {
             }
         },
         Statement::Update(u) => {
+            if u.key.is_some() {
+                out.push(Statement::Update(Update { key: None, ..u.clone() }));
+            }
             if u.or.is_some() {
                 out.push(Statement::Update(Update { or: None, ..u.clone() }));
             }

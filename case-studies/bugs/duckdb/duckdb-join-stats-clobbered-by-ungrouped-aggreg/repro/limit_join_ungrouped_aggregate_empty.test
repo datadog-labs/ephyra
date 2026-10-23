@@ -1,0 +1,11 @@
+# name: test/sql/limit/limit_join_ungrouped_aggregate_empty.test
+# group: [limit]
+
+statement ok
+CREATE TABLE t(a INT);
+
+query II
+SELECT * FROM range(3) r(i), (SELECT count(*) AS n FROM t) WHERE i >= n LIMIT 1;
+----
+0	0
+

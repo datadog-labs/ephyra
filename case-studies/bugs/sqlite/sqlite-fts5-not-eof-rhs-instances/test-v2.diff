@@ -1,0 +1,49 @@
+--- a/ext/fts5/test/fts5aux2.test
++++ b/ext/fts5/test/fts5aux2.test
+@@ -67,5 +67,46 @@
+   SELECT fts5_test_rowcount(x1) FROM x1
+ } {4 4 4 4}
+ 
++#-------------------------------------------------------------------------
++# If the left-hand side of a NOT is at EOF from the start, the phrases on
++# its right-hand side must not report instances for rows matched by
++# other parts of the query.
++#
++foreach {tn detail} {1 full 2 column 3 none} {
++  do_execsql_test 2.$tn.0 "
++    CREATE VIRTUAL TABLE t2_${tn} USING fts5(a, detail=$detail);
++    INSERT INTO t2_${tn}(rowid, a) VALUES(1, 'g b');
++  "
++  foreach {tn2 order} {1 "" 2 "ORDER BY rowid DESC" 3 "ORDER BY rank"} {
++    do_execsql_test 2.$tn.$tn2 "
++      SELECT rowid, highlight(t2_${tn}, 0, '\[', '\]')
++      FROM t2_${tn}('g OR (zz NOT b)') $order;
++    " {1 {[g] b}}
++  }
++  do_execsql_test 2.$tn.4 "
++    SELECT bm25(t2_$tn) = (SELECT bm25(t2_$tn) FROM t2_${tn}('g'))
++    FROM t2_${tn}('g OR (zz NOT b)');
++  " {1}
++  do_execsql_test 2.$tn.5 "
++    SELECT rowid, highlight(t2_${tn}, 0, '\[', '\]')
++    FROM t2_${tn}('g OR ((zz OR yy) NOT b)');
++  " {1 {[g] b}}
++}
+ 
++#-------------------------------------------------------------------------
++# The same with the NOT as the right-hand side of another NOT, and with
++# the NOT below an AND that does not match an earlier row.
++#
++do_execsql_test 3.0 {
++  CREATE VIRTUAL TABLE t3 USING fts5(a);
++  INSERT INTO t3(rowid, a) VALUES(1, 'y x'), (2, 'g b'), (3, 'x y');
++}
++do_execsql_test 3.1 {
++  SELECT rowid, highlight(t3, 0, '[', ']') FROM t3('g NOT (zz NOT b)');
++} {2 {[g] b}}
++do_execsql_test 3.2 {
++  SELECT rowid, highlight(t3, 0, '[', ']')
++  FROM t3('g OR ("x y" AND (y OR (zz NOT b)))');
++} {2 {[g] b} 3 {[x y]}}
++
+ finish_test

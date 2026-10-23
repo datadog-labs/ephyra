@@ -1,0 +1,32 @@
+diff --git a/src/uu/expand/src/expand.rs b/src/uu/expand/src/expand.rs
+index 21f3cc36f..837c6648f 100644
+--- a/src/uu/expand/src/expand.rs
++++ b/src/uu/expand/src/expand.rs
+@@ -336,6 +336,8 @@ fn classify_char(buf: &[u8], byte: usize, utf8: bool) -> (CharType, usize, usize
+         return match b {
+             b'\t' => (Tab, 0, 1),
+             b'\x08' => (Backspace, 0, 1),
++            // NUL occupies no column (like wcwidth(L'\0') == 0), as in GNU expand
++            b'\0' => (Other, 0, 1),
+             _ => (Other, 1, 1),
+         };
+     }
+diff --git a/tests/by-util/test_expand.rs b/tests/by-util/test_expand.rs
+index 49d19bbe9..22d7a9f2c 100644
+--- a/tests/by-util/test_expand.rs
++++ b/tests/by-util/test_expand.rs
+@@ -67,6 +67,14 @@ fn test_with_multiple_files() {
+         .stdout_contains("        ");
+ }
+ 
++#[test]
++fn test_nul_has_zero_width() {
++    new_ucmd!()
++        .pipe_in("\0\ta\0b\tc\n")
++        .succeeds()
++        .stdout_is("\0        a\0b      c\n");
++}
++
+ #[test]
+ fn test_tabs() {
+     for list in ["3 6 9", "3,6,9", "3\t6\t9", ", \t3,\t6 9,"] {

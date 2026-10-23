@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9842 (https://github.com/tursodatabase/turso/issues/9842) (line 1 corrected 2026-10-21).
 
 Title: An unused CTE is resolved, and its errors reported, when the statement has a subquery outside FROM
 

@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9932 (https://github.com/tursodatabase/turso/issues/9932) (line 1 corrected 2026-10-21).
 Title: UPDATE through a covering index writes the row without finishing the deferred seek when a partial index WHERE reads only the rowid (panic or duplicate rowids)
 
 ```sql

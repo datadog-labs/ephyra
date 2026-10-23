@@ -1,0 +1,59 @@
+diff --git a/src/uu/split/src/split.rs b/src/uu/split/src/split.rs
+index d683bb343..2b0a356c0 100644
+--- a/src/uu/split/src/split.rs
++++ b/src/uu/split/src/split.rs
+@@ -862,7 +862,12 @@ impl ManageOutFiles for OutFiles {
+                 // as working around system limits of open files for child shell processes
+                 // is currently not supported (same as in GNU)
+                 match instantiated {
+-                    Ok(writer) => Some(writer),
++                    Ok(writer) => {
++                        if settings.verbose {
++                            print_creating_file(&filename)?;
++                        }
++                        Some(writer)
++                    }
+                     Err(e) if settings.filter.is_some() => {
+                         return Err(e.into());
+                     }
+@@ -891,6 +896,9 @@ impl ManageOutFiles for OutFiles {
+             let maybe_writer =
+                 settings.instantiate_current_writer(filename_to_open, file_to_open_is_new);
+             if let Ok(writer) = maybe_writer {
++                if file_to_open_is_new && settings.verbose {
++                    print_creating_file(filename_to_open)?;
++                }
+                 self[idx].maybe_writer = Some(writer);
+                 return Ok(self[idx].maybe_writer.as_mut().unwrap());
+             }
+diff --git a/tests/by-util/test_split.rs b/tests/by-util/test_split.rs
+index 29a6a7dad..caf00f848 100644
+--- a/tests/by-util/test_split.rs
++++ b/tests/by-util/test_split.rs
+@@ -958,6 +958,26 @@ creating file 'xaf'
+         );
+ }
+ 
++#[test]
++fn test_verbose_number() {
++    for chunks in ["2", "l/2", "r/2"] {
++        new_ucmd!()
++            .args(&["-n", chunks, "--verbose"])
++            .pipe_in("a\nb\nc\nd\n")
++            .succeeds()
++            .stdout_only("creating file 'xaa'\ncreating file 'xab'\n");
++    }
++}
++
++#[test]
++fn test_verbose_number_elide_empty_files() {
++    new_ucmd!()
++        .args(&["-e", "-n", "r/3", "--verbose"])
++        .pipe_in("a\n")
++        .succeeds()
++        .stdout_only("creating file 'xaa'\n");
++}
++
+ #[test]
+ fn test_number_n() {
+     let (at, mut ucmd) = at_and_ucmd!();

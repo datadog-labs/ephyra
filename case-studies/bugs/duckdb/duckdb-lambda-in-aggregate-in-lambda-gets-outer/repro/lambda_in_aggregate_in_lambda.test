@@ -1,0 +1,15 @@
+# name: test/sql/function/list/lambdas/lambda_in_aggregate_in_lambda.test
+# group: [lambdas]
+
+statement ok
+PRAGMA enable_verification
+
+query I
+SELECT list_transform([1], lambda x: min(list_transform([1], lambda y: y))) AS r;
+----
+[[1]]
+
+query I
+SELECT list_transform([1], lambda x: [min(list_transform([1], lambda y: y))]) AS r;
+----
+[[[1]]]

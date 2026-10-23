@@ -1,0 +1,15 @@
+--- a/ext/fts5/fts5_expr.c
++++ b/ext/fts5/fts5_expr.c
+@@ -1523,6 +1523,12 @@
+       default:
+         assert( pNode->eType==FTS5_NOT );
+         pNode->bEof = pNode->apChild[0]->bEof;
++        if( pNode->bEof ){
++          /* The NOT node is at EOF, so fts5ExprNodeTest() below does not
++          ** call fts5ExprNodeTest_NOT(). Zero the position lists of the
++          ** phrases on the right-hand side here instead, as it would. */
++          fts5ExprNodeZeroPoslist(pNode->apChild[1]);
++        }
+         break;
+     }
+   }

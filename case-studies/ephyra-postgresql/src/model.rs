@@ -570,12 +570,32 @@ pub struct Column {
     pub storage: Option<Storage>,
     /// `COMPRESSION ..` (a variable-length type only); nothing logical.
     pub compression: Option<Compression>,
+    /// Of a domain type over `ty` (`ALTER COLUMN .. TYPE t{t}_d{k}`, see
+    /// `crate::statements::Statement::SetDomain`): its constraints hold for
+    /// every value written to the column, as the column's own would.
+    pub dom: Option<Domain>,
 }
 
 impl Column {
     pub fn new(id: u32, ty: Type) -> Self {
-        Column { id, ty, not_null: false, default: None, identity: false, storage: None, compression: None }
+        Column { id, ty, not_null: false, default: None, identity: false, storage: None, compression: None, dom: None }
     }
+
+    /// Whether a NULL in the column is refused (`23502`): NOT NULL, the
+    /// identity column, a NOT NULL domain (the table's key aside).
+    pub fn refuses_null(&self) -> bool {
+        self.not_null || self.identity || self.dom.as_ref().is_some_and(|d| d.not_null)
+    }
+}
+
+/// A domain `t{t}_d{name}` over a column's type, made for that column:
+/// `NOT NULL`, and `CONSTRAINT t{t}_d{name}_k CHECK (..)` over VALUE (the
+/// predicate reads the column's id in place of VALUE).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Domain {
+    pub name: u32,
+    pub not_null: bool,
+    pub check: Option<Pred>,
 }
 
 /// A column's TOAST strategy.
@@ -807,7 +827,7 @@ pub enum Strategy {
     Hash,
 }
 
-/// The bound of one partition (`t{table}_p{k}`, by position).
+/// The bound of one partition (`t{table}_p{k}`, see [`Partitioning::name`]).
 #[derive(Clone, Debug, PartialEq)]
 pub enum PartBound {
     /// `FROM (lo | MINVALUE) TO (hi | MAXVALUE)`: values `lo <= v < hi`.
@@ -831,9 +851,37 @@ pub struct Partitioning {
     /// The key column's id (never the identity column).
     pub column: u32,
     pub parts: Vec<PartBound>,
+    /// The partitions' names, `t{table}_p{name}`, by position; empty for
+    /// names by position (as a setup creates them). Statements that drop
+    /// and add partitions keep names stable.
+    pub names: Vec<u32>,
 }
 
 impl Partitioning {
+    /// The name of partition `k`.
+    pub fn name(&self, k: usize) -> u32 {
+        self.names.get(k).copied().unwrap_or(k as u32)
+    }
+
+    /// The position of partition `t{table}_p{name}`.
+    pub fn position(&self, name: u32) -> Option<usize> {
+        (0..self.parts.len()).find(|&k| self.name(k) == name)
+    }
+
+    /// Whether a row with key value `v` is in partition `k` (RANGE or
+    /// LIST: the default partition holds what no other one takes).
+    pub fn holds(&self, k: usize, v: &Value) -> bool {
+        let fits = |b: &PartBound| match b {
+            PartBound::Range(lo, hi) => *v != Value::Null && lo.as_ref().is_none_or(|lo| compare(lo, v).is_le()) && hi.as_ref().is_none_or(|hi| compare(v, hi).is_lt()),
+            PartBound::List(vs) => vs.iter().any(|x| if *v == Value::Null { *x == Value::Null } else { *x != Value::Null && compare(x, v).is_eq() }),
+            PartBound::Hash(..) | PartBound::Default => false,
+        };
+        match &self.parts[k] {
+            PartBound::Default => !self.parts.iter().any(fits),
+            b => fits(b),
+        }
+    }
+
     pub fn cost(&self) -> u64 {
         2 + self
             .parts
@@ -953,6 +1001,12 @@ pub struct Table {
     pub indexes: Vec<Index>,
     /// CHECK constraints: no row makes one false (NULL passes).
     pub checks: Vec<Pred>,
+    /// CHECK constraints added by `ALTER TABLE .. ADD CONSTRAINT
+    /// t{id}_k{k} CHECK (..)`, by `k`: no row makes one false either (a NOT
+    /// VALID one is added only on rows that satisfy it). The next `k` is
+    /// `next_check`.
+    pub named: Vec<(u32, Pred)>,
+    pub next_check: u32,
     /// The id the next column added gets, and the next index.
     pub next_column: u32,
     pub next_index: u32,
@@ -1132,6 +1186,8 @@ impl Table {
             rows: Vec::new(),
             indexes: Vec::new(),
             checks: Vec::new(),
+            named: Vec::new(),
+            next_check: 0,
             next_column: types.len() as u32,
             next_index: 0,
             widest: BTreeMap::new(),
@@ -1142,6 +1198,11 @@ impl Table {
             triggers: Vec::new(),
             next_trigger: 0,
         }
+    }
+
+    /// Every CHECK constraint: those of its definition, then the named ones.
+    pub fn all_checks(&self) -> impl Iterator<Item = &Pred> {
+        self.checks.iter().chain(self.named.iter().map(|(_, p)| p)).chain(self.columns.iter().filter_map(|c| c.dom.as_ref()?.check.as_ref()))
     }
 
     /// Record the widths of values the table now holds.

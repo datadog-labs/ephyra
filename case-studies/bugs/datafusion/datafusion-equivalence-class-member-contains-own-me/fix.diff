@@ -1,0 +1,177 @@
+diff --git a/datafusion/physical-expr/src/equivalence/class.rs b/datafusion/physical-expr/src/equivalence/class.rs
+index e95ad8329..d246aeb1e 100644
+--- a/datafusion/physical-expr/src/equivalence/class.rs
++++ b/datafusion/physical-expr/src/equivalence/class.rs
+@@ -436,6 +436,25 @@ impl EquivalenceGroup {
+     ) -> bool {
+         let first_class = self.map.get(&left).copied();
+         let second_class = self.map.get(&right).copied();
++        // An equality such as `a + b = a` would put an expression into the same
++        // class as one of its own sub-expressions. Normalizing such a member
++        // rewrites the inner occurrence too (`a + b` becomes `(a + b) + b`),
++        // which leaves the class, so orderings and constants stated on it stop
++        // matching. Skip such equalities; this only loses an optimization.
++        let members = |expr: &Arc<dyn PhysicalExpr>, idx: Option<usize>| match idx {
++            Some(idx) => self.classes[idx].exprs.iter().cloned().collect(),
++            None => vec![Arc::clone(expr)],
++        };
++        let (lhs, rhs) = (members(&left, first_class), members(&right, second_class));
++        let nests = |outer: &Arc<dyn PhysicalExpr>, inner: &Arc<dyn PhysicalExpr>| {
++            outer != inner && outer.exists(|e| Ok(e == inner)).unwrap_or(false)
++        };
++        if lhs
++            .iter()
++            .any(|l| rhs.iter().any(|r| nests(l, r) || nests(r, l)))
++        {
++            return false;
++        }
+         match (first_class, second_class) {
+             (Some(mut first_idx), Some(mut second_idx)) => {
+                 // If the given left and right sides belong to different classes,
+@@ -1108,6 +1127,42 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test]
++    fn test_equality_with_own_sub_expression_is_skipped() -> Result<()> {
++        // `a + b = a` (e.g. from a filter) must not form a class: normalizing
++        // its member `a + b` would rewrite the inner `a` as well.
++        let schema = Schema::new(vec![
++            Field::new("a", DataType::Int32, true),
++            Field::new("b", DataType::Int32, true),
++            Field::new("c", DataType::Int32, true),
++        ]);
++        let col_a = col("a", &schema)?;
++        let col_b = col("b", &schema)?;
++        let col_c = col("c", &schema)?;
++        let a_plus_b = binary(Arc::clone(&col_a), Operator::Plus, col_b, &schema)?;
++
++        let mut eq_group = EquivalenceGroup::default();
++        assert!(
++            !eq_group.add_equal_conditions(Arc::clone(&a_plus_b), Arc::clone(&col_a))
++        );
++        assert!(eq_group.is_empty());
++
++        // Also when the nesting only shows up through an existing class:
++        assert!(eq_group.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_c)));
++        assert!(
++            !eq_group.add_equal_conditions(Arc::clone(&col_c), Arc::clone(&a_plus_b))
++        );
++        assert_eq!(eq_group.len(), 1);
++        assert!(!eq_group.classes[0].contains(&a_plus_b));
++
++        // Normalization stays idempotent:
++        for expr in [col_a, col_c, a_plus_b] {
++            let normal = eq_group.normalize_expr(expr);
++            assert!(normal.eq(&eq_group.normalize_expr(Arc::clone(&normal))));
++        }
++        Ok(())
++    }
++
+     #[test]
+     fn test_contains_any() {
+         let lit_true = Arc::new(Literal::new(ScalarValue::from(true))) as _;
+diff --git a/datafusion/physical-expr/src/equivalence/properties/mod.rs b/datafusion/physical-expr/src/equivalence/properties/mod.rs
+index 1c2d970cc..b823df65e 100644
+--- a/datafusion/physical-expr/src/equivalence/properties/mod.rs
++++ b/datafusion/physical-expr/src/equivalence/properties/mod.rs
+@@ -1522,8 +1522,8 @@ impl Display for EquivalenceProperties {
+ ///
+ /// Range information is calculated as:
+ /// - If it is a `Literal` node, we set the range as a point value. If it is a
+-///   `Column` node, we set the datatype of the range, but cannot give an interval
+-///   for the range, yet.
++///   `Column` node (or another leaf, e.g. a scalar subquery), we set the
++///   datatype of the range, but cannot give an interval for the range, yet.
+ /// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
+ ///   and operator has its own rules on how to propagate the children range.
+ fn update_properties(
+@@ -1545,6 +1545,15 @@ fn update_properties(
+         // A column is the identity mapping of itself, which is trivially
+         // strict:
+         node.data.strictly_order_preserving = true;
++    } else if let Ok(range) = node
++        .expr
++        .data_type(eq_properties.schema())
++        .and_then(|data_type| Interval::make_unbounded(&data_type))
++    {
++        // Any other leaf (e.g. a scalar subquery) has an unknown value of a
++        // known type. A `Null`-typed range would make parents that inspect it
++        // (e.g. `abs`) fail, losing what we know about the whole expression:
++        node.data.range = range;
+     }
+     // Now, check what we know about orderings:
+     let normal_expr = eq_properties
+@@ -1771,4 +1780,28 @@ mod tests {
+ 
+         Ok(())
+     }
++
++    #[test]
++    fn test_leaf_range_has_its_data_type() -> Result<()> {
++        use crate::scalar_subquery::ScalarSubqueryExpr;
++        use datafusion_expr::physical_planning_context::{
++            ScalarSubqueryResults, SubqueryIndex,
++        };
++
++        // A scalar subquery leaf must get a range of its own type: parents
++        // such as `abs` build a zero of the range's type to decide their
++        // ordering, and a `Null`-typed range makes them fail.
++        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
++        let sq: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
++            DataType::Int64,
++            true,
++            SubqueryIndex::new(0),
++            ScalarSubqueryResults::new(1),
++        ));
++        let eq_properties = EquivalenceProperties::new(schema);
++        let properties = eq_properties.get_expr_properties(sq);
++        assert_eq!(properties.range.data_type(), DataType::Int64);
++        assert_eq!(properties.sort_properties, SortProperties::Singleton);
++        Ok(())
++    }
+ }
+diff --git a/datafusion/sqllogictest/test_files/sort_merge_join.slt b/datafusion/sqllogictest/test_files/sort_merge_join.slt
+index 716d6a632..cfeeae813 100644
+--- a/datafusion/sqllogictest/test_files/sort_merge_join.slt
++++ b/datafusion/sqllogictest/test_files/sort_merge_join.slt
+@@ -1083,6 +1083,39 @@ ORDER BY rn;
+ statement ok
+ DROP TABLE t_spm;
+ 
++# The filter `a.c1 + a.c2 = a.c1` equates an expression with one of its own
++# sub-expressions. It must not be used to rewrite the sort for the join keys
++# `(c1, c2)` into a sort that the join no longer recognizes.
++statement ok
++CREATE TABLE t_nest(c0 BIGINT, c1 BIGINT, c2 BIGINT) AS VALUES (1, 2, 0), (2, 2, 0), (3, 5, 1), (4, NULL, 0);
++
++query I rowsort
++SELECT a.c0 FROM t_nest AS a JOIN t_nest AS b ON a.c1 = b.c1 AND a.c2 = b.c2 WHERE a.c1 + a.c2 = a.c1;
++----
++1
++1
++2
++2
++
++statement ok
++DROP TABLE t_nest;
++
++# `abs(<scalar subquery>)` is constant, and so is the join key equal to it, so
++# no sort is needed below the join.
++statement ok
++CREATE TABLE t_abs(c0 BIGINT, c1 BIGINT) AS VALUES (3, 1), (3, 2), (0, 3);
++
++query I rowsort
++SELECT a.c1 FROM t_abs AS a JOIN t_abs AS b ON a.c0 = b.c0 WHERE abs((SELECT count(*) FROM t_abs)) = a.c0;
++----
++1
++1
++2
++2
++
++statement ok
++DROP TABLE t_abs;
++
+ # Config reset
+ statement ok
+ RESET datafusion.optimizer.prefer_hash_join;

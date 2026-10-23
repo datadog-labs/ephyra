@@ -1,0 +1,1 @@
+{"signature":"diff__join_stdout","oracle":"diff","message":"join f1 f2, f1=\"1 \\n\", f2=\"1\\n\" | uu out=\"1 \\n\" | gnu out=\"1\\n\"","seed":"minimal"}

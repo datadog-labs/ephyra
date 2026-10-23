@@ -1,0 +1,42 @@
+--- a/ext/fts5/test/fts5tokendata.test
++++ b/ext/fts5/test/fts5tokendata.test
+@@ -162,6 +162,39 @@
+   do_execsql_test 3.5 {
+     INSERT INTO ft(ft) VALUES('integrity-check');
+   }
++
++  # A query on a prefix index opened while there are pending terms in
++  # memory, followed by a term query in the same expression or the same
++  # statement. Each test first adds a row, so that there are pending terms.
++  reset_db
++  do_execsql_test 4.0 {
++    CREATE VIRTUAL TABLE ft USING fts5(a, tokendata=1, prefix=1,
++      detail=%DETAIL%
++    );
++    INSERT INTO ft(rowid, a) VALUES(1, 'vv aa');
++    BEGIN;
++  }
++
++  do_execsql_test 4.1 {
++    INSERT INTO ft(rowid, a) VALUES(2, 'vv aa');
++    SELECT rowid FROM ft WHERE ft MATCH 'v* AND aa';
++  } {1 2}
++
++  do_execsql_test 4.2 {
++    INSERT INTO ft(rowid, a) VALUES(3, 'vv aa');
++    SELECT rowid FROM ft WHERE ft MATCH 'v* NOT aa';
++  } {}
++
++  do_execsql_test 4.3 {
++    INSERT INTO ft(rowid, a) VALUES(4, 'vv aa');
++    SELECT count(*) FROM ft AS x, ft AS y
++     WHERE x.ft MATCH 'v*' AND y.ft MATCH 'aa';
++  } {16}
++
++  do_execsql_test 4.4 {
++    COMMIT;
++    INSERT INTO ft(ft) VALUES('integrity-check');
++  }
+ }
+ 
+ finish_test

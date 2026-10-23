@@ -1,0 +1,55 @@
+diff --git a/src/uu/uniq/src/uniq.rs b/src/uu/uniq/src/uniq.rs
+index 34c0c04b5..834107afb 100644
+--- a/src/uu/uniq/src/uniq.rs
++++ b/src/uu/uniq/src/uniq.rs
+@@ -176,16 +176,20 @@ impl Uniq {
+     }
+ 
+     fn skip_fields_offset(&self, line: &[u8]) -> usize {
++        // Fields are separated by blanks (space and tab); a newline inside a
++        // NUL-terminated record also separates fields. Other ASCII whitespace
++        // such as '\r' or '\f' is part of a field.
++        let is_sep = |b: u8| matches!(b, b' ' | b'\t' | b'\n');
+         if let Some(skip_fields) = self.skip_fields {
+             let mut idx = 0;
+             for _ in 0..skip_fields {
+-                while idx < line.len() && line[idx].is_ascii_whitespace() {
++                while idx < line.len() && is_sep(line[idx]) {
+                     idx += 1;
+                 }
+                 if idx >= line.len() {
+                     return line.len();
+                 }
+-                while idx < line.len() && !line[idx].is_ascii_whitespace() {
++                while idx < line.len() && !is_sep(line[idx]) {
+                     idx += 1;
+                 }
+                 if idx >= line.len() {
+diff --git a/tests/by-util/test_uniq.rs b/tests/by-util/test_uniq.rs
+index 67b83b5ba..7ed222b51 100644
+--- a/tests/by-util/test_uniq.rs
++++ b/tests/by-util/test_uniq.rs
+@@ -1250,3 +1250,23 @@ fn test_obsolete_skip_fields_not_read_after_double_dash() {
+         .fails()
+         .stderr_contains("-1");
+ }
++
++#[test]
++fn test_skip_fields_only_blanks_separate_fields() {
++    // '\r' and '\f' are not blanks, so "a\rb" is a single field
++    new_ucmd!()
++        .args(&["-f", "1"])
++        .pipe_in("a\rb\nc\rd\n")
++        .succeeds()
++        .stdout_is("a\rb\n");
++    new_ucmd!()
++        .args(&["-f", "1"])
++        .pipe_in("a\x0cb\nc\x0cd\n")
++        .succeeds()
++        .stdout_is("a\x0cb\n");
++    new_ucmd!()
++        .args(&["-z", "-f", "1"])
++        .pipe_in("a\nb\0c\nd\0")
++        .succeeds()
++        .stdout_is("a\nb\0c\nd\0");
++}

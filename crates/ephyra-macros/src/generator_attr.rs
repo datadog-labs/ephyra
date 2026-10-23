@@ -105,7 +105,7 @@ fn plain(sig: &Signature) -> syn::Result<()> {
     if !sig.generics.params.is_empty()
         || sig.generics.where_clause.is_some()
         || sig.asyncness.is_some()
-        || sig.unsafety.is_some()
+        || matches!(sig.safety, syn::Safety::Unsafe(_))
         || sig.constness.is_some()
         || sig.abi.is_some()
         || sig.variadic.is_some()

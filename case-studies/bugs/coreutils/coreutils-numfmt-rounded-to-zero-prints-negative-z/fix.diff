@@ -1,0 +1,55 @@
+diff --git a/src/uu/numfmt/src/format.rs b/src/uu/numfmt/src/format.rs
+index 3c0e005d8..5070231cf 100644
+--- a/src/uu/numfmt/src/format.rs
++++ b/src/uu/numfmt/src/format.rs
+@@ -734,13 +734,17 @@ fn transform_to(
+             s.replacen('.', dec_sep, 1)
+         }
+     };
++    // A negative value that the rounding takes to zero prints as plain zero,
++    // like GNU and like a `-0` input does; only the `--to` display rounding
++    // below keeps the sign.
++    let unsigned_zero = |v: f64| if v == 0.0 { 0.0 } else { v };
+     Ok(match s {
+         None if opts.to == Unit::None && precision <= u16::MAX.into() => localize(format_float(
+-            round_with_precision(i2, round_method, precision),
++            unsigned_zero(round_with_precision(i2, round_method, precision)),
+             precision,
+         )),
+         None if is_precision_specified && precision <= u16::MAX.into() => {
+-            let i2 = round_with_precision(i2, round_method, 0);
++            let i2 = unsigned_zero(round_with_precision(i2, round_method, 0));
+             localize(format_float(i2, precision))
+         }
+         None => localize(format_float(i2, 0)),
+diff --git a/tests/by-util/test_numfmt.rs b/tests/by-util/test_numfmt.rs
+index 9e6158751..9331b0fd1 100644
+--- a/tests/by-util/test_numfmt.rs
++++ b/tests/by-util/test_numfmt.rs
+@@ -295,6 +295,26 @@ fn test_negative_zero() {
+         .stdout_is("0\n0.0");
+ }
+ 
++#[test]
++fn test_negative_value_rounded_to_zero() {
++    new_ucmd!()
++        .args(&["--to-unit=1000", "--round=nearest", "--", "-3"])
++        .succeeds()
++        .stdout_only("0\n");
++    new_ucmd!()
++        .args(&["--round=towards-zero", "--format=%.2f", "--", "-0.003"])
++        .succeeds()
++        .stdout_only("0.00\n");
++    new_ucmd!()
++        .args(&["--round=up", "--format=%05.0f", "--", "-0.3"])
++        .succeeds()
++        .stdout_only("00000\n");
++    new_ucmd!()
++        .args(&["--to=si", "--round=nearest", "--format=%.0f", "--", "-0.3"])
++        .succeeds()
++        .stdout_only("0\n");
++}
++
+ #[test]
+ fn test_no_op() {
+     new_ucmd!()

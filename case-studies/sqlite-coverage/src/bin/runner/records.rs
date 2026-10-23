@@ -12,7 +12,10 @@
 //!   whether it is dirty, the vendored SQLite amalgamation's hash, and the
 //!   runner binary's hash); and the target (the linked SQLite's source id).
 //! - `events.jsonl`: `{"ts", "run", "kind", ..}` per start, stop, crash,
-//!   hang, memory kill, give-up, finding and saved timeout.
+//!   hang, memory kill, give-up, finding and saved timeout. A finding's
+//!   names its example directory (`example`, null past the signature's
+//!   examples) and whether that has an `unshrunk/` copy of the input before
+//!   shrinking (`unshrunk`, a statement error's: [`crate::findings`]).
 //! - `snapshots.jsonl`: `{"ts", "run", "kind": "worker"|"total", ..}`, a
 //!   worker's totals (by oracle too) every 30 seconds, the supervisor's sum
 //!   every minute.
