@@ -1,0 +1,95 @@
+--- a/ext/fts5/fts5_expr.c
++++ b/ext/fts5/fts5_expr.c
+@@ -1052,6 +1052,24 @@
+     int i;
+     for(i=0; i<pNode->nChild; i++){
+       fts5ExprNodeZeroPoslist(pNode->apChild[i]);
++    }
++  }
++}
++
++/*
++** Zero the position lists of the phrases in the subtree rooted at pNode
++** that belong to nodes currently pointing to rowid iRowid. Nodes that
++** point to a different rowid have already been advanced past iRowid
++** (for example the children of an OR node that do not match iRowid),
++** so their position lists belong to that later row and are left as is.
++*/
++static void fts5ExprNodeZeroPoslistAt(Fts5ExprNode *pNode, i64 iRowid){
++  if( pNode->eType==FTS5_STRING || pNode->eType==FTS5_TERM ){
++    if( pNode->iRowid==iRowid ) fts5ExprNodeZeroPoslist(pNode);
++  }else{
++    int i;
++    for(i=0; i<pNode->nChild; i++){
++      fts5ExprNodeZeroPoslistAt(pNode->apChild[i], iRowid);
+     }
+   }
+ }
+@@ -1375,7 +1393,7 @@
+   }while( bMatch==0 );
+ 
+   if( pAnd->bNomatch && pAnd!=pExpr->pRoot ){
+-    fts5ExprNodeZeroPoslist(pAnd);
++    fts5ExprNodeZeroPoslistAt(pAnd, iLast);
+   }
+   pAnd->iRowid = iLast;
+   return SQLITE_OK;
+--- a/ext/fts5/test/fts5aux.test
++++ b/ext/fts5/test/fts5aux.test
+@@ -486,6 +486,56 @@
+   do_catchsql_test 15.3.$tn {
+     SELECT snippet(t1, $iCol, '[', ']', '...', 5) FROM t1('one OR five');
+   } {1 {column index out of range}}
++}
++
++#-------------------------------------------------------------------------
++# When an AND node does not match the current row, the position lists
++# of phrases whose nodes have already advanced to a later row must not
++# be cleared, or those phrases report no instances for the later row.
++#
++reset_db
++do_execsql_test 16.0 {
++  CREATE VIRTUAL TABLE t1 USING fts5(a);
++  INSERT INTO t1(rowid, a) VALUES(1, 'x y'), (2, 'x z');
++}
++
++do_execsql_test 16.1 {
++  SELECT rowid, highlight(t1, 0, '[', ']') FROM t1('x AND (z OR "y x")');
++} {2 {[x] [z]}}
++
++do_execsql_test 16.2 {
++  SELECT rowid, highlight(t1, 0, '[', ']')
++  FROM t1('(x AND (z OR "y x")) OR zz');
++} {2 {[x] [z]}}
++
++do_execsql_test 16.3 {
++  SELECT rowid, highlight(t1, 0, '[', ']')
++  FROM t1('(x AND (z OR "y x")) NOT zz');
++} {2 {[x] [z]}}
++
++do_execsql_test 16.4 {
++  SELECT rowid, highlight(t1, 0, '[', ']')
++  FROM t1('(x AND (z OR "y x")) OR zz') WHERE rowid=2;
++} {2 {[x] [z]}}
++
++do_execsql_test 16.5 {
++  SELECT bm25(t1) = (SELECT bm25(t1) FROM t1('x AND (z OR "y x")'))
++  FROM t1('(x AND (z OR "y x")) OR zz');
++} {1}
++
++foreach {tn detail} {1 full 2 column} {
++  do_execsql_test 16.6.$tn.0 "
++    CREATE VIRTUAL TABLE t2_${tn} USING fts5(a, b, detail=$detail);
++    INSERT INTO t2_${tn}(rowid, a, b) VALUES(1, 'x y', ''), (2, 'x z', '');
++  "
++  do_execsql_test 16.6.$tn.1 "
++    SELECT rowid, highlight(t2_${tn}, 0, '\[', '\]')
++    FROM t2_${tn}('(x AND (z OR b : y)) OR zz');
++  " {2 {[x] [z]}}
++  do_execsql_test 16.6.$tn.2 "
++    SELECT rowid, highlight(t2_${tn}, 0, '\[', '\]')
++    FROM t2_${tn}('(x AND (z OR b : y)) OR zz') ORDER BY rank;
++  " {2 {[x] [z]}}
+ }
+ 
+ finish_test

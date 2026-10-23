@@ -1,0 +1,23 @@
+# name: test/optimizer/statistics/table_filter_true_or_null_case.test
+# group: [statistics]
+
+statement ok
+CREATE TABLE t(b BOOLEAN);
+
+statement ok
+INSERT INTO t VALUES (true), (false);
+
+query I
+SELECT * FROM t WHERE contains(CASE WHEN b THEN 'a' END, 'a');
+----
+true
+
+query I
+SELECT * FROM t WHERE prefix(CASE WHEN b THEN 'a' END, 'a');
+----
+true
+
+query I
+SELECT * FROM t WHERE suffix(CASE WHEN b THEN 'a' END, 'a');
+----
+true

@@ -1,0 +1,60 @@
+--- a/ext/fts5/test/fts5trigram2.test
++++ b/ext/fts5/test/fts5trigram2.test
+@@ -134,4 +134,57 @@
+   SELECT rowid FROM t5 WHERE c1 LIKE 'abc%xyxz'
+ } {2}
+ 
++#-------------------------------------------------------------------------
++# LIKE and GLOB constraints on an UNINDEXED column are not passed to
++# the trigram index, which holds no tokens for that column.
++#
++reset_db
++do_execsql_test 6.0 {
++  CREATE VIRTUAL TABLE t6 USING fts5(a, b UNINDEXED, tokenize=trigram);
++  INSERT INTO t6(rowid, a, b) VALUES(1, 'xyz', 'abcdef');
++  INSERT INTO t6(rowid, a, b) VALUES(2, 'abcdef', 'xyz');
++} {}
++do_execsql_test 6.1 {
++  SELECT rowid FROM t6 WHERE b LIKE '%bcd%'
++} {1}
++do_execsql_test 6.2 {
++  SELECT rowid FROM t6 WHERE b GLOB '*bcd*'
++} {1}
++do_execsql_test 6.3 {
++  SELECT rowid FROM t6 WHERE a LIKE '%bcd%'
++} {2}
++do_execsql_test 6.4 {
++  CREATE VIRTUAL TABLE t7 USING fts5(
++      a, b UNINDEXED, tokenize='trigram case_sensitive 1'
++  );
++  INSERT INTO t7(rowid, a, b) VALUES(1, 'xyz', 'abcdef');
++  SELECT rowid FROM t7 WHERE b GLOB '*bcd*';
++} {1}
++
++do_execsql_test 6.5 {
++  CREATE VIRTUAL TABLE t8 USING fts5(
++      a, b UNINDEXED, tokenize=trigram, detail=none
++  );
++  INSERT INTO t8(rowid, a, b) VALUES(1, 'xyz', 'abcdef');
++  INSERT INTO t8(rowid, a, b) VALUES(2, 'abcdef', 'abcdef');
++  INSERT INTO t8(rowid, a, b) VALUES(3, 'abcdef', 'xyz');
++  SELECT rowid FROM t8 WHERE b LIKE '%bcd%';
++} {1 2}
++do_execsql_test 6.6 {
++  CREATE TABLE src(a, b);
++  INSERT INTO src(rowid, a, b) VALUES(1, 'xyz', 'abcdef');
++  CREATE VIRTUAL TABLE t9 USING fts5(
++      a, b UNINDEXED, content=src, tokenize=trigram
++  );
++  INSERT INTO t9(t9) VALUES('rebuild');
++  SELECT rowid FROM t9 WHERE b LIKE '%bcd%';
++} {1}
++do_execsql_test 6.7 {
++  CREATE VIRTUAL TABLE t10 USING fts5(
++      a, b UNINDEXED, content='', contentless_unindexed=1, tokenize=trigram
++  );
++  INSERT INTO t10(rowid, a, b) VALUES(1, 'xyz', 'abcdef');
++  SELECT rowid FROM t10 WHERE b GLOB '*bcd*';
++} {1}
++
+ finish_test

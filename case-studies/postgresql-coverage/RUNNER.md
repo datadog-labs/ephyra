@@ -52,7 +52,7 @@ reimplemented as a function in `src/bin/runner/model.rs`; keep the two
 equivalent), `norec`, `tlp`, `plans`, `order`, `setops`, `cte`, `window`,
 `generic`, `views`. A worker process is one session: one database `e<pid>_0`
 (ephyra-postgresql's `pg.rs`; databases of dead workers are dropped when
-the next one connects). After 5000 inputs (`worker::RENEW_EVERY`;
+the next one connects). After 500 inputs (`worker::RENEW_EVERY`;
 `EPHYRA_RUNNER_RENEW_EVERY` overrides it) a worker saves its totals, closes
 its session and exits with `RENEW_EXIT`, and the supervisor starts it again
 at once (an event `worker_renew`, no record, no restart counted): a backend

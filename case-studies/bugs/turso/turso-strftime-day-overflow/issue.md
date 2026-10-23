@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9969 (https://github.com/tursodatabase/turso/issues/9969) (line 1 corrected 2026-10-21).
 Title: strftime() prints an overflowing day as is (2024-02-30); date() and SQLite normalize it to 2024-03-01
 
 ```sql

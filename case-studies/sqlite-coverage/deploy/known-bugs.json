@@ -102,7 +102,7 @@
         "strip": 1,
         "dir": "."
       },
-      "repro": "bugs/sqlite/sqlite-partial-index-constant-affinity/check.sql",
+      "repro": "bugs/sqlite/sqlite-partial-index-constant-affinity/check-v2.sql",
       "expected": "q1\n5.0\nq2\n1\nq3\ninteger\nq4\nreal\nq5\ninteger\n"
     },
     {
@@ -184,7 +184,7 @@
     {
       "name": "sqlite-propagate-const-real-minint",
       "folder": "bugs/sqlite/sqlite-propagate-const-real-minint",
-      "summary": "WHERE b = -9223372036854775808.0 AND typeof(b) = 'integer' (or a text use of b) misses a row whose INT column b holds the INTEGER -2^63, and the REAL the other way round: constant propagation codes the constant plus OP_Affinity, which leaves REAL -2^63 a REAL (since 3.25.0 with a join, 3.36.0 on one table; not reported) Our own fix (fix-trunk.diff, 2026-10-16) for the fixed target; not upstream.",
+      "summary": "WHERE b = -9223372036854775808.0 AND typeof(b) = 'integer' (or a text use of b) missed a row whose INT column b holds the INTEGER -2^63, and a stored REAL -2^63 the other way round: constant propagation codes the constant plus OP_Affinity, which left REAL -2^63 a REAL (since 3.25.0 with a join, 3.36.0 on one table; not reported). Upstream's bFromText change (sqlite3VdbeIntegerAffinity converts REAL -2^63 to INTEGER unless from text; between 3769f60be38b and 03f699544e6b) fixed the INTEGER direction (check q1, q2, q4); still open for a REAL -2^63 stored in an INT/NUMERIC column (from the text '-9223372036854775808.0' or an older database): `b = -9223372036854775808 AND typeof(b) = 'real'` misses it (q3). The check is check-v2.sql (q3 inserts the text, since 03f699544e6b stores the REAL literal as INTEGER): 3769f60be38b 0 0 0 0, 03f699544e6b 1 1 0 1. Our own fix (fix-trunk.diff, 2026-10-16) for the fixed target; not upstream.",
       "status": "open",
       "fix": {
         "path": "bugs/sqlite/sqlite-propagate-const-real-minint/fix-trunk.diff",
@@ -199,7 +199,7 @@
           "(?is)(?:(?:\\b(?:typeof|lower|upper|length|hex|quote|substr|instr|printf|format|unicode|trim|ltrim|rtrim|replace)\\(\\s*|\\|\\|\\s*\\(?\\s*)(?P<c>\\b(?:a\\d+\\.)?c\\d+\\b)|(?P<d>\\b(?:a\\d+\\.)?c\\d+\\b)\\s*(?:\\|\\||\\s+(?:NOT\\s+)?(?:LIKE|GLOB)\\b)|CAST\\(\\s*(?P<e>\\b(?:a\\d+\\.)?c\\d+\\b)\\s+AS\\s+TEXT\\b).*?(?:(?:(?P=c)\\s*\\)?\\s*(?:==?|IS)\\s*\\(?\\s*-\\s*(?:9223372036854775808\\.0|9\\.223372036854776e\\+?18)\\b|\\(?\\s*-\\s*(?:9223372036854775808\\.0|9\\.223372036854776e\\+?18)\\b\\s*\\)?\\s*(?:==?|IS)\\s*\\(?\\s*(?P=c)\\b)|(?:(?P=d)\\s*\\)?\\s*(?:==?|IS)\\s*\\(?\\s*-\\s*(?:9223372036854775808\\.0|9\\.223372036854776e\\+?18)\\b|\\(?\\s*-\\s*(?:9223372036854775808\\.0|9\\.223372036854776e\\+?18)\\b\\s*\\)?\\s*(?:==?|IS)\\s*\\(?\\s*(?P=d)\\b)|(?:(?P=e)\\s*\\)?\\s*(?:==?|IS)\\s*\\(?\\s*-\\s*(?:9223372036854775808\\.0|9\\.223372036854776e\\+?18)\\b|\\(?\\s*-\\s*(?:9223372036854775808\\.0|9\\.223372036854776e\\+?18)\\b\\s*\\)?\\s*(?:==?|IS)\\s*\\(?\\s*(?P=e)\\b))"
         ]
       },
-      "repro": "bugs/sqlite/sqlite-propagate-const-real-minint/check.sql",
+      "repro": "bugs/sqlite/sqlite-propagate-const-real-minint/check-v2.sql",
       "expected": "q1\n1\nq2\n1\nq3\n1\nq4\n1\n"
     },
     {
@@ -488,14 +488,19 @@
       "name": "sqlite-fts5-unindexed-detail-none-instances",
       "folder": "bugs/sqlite/sqlite-fts5-unindexed-detail-none-instances",
       "summary": "With detail=none or detail=column, fts5CsrPoslist (fts5_main.c) builds the aux-function position lists by tokenizing every column, UNINDEXED ones included, while fts5ApiColumnSize reports 0 tokens for an UNINDEXED column: snippet(tbl, -1, ..) fails with 'database disk image is malformed' (fts5SnippetFunction's io>nDocsize check) when a matched term occurs in an UNINDEXED value after its first token; highlight() of the UNINDEXED column marks the term and bm25() counts it (differs from detail=full). Integrity checks pass. 3.51.0, 3.53.4 and trunk; found in ephyra-sqlite round fts-rtree (qscore seed 4 input 2085, seed 1 input 2499)",
-      "status": "open",
+      "status": "fixed",
       "fix": {
         "path": "bugs/sqlite/sqlite-fts5-unindexed-detail-none-instances/fix.diff",
         "strip": 1,
         "dir": "."
       },
       "repro": "bugs/sqlite/sqlite-fts5-unindexed-detail-none-instances/check.sql",
-      "expected": "q1\none two [zeta]..\nq2\nx y zeta\nq3\none two [zeta]..\nq4\n1|-6.814159e-07\n2|-1.305085e-06\nq5\n1|-6.814159e-07\n2|-1.305085e-06\n"
+      "expected": "q1\none two [zeta]..\nq2\nx y zeta\nq3\none two [zeta]..\nq4\n1|-6.814159e-07\n2|-1.305085e-06\nq5\n1|-6.814159e-07\n2|-1.305085e-06\n",
+      "fixed_in": {
+        "checkin": null,
+        "how": "upstream, after our bug-forum report of 2026-10-21; between trunk fa0247a431bd (16:56) and 9eafe6158d10 (20:53), with a change of its own (our fix.diff no longer applies: build-fixed.sh skipped it); check-in id not looked up",
+        "trunk": "9eafe6158d10 (2026-10-21 20:53): pretriage --check-bugs reports it fixed and the check prints its expected output on the workspace's trunk CLI"
+      }
     },
     {
       "name": "sqlite-geopoly-rowid-eq-nonint",
@@ -646,6 +651,110 @@
       },
       "repro": "bugs/sqlite/sqlite-fts5-secure-delete-dlidx-walks-next-term/check.sql",
       "expected": "q1|\nq2|10\nq3|\nq4|30\n"
+    },
+    {
+      "name": "sqlite-fts5-near-nomatch-stale-poslist",
+      "folder": "bugs/sqlite/sqlite-fts5-near-nomatch-stale-poslist",
+      "summary": "fts5ExprNearTest (fts5_expr.c, detail=full) stops at the first NEAR phrase that does not match a row, leaving the earlier phrases with this row's rebuilt position lists and the later ones with an older row's, and sqlite3Fts5ExprPoslist ignores the group's bNomatch: when an OR/NOT sibling matches the row (NEAR(...) OR x, x NOT NEAR(...); NEAR with 2+ phrases and a column filter or a multi-token phrase), highlight()/snippet()/bm25()/ORDER BY rank report stale instances, and snippet() can fail with 'database disk image is malformed' (an offset past the column's end). Integrity checks pass. 3.46.0 to trunk; found by the runner (run 20261021-2000, norec, snippet(vt1, -1, ..) in a materialized CTE). Its fix and sqlite-fts5-and-nomatch-clears-later-row's fix-combined.diff apply in either order",
+      "status": "open",
+      "fix": {
+        "path": "bugs/sqlite/sqlite-fts5-near-nomatch-stale-poslist/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "bugs/sqlite/sqlite-fts5-near-nomatch-stale-poslist/check.sql",
+      "expected": "q1|1:[h] e d [c],2:p q s t u\nq2|[r] h d c\n"
+    },
+    {
+      "name": "sqlite-drop-constraint-fk-set-default",
+      "folder": "bugs/sqlite/sqlite-drop-constraint-fk-set-default",
+      "summary": "ALTER TABLE .. DROP CONSTRAINT of a named foreign key: getConstraint (alter.c) ends the constraint at the first token of its stop set and, for REFERENCES, skips only the table name, so it stops inside the FK clause at the DEFAULT of ON DELETE/UPDATE SET DEFAULT, the NOT of NOT DEFERRABLE, or a MATCH name GENERATED; dropConstraintFunc deletes only up to there: SET DEFAULT and a table-level NOT DEFERRABLE fail with 'error in table c after drop constraint', a column NOT DEFERRABLE stays behind and applies to the table's previous FK (a deferred FK becomes immediate), MATCH generated leaves a new column 'generated' (table FK) or a declared type (column FK). 3.54.0 (FK constraints droppable since then) to trunk; found while extending the generator to DROP CONSTRAINT in ephyra-sqlite round constraints-json (reading getConstraint). Its fix and sqlite-drop-not-null-not-deferrable's touch the same functions and apply in either order",
+      "status": "open",
+      "fix": {
+        "path": "bugs/sqlite/sqlite-drop-constraint-fk-set-default/fix-v2.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "bugs/sqlite/sqlite-drop-constraint-fk-set-default/check.sql",
+      "expected": "q1|CREATE TABLE c1(x, y)\nq2|CREATE TABLE c2(w REFERENCES p DEFERRABLE INITIALLY DEFERRED, x, y)\nq3|CREATE TABLE c3(x, y)\nq5|CREATE TABLE c5(x, y)\n"
+    },
+    {
+      "name": "sqlite-drop-not-null-not-deferrable",
+      "folder": "bugs/sqlite/sqlite-drop-not-null-not-deferrable",
+      "summary": "ALTER TABLE .. ALTER COLUMN .. DROP NOT NULL: dropConstraintFunc (alter.c) takes the column's first NOT (or a named constraint starting with NOT) for the NOT NULL without checking NULL follows, so it removes NOT DEFERRABLE instead and reports success with the column still NOT NULL; and getConstraint does not stop at DEFERRABLE, so removing a NOT NULL (DROP/SET NOT NULL) or a named CHECK/NOT NULL (DROP CONSTRAINT) also removes a following DEFERRABLE INITIALLY DEFERRED, which belongs to the column's FK: the FK silently becomes immediate. 3.53.2, 3.53.4, 3.54.0 and trunk (no DROP NOT NULL before 3.53); split out of sqlite-drop-constraint-fk-set-default by its independent review. Both fixes apply in either order",
+      "status": "open",
+      "fix": {
+        "path": "bugs/sqlite/sqlite-drop-not-null-not-deferrable/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "bugs/sqlite/sqlite-drop-not-null-not-deferrable/check.sql",
+      "expected": "q1|CREATE TABLE c1(x REFERENCES p NOT DEFERRABLE, y)\nq2|CREATE TABLE c2(x REFERENCES p DEFERRABLE INITIALLY DEFERRED, y)\nq3|CREATE TABLE c3(x REFERENCES p DEFERRABLE INITIALLY DEFERRED, y)\nq4|CREATE TABLE c4(x REFERENCES p DEFERRABLE INITIALLY DEFERRED NOT NULL, y)\n"
+    },
+    {
+      "name": "sqlite-fts5-and-nomatch-clears-later-row",
+      "folder": "bugs/sqlite/sqlite-fts5-and-nomatch-clears-later-row",
+      "summary": "fts5ExprNodeTest_AND (fts5_expr.c) zeroes every descendant's position list when a non-root AND fails on a row because an operand has the terms without matching (phrase, NEAR group, column filter), though a phrase under an OR or a NOT's right side below it may already sit on a later row the query returns: there highlight()/snippet()/bm25()/ORDER BY rank (detail=full) miss that phrase's instances. The fix is fix-combined.diff, which also fixes sqlite-fts5-not-eof-rhs-instances (no entry of its own: a NOT whose left side is at EOF from the first row never runs fts5ExprNodeTest_NOT, so its right side reports instances, `g OR (zz NOT b)` highlights b); check-combined.sql checks both (q1-q2 AND, q3-q4 NOT). Integrity checks pass. 3.46.0 to trunk; found by the independent review's randomized differential of the sqlite-fts5-near-nomatch-stale-poslist fix, which applies with it in either order",
+      "status": "open",
+      "fix": {
+        "path": "bugs/sqlite/sqlite-fts5-and-nomatch-clears-later-row/fix-combined.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "bugs/sqlite/sqlite-fts5-and-nomatch-clears-later-row/check-combined.sql",
+      "expected": "q1|[x] [z]\nq2|[x] [z]\nq3|[g] b\nq4|[g] b\n"
+    },
+    {
+      "name": "sqlite-fts5vocab-rowid-or-right-join",
+      "folder": "bugs/sqlite/sqlite-fts5vocab-rowid-or-right-join",
+      "summary": "fts5vocab (fts5_vocab.c): fts5VocabResetCursor restarts the rowid at 0 on every xFilter, and a scan for term = ? / term >= ? starts at that term, so the same row has different rowids in different scans; the core's MULTI-INDEX OR dedup (OP_RowSetTest) and RIGHT/FULL JOIN unmatched-row tracking key on the rowid: `term = 'banana' OR term < 'c'` returns banana twice and loses apple, `t RIGHT JOIN v` loses rows and reports matched ones as unmatched. Row, col and instance tables, every detail mode (fts4aux has the same bug, not in this fix). 3.46.0 to trunk; found by the runner (run 20261021-2138, cte oracle, cte-materialized, w8-10232). Its fix and sqlite-fts5vocab-term-range-utf16-order's apply in either order",
+      "status": "open",
+      "fix": {
+        "path": "bugs/sqlite/sqlite-fts5vocab-rowid-or-right-join/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "bugs/sqlite/sqlite-fts5vocab-rowid-or-right-join/check.sql",
+      "expected": "q1|2|2|apple\nq2|apple banana\n"
+    },
+    {
+      "name": "sqlite-fts5-trigram-like-unindexed",
+      "folder": "bugs/sqlite/sqlite-fts5-trigram-like-unindexed",
+      "summary": "FTS5 trigram tokenizer: LIKE/GLOB on an UNINDEXED column return no rows: fts5BestIndexMethod (fts5_main.c) passes the pattern to xFilter as L<col>/G<col> without checking abUnindexed, and the pattern expression on a column with no tokens matches nothing (a literal run of 3+ characters; LIKE with case_sensitive 0, GLOB either; external content, contentless_unindexed, detail=none, locale=1 too; `+b LIKE p` is right). 3.46.0 to trunk (probably since 3.34.0's trigram pattern pushdown); found by the runner (run 20261022-0005, norec, gen+wal w13-51224)",
+      "status": "open",
+      "fix": {
+        "path": "bugs/sqlite/sqlite-fts5-trigram-like-unindexed/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "bugs/sqlite/sqlite-fts5-trigram-like-unindexed/check.sql",
+      "expected": "q1\n1\nq2\n1\nq3\n1\nq4\n1\n"
+    },
+    {
+      "name": "sqlite-wr-multi-or-seekscan",
+      "folder": "bugs/sqlite/sqlite-wr-multi-or-seekscan",
+      "summary": "A MULTI-INDEX OR on a WITHOUT ROWID table misses rows when an OR-term's IN on the second key column is coded with OP_SeekScan (stat1 says the = prefix matches few rows): wherecode.c emits the OP_NullRow that makes SeekScan's first iteration seek only for iLevel>0, but OR sub-loops are coded at level 0 and share the never-reopened table cursor, which an earlier OR-term or outer iteration left past the IN's keys, so SeekScan concludes no match (`a = 2 OR (a = 1 AND b IN (1, 2))` loses (1,1)). Rowid tables escape (OP_ReopenIdx). 3.35.0 to trunk (since OP_SeekScan, 4a43430fd23f8835); found by the NoREC oracle (candidate sqlite-semantic-depth/sqlite-wr-multi-or-in-misses-row)",
+      "status": "open",
+      "fix": {
+        "path": "bugs/sqlite/sqlite-wr-multi-or-seekscan/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "bugs/sqlite/sqlite-wr-multi-or-seekscan/check.sql",
+      "expected": "q1|2\nq2|3\n"
+    },
+    {
+      "name": "sqlite-rename-column-ipk-unique",
+      "folder": "bugs/sqlite/sqlite-rename-column-ipk-unique",
+      "summary": "ALTER TABLE .. RENAME COLUMN of a single-column INTEGER PRIMARY KEY named in a UNIQUE table constraint fails with 'error in table t after rename: no such column: c' (rolled back): the UNIQUE's column resolved to iColumn -1 or the column index depending on whether it came after or before the PRIMARY KEY clause, and renameColumnExprCb (alter.c) matches only one of them (WITHOUT ROWID with UNIQUE after the key; rowid table with UNIQUE before it). Error only, no wrong schema. 3.25.0 to trunk; found in ephyra-sqlite round xfer-grammar (seed 720)",
+      "status": "open",
+      "fix": {
+        "path": "bugs/sqlite/sqlite-rename-column-ipk-unique/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "bugs/sqlite/sqlite-rename-column-ipk-unique/check.sql",
+      "expected": "q1|CREATE TABLE t1(z INTEGER, PRIMARY KEY(z), UNIQUE(z)) WITHOUT ROWID\nq2|CREATE TABLE t2(z INTEGER, d, UNIQUE(d, z), PRIMARY KEY(z))\n"
     }
   ]
 }

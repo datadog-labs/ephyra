@@ -107,7 +107,7 @@ use std::cmp::Ordering;
 
 use crate::{
     model::{column_coll, column_value, compare_coll, numeric_text, real_text, store, stored, unique_ok, Action, Cons, Db, Rule, Step, Term, ColType, Coll, Encoding, ForeignKey, Key, Model, Named, Numeric, Row, Table, Value, DECLS, MAX_COLUMNS},
-    statements::{literal, CmpOp, Excluded, Insert, Journal, NewColumn, Pred, Reindex, Resolve, Stat, StatOf, Statement, Update},
+    statements::{literal, CmpOp, Excluded, Insert, Journal, NewColumn, Pred, Reindex, Resolve, Stat, StatOf, Statement, Update, KeyTo},
 };
 
 pub use crate::model::{affinity, Affinity};
@@ -294,6 +294,66 @@ fn insert_shape_ok(t: &Table, ins: &Insert) -> bool {
             Key::WithoutRowid(pk) => pk.iter().all(|&c| listed(c)),
             _ => true,
         }
+}
+
+/// The rows of `INSERT INTO t SELECT * FROM t{from}`: every column of
+/// each row of table `from`, in its order.
+pub fn copy_rows(m: &Model, from: usize) -> Vec<Vec<Value>> {
+    let t = &m.tables[from];
+    t.rows.iter().map(|r| (0..t.columns).map(|c| column_value(t, r, c)).collect()).collect()
+}
+
+/// Whether an `INSERT INTO t{d} SELECT * FROM t{s}` ([`Insert::copy`]) is
+/// one the model knows the outcome of, whatever path SQLite takes (its
+/// transfer optimization copies the records of `s` in rowid order where
+/// the shapes agree, and only into an empty table under some conditions;
+/// else it inserts the rows as selected, in the order the planner reads
+/// them): its rows are those of `s` now, every column of `d` listed, no
+/// generated column in either table (SQLite counts them apart from
+/// the transfer optimization), no trigger on `d` and no foreign key
+/// linking it while they are on, no RETURNING or UPSERT, a spelling of
+/// the SELECT ([`Insert::copy_form`]) that names `s` and its schema and
+/// keeps every row (DISTINCT and GROUP BY of one row); the rows inserted alone into an
+/// empty `d` would all go in (no two of them conflict, each meets the NOT
+/// NULL constraints and checks), so that the order SQLite inserts them in
+/// does not matter, under any conflict resolution; and a row's rowid does
+/// not depend on that order either: `d` has an INTEGER PRIMARY KEY (no
+/// NULL for it, a new rowid then) or is WITHOUT ROWID, or it is a rowid
+/// table without an index (the transfer optimization then takes new
+/// rowids as an INSERT does, where it keeps them otherwise) and there is
+/// at most one row.
+pub fn copy_ok(m: &Model, ins: &Insert) -> bool {
+    let Some(s) = ins.copy else {
+        return true;
+    };
+    let (Some(d), Some(src)) = (m.tables.get(ins.table), m.tables.get(s)) else {
+        return false;
+    };
+    s != ins.table
+        && d.columns == src.columns
+        && d.generated.iter().chain(&src.generated).all(Option::is_none)
+        && !ins.rowid
+        && ins.columns.iter().copied().eq(0..d.columns)
+        && ins.upsert.is_empty()
+        && ins.returning.is_none()
+        && !ins.select
+        && usize::from(ins.copy_form) < crate::statements::COPY_FORMS.len()
+        && match ins.copy_form {
+            2 => src.db == Db::Main,
+            3 => src.db == Db::Temp,
+            4 => src.db == Db::Aux,
+            15 | 16 => ins.rows.len() == 1,
+            _ => true,
+        }
+        && !has_rules(m, ins.table)
+        && !fk_relevant(m, ins.table)
+        && match d.key {
+            Key::IntegerPrimaryKey(k) => ins.rows.iter().all(|r| r[k] != Value::Null),
+            Key::WithoutRowid(_) => true,
+            Key::Rowid => d.indexes.is_empty() && ins.rows.len() <= 1,
+        }
+        && ins.rows == copy_rows(m, s)
+        && inserted_rows(&Table { rows: Vec::new(), ..d.clone() }, &Insert { or: None, upsert: Vec::new(), copy: None, ..ins.clone() }, m.encoding).is_some()
 }
 
 /// The rows an INSERT adds to `t`, in statement order, with their rowids
@@ -698,10 +758,136 @@ pub fn resolve_from(m: &Model, u: &Update) -> Option<Update> {
     Some(plain)
 }
 
+/// An UPDATE that also sets the table's key ([`crate::statements::KeySet`])
+/// applied to `m`: its effect, or `None` when SQLite would not run it as
+/// the model has it. Only on a table that no foreign key links and no
+/// trigger with a body watches (`has_rules`), without FROM, its other sets
+/// as a plain UPDATE's (no key column, no generated one). Each row the
+/// filter selects gets its new key (a literal only for one row at most;
+/// `k + n` and `-k` of a rowid without overflow, which SQLite's
+/// `OP_MustBeInt` would refuse as a real); a new key that another row holds
+/// (before or after: SQLite moves the rows one by one in an order of its
+/// own) fails, unless one row moves under IGNORE (left as it was) or
+/// REPLACE (the row in the way deleted first), by `OR x` or the key's ON
+/// CONFLICT. No other UNIQUE index may conflict and every CHECK must hold
+/// on the rows written, so that the order SQLite checks constraints in
+/// (an IPK REPLACE deferred until last) does not matter.
+pub fn key_update(m: &mut Model, u: &Update) -> Option<Effect> {
+    let key = u.key.as_ref()?;
+    let enc = m.encoding;
+    let k = u.table;
+    let t = m.tables.get(k)?;
+    let rowid = match (&t.key, key.column) {
+        (Key::Rowid | Key::IntegerPrimaryKey(_), None) => true,
+        // The INTEGER PRIMARY KEY column itself, nothing else: a set of
+        // another column (one a smaller or mutated file no longer has, or
+        // no longer as its key) is not a key set.
+        (Key::IntegerPrimaryKey(c), Some(x)) if *c == x => true,
+        (Key::WithoutRowid(pk), Some(x)) => {
+            if !pk.contains(&x) {
+                return None;
+            }
+            false
+        },
+        _ => return None,
+    };
+    let linked = !t.fks.is_empty() || m.tables.iter().any(|o| o.fks.iter().any(|f| f.parent == k));
+    let cols: Vec<usize> = u.sets.iter().map(|(c, _)| *c).collect();
+    let shape = !cols.is_empty()
+        && distinct(&cols)
+        && u.from.is_none()
+        && !linked
+        && !has_rules(m, k)
+        && u.or != Some(Resolve::ReplaceInto)
+        && returning_ok(t, &u.returning)
+        && u.sets.iter().all(|(c, v)| *c < t.columns && !is_key(t, *c) && t.generated[*c].is_none() && convert(t, *c, v).is_some() && !crate::model::reads_as_now(v))
+        && u.filter.as_ref().is_none_or(|p| pred_valid(t, p));
+    if !shape {
+        return None;
+    }
+    let hits: Vec<usize> = (0..t.rows.len()).filter(|&i| selects(t, &t.rows[i], &u.filter, enc)).collect();
+    if matches!(key.to, KeyTo::Lit(_)) && hits.len() > 1 {
+        return None;
+    }
+    let sets: Vec<(usize, Value)> = u.sets.iter().map(|(c, v)| Some((*c, convert(t, *c, v)?))).collect::<Option<_>>()?;
+    let mut moved: Vec<Row> = Vec::with_capacity(hits.len());
+    for &i in &hits {
+        let mut r = t.rows[i].clone();
+        for (c, v) in &sets {
+            r.values[*c] = v.clone();
+        }
+        if rowid {
+            r.rowid = match &key.to {
+                KeyTo::Lit(Value::Int(n)) => *n,
+                KeyTo::Lit(_) => return None,
+                KeyTo::Plus(n) => r.rowid.checked_add(*n)?,
+                KeyTo::Neg => r.rowid.checked_neg()?,
+            };
+        } else {
+            let (KeyTo::Lit(v), Some(c)) = (&key.to, key.column) else {
+                return None;
+            };
+            let v = convert(t, c, v)?;
+            if v == Value::Null || crate::model::reads_as_now(&v) {
+                return None;
+            }
+            r.values[c] = v;
+        }
+        regenerate(t, &mut r);
+        moved.push(r);
+    }
+    // Rows in the way: any other row's old key, any other moved row's new.
+    let clash = |a: &Row, b: &Row| key_order(t, a, b, enc) == Ordering::Equal;
+    let mut gone: Option<usize> = None;
+    for (n, r) in moved.iter().enumerate() {
+        let p = hits[n];
+        if moved.iter().enumerate().any(|(j, o)| j != n && clash(o, r)) {
+            return None;
+        }
+        for (q, o) in t.rows.iter().enumerate() {
+            if q != p && clash(o, r) {
+                if hits.len() > 1 || gone.is_some() {
+                    return None;
+                }
+                gone = Some(q);
+            }
+        }
+    }
+    let others = |skip: &[usize]| -> Vec<Row> { t.rows.iter().enumerate().filter(|(q, _)| !hits.contains(q) && !skip.contains(q)).map(|(_, r)| r.clone()).collect() };
+    let all: Vec<Row> = others(&[]).into_iter().chain(moved.iter().cloned()).collect();
+    // No UNIQUE index conflict with any row but the moved ones themselves
+    // (the row in the way included), every CHECK true.
+    if !checks_hold(t, &moved, enc) || !unique_rows(t, &all, enc) {
+        return None;
+    }
+    let mut rows = match gone {
+        None => all,
+        Some(q) => match u.or.or(if t.key == Key::Rowid { None } else { t.key_conflict }) {
+            Some(Resolve::Ignore) => return Some(Effect { rows: None, written: 0 }),
+            Some(Resolve::Replace) => others(&[q]).into_iter().chain(moved.iter().cloned()).collect(),
+            _ => return None,
+        },
+    };
+    let n = moved.len();
+    let t = &mut m.tables[k];
+    rows.sort_by(|a, b| key_order(t, a, b, enc));
+    t.rows = rows;
+    renumber(t);
+    Some(Effect { rows: None, written: n })
+}
+
 pub fn valid(m: &Model, s: &Statement) -> bool {
     if let Statement::Update(u) = s {
+        if u.key.is_some() {
+            return key_update(&mut scratch(m), u).is_some();
+        }
         if u.from.is_some() {
             return resolve_from(m, u).is_some_and(|p| valid(m, &Statement::Update(p)));
+        }
+    }
+    if let Statement::Insert(i) = s {
+        if !copy_ok(m, i) {
+            return false;
         }
     }
     if row_by_row(m, s) {
@@ -720,8 +906,9 @@ fn valid_plain(m: &Model, s: &Statement) -> bool {
         }),
         // No value SQLite's date functions read as the current time
         // (`crate::model::reads_as_now`): an expression index of one fails.
-        Statement::Insert(ins) => table(ins.table)
-            .is_some_and(|t| returning_ok(t, &ins.returning) && ins.rows.iter().flatten().all(|v| !crate::model::reads_as_now(v)) && inserted_rows(t, ins, m.encoding).is_some()),
+        Statement::Insert(ins) => table(ins.table).is_some_and(|t| {
+            returning_ok(t, &ins.returning) && ins.rows.iter().flatten().all(|v| !crate::model::reads_as_now(v)) && copy_ok(m, ins) && inserted_rows(t, ins, m.encoding).is_some()
+        }),
         Statement::Update(u) => table(u.table).is_some_and(|t| {
             let cols: Vec<usize> = u.sets.iter().map(|(c, _)| *c).collect();
             !cols.is_empty()
@@ -2108,6 +2295,7 @@ fn view_write(m: &mut Model, v: usize, s: &Statement) -> Option<usize> {
                 && i.rows.iter().all(|r| r.len() == i.columns.len() && r.iter().all(|v| sql_safe(v) && !crate::model::reads_as_now(v)))
                 && i.or.is_none()
                 && i.upsert.is_empty()
+                && i.copy.is_none()
                 && i.returning.is_none();
             if !ok {
                 return None;
@@ -2137,6 +2325,7 @@ fn view_write(m: &mut Model, v: usize, s: &Statement) -> Option<usize> {
                 && u.sets.iter().all(|(c, v)| cols.contains(c) && sql_safe(v) && !crate::model::reads_as_now(v))
                 && u.filter.as_ref().is_none_or(in_view)
                 && u.or.is_none()
+                && u.key.is_none()
                 && u.returning.is_none();
             if !ok {
                 return None;
@@ -2252,6 +2441,9 @@ fn delete_each(m: &mut Model, d: &crate::statements::Delete, events: &mut Vec<(R
 /// Apply a statement [`valid`] against `m` to it.
 pub fn apply(m: &mut Model, s: &Statement) -> Effect {
     if let Statement::Update(u) = s {
+        if u.key.is_some() {
+            return key_update(m, u).expect("a valid UPDATE of a key");
+        }
         if u.from.is_some() {
             let plain = resolve_from(m, u).expect("a valid UPDATE FROM");
             return apply(m, &Statement::Update(plain));
@@ -3026,6 +3218,69 @@ mod tests {
             );
             assert_eq!(m.tables[0].rows.len(), 1);
         }
+    }
+
+    /// An UPDATE that moves rows by their key (`key_update`): to a free
+    /// key, onto another row's (an error, or skipped, or replacing it, by
+    /// `OR x` or the key's ON CONFLICT), every row shifted or negated, a
+    /// literal for several rows (the second fails).
+    #[test]
+    fn key_sets_move_rows_as_sqlite_does() {
+        use crate::{
+            model::{Key, Table},
+            statements::{Insert, KeySet, KeyTo, Pred, CmpOp, Resolve, Statement, Update},
+        };
+        let t = Table::new(2, Key::IntegerPrimaryKey(0));
+        let mut w = Table::new(2, Key::WithoutRowid(vec![0]));
+        w.key_conflict = Some(Resolve::Ignore);
+        let ins = |table, rows: Vec<Vec<Value>>| Statement::Insert(Insert { table, columns: vec![0, 1], rows, ..Default::default() });
+        let up = |table, or, column, to, at: Option<i64>| {
+            Statement::Update(Update { table, sets: vec![(1, Value::Text("x".into()))], filter: at.map(|v| Pred::Cmp(0, CmpOp::Eq, Value::Int(v))), or, key: Some(KeySet { column, to }), ..Default::default() })
+        };
+        let three = |table| ins(table, (1..=3).map(|k| vec![Value::Int(k), Value::Int(k * 10)]).collect());
+        let m = agree(
+            vec![t, w],
+            Vec::new(),
+            &[
+                three(0),
+                three(1),
+                up(0, None, Some(0), KeyTo::Lit(Value::Int(10)), Some(1)),
+                up(0, None, None, KeyTo::Lit(Value::Int(2)), Some(10)),
+                up(0, Some(Resolve::Ignore), Some(0), KeyTo::Lit(Value::Int(2)), Some(10)),
+                up(0, Some(Resolve::Replace), None, KeyTo::Lit(Value::Int(2)), Some(10)),
+                up(0, None, None, KeyTo::Plus(1000), None),
+                up(0, None, Some(0), KeyTo::Neg, None),
+                up(0, None, None, KeyTo::Lit(Value::Int(7)), None),
+                up(1, None, Some(0), KeyTo::Lit(Value::Int(3)), Some(1)),
+                up(1, Some(Resolve::Replace), Some(0), KeyTo::Lit(Value::Int(3)), Some(1)),
+                up(1, None, Some(0), KeyTo::Lit(Value::Text("k".into())), Some(2)),
+            ],
+        );
+        assert_eq!(m.tables[0].rows.iter().map(|r| r.rowid).collect::<Vec<_>>(), vec![-1003, -1002]);
+        assert_eq!(m.tables[1].rows.len(), 2);
+    }
+
+    /// A key set names the table's key column and nothing else: on
+    /// `t(c0, c1, c2, c3, c4 INTEGER PRIMARY KEY)` only c4 (or the rowid),
+    /// on a WITHOUT ROWID table only a column of its PRIMARY KEY, on a
+    /// rowid table none, whether or not a row is selected (run
+    /// 20261022-0005 window w8-5004: a shrunk file's IPK moved from c5 to
+    /// c4, `SET c5 = 5` stayed valid on an empty table and SQLite said `no
+    /// such column: c5`).
+    #[test]
+    fn key_sets_only_of_the_key_column() {
+        use crate::{
+            model::{Encoding, Key, Model, Table},
+            semantics::valid,
+            statements::{KeySet, KeyTo, Statement, Update},
+        };
+        let tables = vec![Table::new(5, Key::IntegerPrimaryKey(4)), Table::new(3, Key::WithoutRowid(vec![0, 1])), Table::new(2, Key::Rowid)];
+        let m = Model { encoding: Encoding::Utf8, tables, views: Vec::new(), triggers: Vec::new(), savepoints: Vec::new(), foreign_keys: true, rules: Vec::new(), recursive_triggers: false, session: crate::model::Session::default(), vtabs: Vec::new() };
+        let up = |table, set, column| Statement::Update(Update { table, sets: vec![(set, Value::Int(1))], key: Some(KeySet { column, to: KeyTo::Lit(Value::Int(5)) }), ..Default::default() });
+        let ok = |table, set, columns: &[Option<usize>]| columns.iter().filter(|&&c| valid(&m, &up(table, set, c))).copied().collect::<Vec<_>>();
+        assert_eq!(ok(0, 0, &[None, Some(0), Some(3), Some(4), Some(5), Some(9)]), vec![None, Some(4)]);
+        assert_eq!(ok(1, 2, &[None, Some(0), Some(1), Some(2), Some(3)]), vec![Some(0), Some(1)]);
+        assert_eq!(ok(2, 1, &[None, Some(0), Some(1), Some(2)]), vec![None]);
     }
 
     /// The steps of the DELETE triggers a REPLACE fires run with REPLACE,

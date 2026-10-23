@@ -1,0 +1,9 @@
+-- ERROR:  cannot start a subtransaction when there are unprocessed inval messages  (XX000)
+CREATE TABLE t0(c0 int2);
+INSERT INTO t0 VALUES (-512);
+BEGIN;
+CREATE DOMAIN d AS int2 CONSTRAINT d_k CHECK (VALUE IS NOT NULL);
+ALTER TABLE t0 ALTER COLUMN c0 TYPE d;
+ALTER DOMAIN d DROP CONSTRAINT d_k;
+DO $$BEGIN ALTER DOMAIN d ADD CONSTRAINT d_k CHECK (VALUE >= -303); EXCEPTION WHEN check_violation THEN RAISE NOTICE 'caught'; END$$;
+ROLLBACK;

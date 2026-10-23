@@ -11,6 +11,22 @@
 //! the error message.
 
 use rusqlite::{types::ValueRef, Connection};
+use std::cell::Cell;
+use std::time::{Duration, Instant};
+
+thread_local! {
+    static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Each statement gets the budget turso-diff gives SQLite (5 s); past it the
+/// statement is interrupted, as it is there.
+fn budget() {
+    DEADLINE.with(|d| d.set(Some(Instant::now() + Duration::from_secs(5))));
+}
+
+fn past_deadline() -> bool {
+    DEADLINE.with(|d| d.get().is_some_and(|t| Instant::now() > t))
+}
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -40,6 +56,9 @@ fn main() {
     let mut bytes = std::fs::read(&args[1]).expect("database file");
     let sql = std::fs::read_to_string(&args[2]).expect("SQL file");
     let mut db = Connection::open_in_memory().unwrap();
+    // The vendored build turns foreign keys on by default; Turso's are off.
+    db.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+    db.progress_handler(10_000, Some(past_deadline));
     if !bytes.is_empty() {
         for at in [18, 19] {
             if bytes[at] == 2 {
@@ -57,8 +76,10 @@ fn main() {
         return;
     };
     for s in before {
+        budget();
         let _ = db.execute_batch(s);
     }
+    budget();
     let go = || -> rusqlite::Result<Vec<String>> {
         let mut st = db.prepare(last)?;
         let n = st.column_count();

@@ -17,7 +17,14 @@
 //!   them), `queries.sql` and `example.json` (the
 //!   run, version, target, worker, its profile (`gen+wal` for a WAL loop)
 //!   and storage (`memory` or `wal`, and for `wal` the settings the case's
-//!   WAL file had, `wal_settings`), input and oracle); `count` is how many
+//!   WAL file had, `wal_settings`), input and oracle). A statement error's
+//!   example (first line `statement N: ...`, or one naming no such column,
+//!   table or index: [`keeps_unshrunk`]) also has `unshrunk/`, the input as
+//!   it failed before shrinking, with its own message (the same files but
+//!   example.json), when shrinking changed it: shrinking keeps a candidate
+//!   whose first line is the same, which for such an error can be a
+//!   different cause (the statement that added the column removed, say).
+//!   Pre-triage reads only the example itself. `count` is how many
 //!   were seen in all, and `finding.json` says where the signature was first
 //!   seen (run, version, target, worker, profile, storage, time) and holds
 //!   its `status`, `open` until triage says otherwise (for instance `fixed
@@ -64,6 +71,22 @@ pub fn signature(oracle: &str, message: &str) -> String {
     out.truncate(120);
     out
 }
+
+/// Whether a failure is a statement error, whose example keeps the input it
+/// failed with before shrinking (`unshrunk/`): its first line is a case's
+/// statement failing (`statement N: <sql>: <error>`, `sqlancer`'s
+/// `run_statement`), or names no such column, table or index.
+pub fn keeps_unshrunk(message: &str) -> bool {
+    let first = message.lines().next().unwrap_or("");
+    let statement = first.strip_prefix("statement ").is_some_and(|r| {
+        let digits = r.bytes().take_while(u8::is_ascii_digit).count();
+        digits > 0 && r[digits..].starts_with(':')
+    });
+    statement || ["no such column", "no such table", "no such index"].iter().any(|e| first.contains(e))
+}
+
+/// The directory of an example that holds its input before shrinking.
+pub const UNSHRUNK: &str = "unshrunk";
 
 /// Write `input` as an example in `dir` (created): the message, the input,
 /// the database after its statements (in memory), the case's starting
@@ -119,9 +142,11 @@ fn wal_settings(storage: &str, input: &Input) -> String {
 
 /// Record a shrunk failure under its signature: counted always, written while
 /// the signature has fewer than [`EXAMPLES`] examples, and an event either
-/// way. Whether the signature is new.
+/// way. `original` is the failure before shrinking (its message and input):
+/// a statement error's example ([`keeps_unshrunk`]) writes it under
+/// [`UNSHRUNK`] when it differs from `input`. Whether the signature is new.
 #[allow(clippy::too_many_arguments)]
-pub fn record_failure(root: &Path, ident: &Identity, worker: usize, profile: &str, storage: &str, n: u64, oracle: &str, message: &str, input: &Input) -> bool {
+pub fn record_failure(root: &Path, ident: &Identity, worker: usize, profile: &str, storage: &str, n: u64, oracle: &str, message: &str, input: &Input, original: Option<(&str, &Input)>) -> bool {
     let sig = signature(oracle, message);
     let dir = root.join("findings").join(&sig);
     let new = !dir.exists();
@@ -139,8 +164,15 @@ pub fn record_failure(root: &Path, ident: &Identity, worker: usize, profile: &st
     let _ = fs::write(&count_file, count.to_string());
     let examples = fs::read_dir(&dir).map_or(0, |d| d.filter_map(Result::ok).filter(|e| e.path().is_dir()).count());
     let example = (examples < EXAMPLES).then(|| dir.join(format!("w{worker}-{n}")));
+    let mut unshrunk = false;
     if let Some(e) = &example {
         write_example(e, message, input);
+        if let Some((why, before)) = original.filter(|_| keeps_unshrunk(message)) {
+            if format!("{before:?}") != format!("{input:?}") {
+                write_example(&e.join(UNSHRUNK), why, before);
+                unshrunk = true;
+            }
+        }
         let _ = fs::write(e.join("example.json"), format!("{{\"signature\":{},\"ts\":{},{from}{}}}\n", esc(&sig), now(), wal_settings(storage, input)));
     }
     records::event(
@@ -148,7 +180,7 @@ pub fn record_failure(root: &Path, ident: &Identity, worker: usize, profile: &st
         &ident.run,
         "finding",
         &format!(
-            "\"signature\":{},\"new_signature\":{new},\"count\":{count},\"first_line\":{},\"example\":{},{from}",
+            "\"signature\":{},\"new_signature\":{new},\"count\":{count},\"first_line\":{},\"example\":{},\"unshrunk\":{unshrunk},{from}",
             esc(&sig),
             esc(first),
             example.as_ref().map_or("null".into(), |e| esc(&e.to_string_lossy()))
@@ -189,7 +221,22 @@ pub fn signatures(root: &Path) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::signature;
+    use super::{keeps_unshrunk, signature};
+
+    #[test]
+    fn statement_errors_keep_the_unshrunk_input() {
+        for m in [
+            "statement 8: UPDATE t1 SET c5 = 5 WHERE c1 BETWEEN NULL AND -56712.0: no such column: c5",
+            "statement 0: CREATE TABLE t0(c0): table t0 already exists\n  more",
+            "the original query fails: SELECT * FROM aux.t6: no such table: aux.t6",
+            "results differ (plans-left): no such index: i0",
+        ] {
+            assert!(keeps_unshrunk(m), "{m}");
+        }
+        for m in ["results differ (tlp-where)\n  statement 3: x: no such column: c0", "statement x: y", "statements 3: y", "statement 3 y", ""] {
+            assert!(!keeps_unshrunk(m), "{m}");
+        }
+    }
 
     #[test]
     fn signatures_fold_digits_and_odd_characters() {

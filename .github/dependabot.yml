@@ -9,6 +9,13 @@ updates:
     groups:
       cargo-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # rand_core 0.10 reworks the RngCore trait that ephyra's Source
+      # implements; moving to it is a migration (with rand), not a bump.
+      - dependency-name: rand_core
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: rand_chacha
+        update-types: [version-update:semver-major, version-update:semver-minor]
   # Actions are pinned to commit SHAs; this keeps the pins current.
   - package-ecosystem: github-actions
     directory: /

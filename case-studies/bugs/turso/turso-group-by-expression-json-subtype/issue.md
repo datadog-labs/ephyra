@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9966 (https://github.com/tursodatabase/turso/issues/9966) (line 1 corrected 2026-10-21).
 Title: JSON subtype lost when a result column contains an expression from GROUP BY (follow-up to #5755)
 
 #5755 (JSON subtype lost through GROUP BY) is closed, and its repros pass now. The subtype is still lost in one case: a result column that contains the GROUP BY expression itself. The JSON value then gets quoted as a string.

@@ -1,0 +1,119 @@
+diff --git a/src/uu/sort/src/custom_str_cmp.rs b/src/uu/sort/src/custom_str_cmp.rs
+index c8df673..0d876cc 100644
+--- a/src/uu/sort/src/custom_str_cmp.rs
++++ b/src/uu/sort/src/custom_str_cmp.rs
+@@ -10,7 +10,7 @@
+ use std::cmp::Ordering;
+ 
+ fn filter_char(c: u8, ignore_non_printing: bool, ignore_non_dictionary: bool) -> bool {
+-    if ignore_non_dictionary && !(c.is_ascii_alphanumeric() || c.is_ascii_whitespace()) {
++    if ignore_non_dictionary && !(c.is_ascii_alphanumeric() || crate::is_blank(c)) {
+         return false;
+     }
+     !(ignore_non_printing && (c.is_ascii_control() || !c.is_ascii()))
+diff --git a/src/uu/sort/src/numeric_str_cmp.rs b/src/uu/sort/src/numeric_str_cmp.rs
+index 0d665ac..5a01607 100644
+--- a/src/uu/sort/src/numeric_str_cmp.rs
++++ b/src/uu/sort/src/numeric_str_cmp.rs
+@@ -63,7 +63,7 @@ impl NumInfo {
+         let mut first_char = true;
+ 
+         for (idx, &char) in num.iter().enumerate() {
+-            if first_char && char.is_ascii_whitespace() {
++            if first_char && crate::is_blank(char) {
+                 continue;
+             }
+ 
+diff --git a/src/uu/sort/src/sort.rs b/src/uu/sort/src/sort.rs
+index af39628..91f935c 100644
+--- a/src/uu/sort/src/sort.rs
++++ b/src/uu/sort/src/sort.rs
+@@ -806,7 +806,7 @@ impl<'a> Line<'a> {
+                         // Report no match at the first non-whitespace character.
+                         let leading_whitespace = self.line[selection.clone()]
+                             .iter()
+-                            .position(|c| !c.is_ascii_whitespace())
++                            .position(|&c| !is_blank(c))
+                             .unwrap_or(0);
+                         selection.start += leading_whitespace;
+                         selection.end += leading_whitespace;
+@@ -842,7 +842,7 @@ impl<'a> Line<'a> {
+                     let initial_selection = &self.line[selection.clone()];
+                     let first_non_blank = initial_selection
+                         .iter()
+-                        .position(|c| !c.is_ascii_whitespace())
++                        .position(|&c| !is_blank(c))
+                         .unwrap_or(initial_selection.len());
+ 
+                     let (parsed, match_len) = month_parse(initial_selection);
+@@ -921,6 +921,12 @@ fn tokenize(
+     }
+ }
+ 
++/// Blanks are space and tab (and newline, which can only occur with `-z`), as in GNU sort:
++/// form feed, carriage return and vertical tab are ordinary characters.
++pub(crate) fn is_blank(c: u8) -> bool {
++    matches!(c, b' ' | b'\t' | b'\n')
++}
++
+ /// By default fields are separated by the first whitespace after non-whitespace.
+ /// Whitespace is included in fields at the start.
+ /// The result is stored into `token_buffer`.
+@@ -934,7 +940,7 @@ fn tokenize_default(
+     // pretend that there was whitespace in front of the line
+     let mut previous_was_whitespace = true;
+     for (idx, char) in line.iter().enumerate() {
+-        let is_whitespace = char.is_ascii_whitespace();
++        let is_whitespace = is_blank(*char);
+         let treat_as_separator = if is_whitespace {
+             if blank_thousands_sep && *char == b' ' {
+                 !is_blank_thousands_sep(line, idx, allow_unit_after_blank)
+@@ -1436,7 +1442,7 @@ impl FieldSelector {
+                     idx += line[idx..]
+                         .iter()
+                         .enumerate()
+-                        .find(|(_, c)| !c.is_ascii_whitespace())
++                        .find(|&(_, &c)| !is_blank(c))
+                         .map_or(line[idx..].len(), |(idx, _)| idx);
+                 }
+                 // apply the character index
+@@ -3306,7 +3312,8 @@ fn get_locale_month_table() -> Option<&'static MonthTable> {
+ /// Comparison against input is case-insensitive but NOT blank-insensitive:
+ /// the input must match the stored name exactly (after leading blank trimming).
+ fn month_parse(line: &[u8]) -> (Month, usize) {
+-    let line = line.trim_ascii_start();
++    let start = line.iter().position(|&c| !is_blank(c)).unwrap_or(line.len());
++    let line = &line[start..];
+ 
+     // Try locale-specific month names, keeping the longest match.
+     // This handles cases where one name is a prefix of another
+diff --git a/tests/by-util/test_sort.rs b/tests/by-util/test_sort.rs
+index bcc4bbc..4a7f11b 100644
+--- a/tests/by-util/test_sort.rs
++++ b/tests/by-util/test_sort.rs
+@@ -627,6 +627,25 @@ fn test_dictionary_order2() {
+         .stdout_only("a👦🏻aa\tb\naaaa\tb\n"); // spell-checker:disable-line
+ }
+ 
++#[test]
++fn test_form_feed_and_carriage_return_are_not_blanks() {
++    // Only space and tab are blanks in the C locale.
++    for (args, input, expected) in [
++        (&["-n"][..], "b\n\x0c2\n", "\x0c2\nb\n"),
++        (&["-n"][..], "b\n\r2\n", "\r2\nb\n"),
++        (&["-b"][..], " a\n\x0cb\n", "\x0cb\n a\n"),
++        (&["-k2b"][..], "a b\nc\rz\n", "c\rz\na b\n"),
++        (&["-d"][..], "a\x0cc\nab\n", "ab\na\x0cc\n"),
++    ] {
++        new_ucmd!()
++            .env("LC_ALL", "C")
++            .args(args)
++            .pipe_in(input)
++            .succeeds()
++            .stdout_only(expected);
++    }
++}
++
+ #[test]
+ fn test_non_printing_chars() {
+     new_ucmd!()

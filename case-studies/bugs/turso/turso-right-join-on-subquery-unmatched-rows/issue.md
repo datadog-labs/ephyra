@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9850 (https://github.com/tursodatabase/turso/issues/9850) (line 1 corrected 2026-10-21).
 
 # RIGHT JOIN followed by LEFT JOIN: a subquery in the later ON clause is not re-evaluated for unmatched right rows (panic or wrong result)
 

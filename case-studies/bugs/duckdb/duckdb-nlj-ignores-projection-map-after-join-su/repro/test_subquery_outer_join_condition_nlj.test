@@ -1,0 +1,16 @@
+# name: test/sql/subquery/scalar/test_subquery_outer_join_condition_nlj.test
+# description: Uncorrelated subqueries in an outer join condition below a nested loop join
+# group: [scalar]
+
+statement ok
+CREATE TABLE t0(c0 INTEGER);
+
+statement ok
+INSERT INTO t0 VALUES (1);
+
+query I
+SELECT 1 FROM t0 AS x1 FULL JOIN t0 AS x2 ON ((SELECT 0) <> (SELECT count(*) FROM t0)) JOIN (VALUES (7),(8),(9)) AS x3(c0) ON (x2.c0 <> x3.c0);
+----
+1
+1
+1

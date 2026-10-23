@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9843 (https://github.com/tursodatabase/turso/issues/9843) (line 1 corrected 2026-10-21).
 
 Title: json_patch/jsonb_patch with a repeated key in the patch apply members out of order, and jsonb_patch returns a malformed blob
 

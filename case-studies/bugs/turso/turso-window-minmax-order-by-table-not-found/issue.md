@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9883 (https://github.com/tursodatabase/turso/issues/9883) (line 1 corrected 2026-10-21).
 
 # "Parse error: table not found" for ORDER BY rowid, then a min/max window column with a non-deterministic window ORDER BY
 

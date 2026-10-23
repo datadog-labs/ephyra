@@ -1,0 +1,199 @@
+diff --git a/src/execution/column_binding_resolver.cpp b/src/execution/column_binding_resolver.cpp
+index c078d0ff61..ce74dc3650 100644
+--- a/src/execution/column_binding_resolver.cpp
++++ b/src/execution/column_binding_resolver.cpp
+@@ -134,18 +134,22 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
+ 		// once i.e. we set the bindings first to the bindings of the entire join, and then resolve the expressions of
+ 		// this operator
+ 		VisitOperatorChildren(op);
+-		bindings = op.GetColumnBindings();
+-		types = op.types;
+ 		auto &any_join = op.Cast<LogicalAnyJoin>();
+-		if (any_join.join_type == JoinType::SEMI || any_join.join_type == JoinType::ANTI) {
++		if (any_join.join_type == JoinType::RIGHT_SEMI || any_join.join_type == JoinType::RIGHT_ANTI) {
++			throw InternalException("RIGHT SEMI/ANTI any join not supported yet");
++		}
++		if (any_join.join_type == JoinType::MARK) {
++			bindings = op.GetColumnBindings();
++			types = op.types;
++		} else {
++			// the condition is evaluated on the full layouts of both join sides, regardless of the projection maps
++			bindings = op.children[0]->GetColumnBindings();
++			types = op.children[0]->types;
+ 			auto right_bindings = op.children[1]->GetColumnBindings();
+ 			bindings.insert(bindings.end(), right_bindings.begin(), right_bindings.end());
+ 			auto &right_types = op.children[1]->types;
+ 			types.insert(types.end(), right_types.begin(), right_types.end());
+ 		}
+-		if (any_join.join_type == JoinType::RIGHT_SEMI || any_join.join_type == JoinType::RIGHT_ANTI) {
+-			throw InternalException("RIGHT SEMI/ANTI any join not supported yet");
+-		}
+ 		VisitOperatorExpressions(op);
+ 
+ 		//	Restore bindings for the caller
+diff --git a/src/execution/physical_plan/plan_any_join.cpp b/src/execution/physical_plan/plan_any_join.cpp
+index 7193ad6c8e..d17a9b2364 100644
+--- a/src/execution/physical_plan/plan_any_join.cpp
++++ b/src/execution/physical_plan/plan_any_join.cpp
+@@ -12,8 +12,10 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalAnyJoin &op) {
+ 	auto &right = CreatePlan(*op.children[1]);
+ 
+ 	// Create the blockwise NL join.
+-	return Make<PhysicalBlockwiseNLJoin>(op, left, right, std::move(op.condition), op.join_type,
+-	                                     op.estimated_cardinality);
++	return PlanJoinWithoutProjectionMaps(op, left, right, [&]() -> PhysicalOperator & {
++		return Make<PhysicalBlockwiseNLJoin>(op, left, right, std::move(op.condition), op.join_type,
++		                                     op.estimated_cardinality);
++	});
+ }
+ 
+ } // namespace duckdb
+diff --git a/src/execution/physical_plan/plan_comparison_join.cpp b/src/execution/physical_plan/plan_comparison_join.cpp
+index 3a32675687..eead264fb1 100644
+--- a/src/execution/physical_plan/plan_comparison_join.cpp
++++ b/src/execution/physical_plan/plan_comparison_join.cpp
+@@ -7,6 +7,7 @@
+ #include "duckdb/execution/operator/join/physical_nested_loop_join.hpp"
+ #include "duckdb/execution/operator/join/physical_piecewise_merge_join.hpp"
+ #include "duckdb/execution/operator/join/physical_recursive_cte_key_join.hpp"
++#include "duckdb/execution/operator/projection/physical_projection.hpp"
+ #include "duckdb/execution/operator/set/physical_recursive_cte.hpp"
+ #include "duckdb/execution/physical_plan_generator.hpp"
+ #include "duckdb/main/client_context.hpp"
+@@ -273,9 +274,15 @@ PhysicalOperator &PhysicalPlanGenerator::PlanComparisonJoin(LogicalComparisonJoi
+ 	}
+ 	if (PhysicalNestedLoopJoin::IsSupported(op.conditions, op.join_type)) {
+ 		// inequality join: use nested loop
+-		D_ASSERT(op.left_projection_map.empty() || op.join_type == JoinType::MARK);
+-		return Make<PhysicalNestedLoopJoin>(op, left, right, std::move(op.conditions), op.join_type,
+-		                                    op.estimated_cardinality, std::move(op.filter_pushdown));
++		if (op.join_type == JoinType::MARK) {
++			// the nested loop join applies the left projection map of a MARK join
++			return Make<PhysicalNestedLoopJoin>(op, left, right, std::move(op.conditions), op.join_type,
++			                                    op.estimated_cardinality, std::move(op.filter_pushdown));
++		}
++		return PlanJoinWithoutProjectionMaps(op, left, right, [&]() -> PhysicalOperator & {
++			return Make<PhysicalNestedLoopJoin>(op, left, right, std::move(op.conditions), op.join_type,
++			                                    op.estimated_cardinality, std::move(op.filter_pushdown));
++		});
+ 	}
+ 
+ 	for (auto &cond : op.conditions) {
+@@ -283,9 +290,68 @@ PhysicalOperator &PhysicalPlanGenerator::PlanComparisonJoin(LogicalComparisonJoi
+ 			RewriteJoinCondition(cond.RightReference(), left.types.size());
+ 		}
+ 	}
+-	D_ASSERT(op.left_projection_map.empty());
+ 	auto condition = JoinCondition::CreateExpression(std::move(op.conditions));
+-	return Make<PhysicalBlockwiseNLJoin>(op, left, right, std::move(condition), op.join_type, op.estimated_cardinality);
++	return PlanJoinWithoutProjectionMaps(op, left, right, [&]() -> PhysicalOperator & {
++		return Make<PhysicalBlockwiseNLJoin>(op, left, right, std::move(condition), op.join_type,
++		                                     op.estimated_cardinality);
++	});
++}
++
++PhysicalOperator &PhysicalPlanGenerator::PlanJoinWithoutProjectionMaps(
++    LogicalJoin &op, PhysicalOperator &left, PhysicalOperator &right,
++    const std::function<PhysicalOperator &()> &plan_join) {
++	if (op.left_projection_map.empty() && op.right_projection_map.empty()) {
++		return plan_join();
++	}
++	// the layout the join produces without projection maps, and the columns of it that the projection maps select
++	vector<LogicalType> join_types;
++	vector<idx_t> projected_columns;
++	auto add_side = [&](const vector<LogicalType> &side_types, const vector<ProjectionIndex> &projection_map) {
++		auto offset = join_types.size();
++		if (projection_map.empty()) {
++			for (idx_t i = 0; i < side_types.size(); i++) {
++				projected_columns.push_back(offset + i);
++			}
++		} else {
++			for (auto &projection_index : projection_map) {
++				projected_columns.push_back(offset + projection_index.GetIndex());
++			}
++		}
++		join_types.insert(join_types.end(), side_types.begin(), side_types.end());
++	};
++	switch (op.join_type) {
++	case JoinType::SEMI:
++	case JoinType::ANTI:
++		add_side(left.GetTypes(), op.left_projection_map);
++		break;
++	case JoinType::MARK:
++		add_side(left.GetTypes(), op.left_projection_map);
++		projected_columns.push_back(join_types.size());
++		join_types.emplace_back(LogicalType::BOOLEAN);
++		break;
++	case JoinType::RIGHT_SEMI:
++	case JoinType::RIGHT_ANTI:
++		add_side(right.GetTypes(), op.right_projection_map);
++		break;
++	default:
++		add_side(left.GetTypes(), op.left_projection_map);
++		add_side(right.GetTypes(), op.right_projection_map);
++		break;
++	}
++	auto projected_types = op.types;
++	D_ASSERT(projected_types.size() == projected_columns.size());
++	op.left_projection_map.clear();
++	op.right_projection_map.clear();
++	op.types = std::move(join_types);
++	auto &join = plan_join();
++
++	vector<unique_ptr<Expression>> select_list;
++	for (idx_t i = 0; i < projected_columns.size(); i++) {
++		select_list.push_back(make_uniq<BoundReferenceExpression>(projected_types[i], projected_columns[i]));
++	}
++	auto &proj = Make<PhysicalProjection>(std::move(projected_types), std::move(select_list), op.estimated_cardinality);
++	proj.children.push_back(join);
++	return proj;
+ }
+ 
+ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalComparisonJoin &op) {
+diff --git a/src/include/duckdb/execution/physical_plan_generator.hpp b/src/include/duckdb/execution/physical_plan_generator.hpp
+index efccfac14f..b5d7725904 100644
+--- a/src/include/duckdb/execution/physical_plan_generator.hpp
++++ b/src/include/duckdb/execution/physical_plan_generator.hpp
+@@ -190,6 +190,10 @@ protected:
+ 	PhysicalOperator &PlanAsOfJoin(LogicalComparisonJoin &op);
+ 	PhysicalOperator &PlanComparisonJoin(LogicalComparisonJoin &op);
+ 	PhysicalOperator &PlanDelimJoin(LogicalComparisonJoin &op);
++	//! Plans a join whose physical operator does not apply the projection maps of the logical join: the join is
++	//! planned on the full child layouts and the selected columns are projected on top of it
++	PhysicalOperator &PlanJoinWithoutProjectionMaps(LogicalJoin &op, PhysicalOperator &left, PhysicalOperator &right,
++	                                                const std::function<PhysicalOperator &()> &plan_join);
+ 	PhysicalOperator &ExtractAggregateExpressions(PhysicalOperator &child, vector<unique_ptr<Expression>> &expressions,
+ 	                                              vector<unique_ptr<Expression>> &groups,
+ 	                                              optional_ptr<vector<GroupingSet>> grouping_sets);
+diff --git a/test/sql/subquery/scalar/test_subquery_outer_join_condition_nlj.test b/test/sql/subquery/scalar/test_subquery_outer_join_condition_nlj.test
+new file mode 100644
+index 0000000000..5c40698499
+--- /dev/null
++++ b/test/sql/subquery/scalar/test_subquery_outer_join_condition_nlj.test
+@@ -0,0 +1,26 @@
++# name: test/sql/subquery/scalar/test_subquery_outer_join_condition_nlj.test
++# description: Uncorrelated subqueries in an outer join condition below a nested loop join
++# group: [scalar]
++
++statement ok
++CREATE TABLE t0(c0 INTEGER);
++
++statement ok
++INSERT INTO t0 VALUES (1), (2);
++
++query III
++SELECT x1.c0, x2.c0, x3.c0 FROM t0 AS x1 FULL JOIN t0 AS x2 ON ((SELECT 0) <> (SELECT count(*) FROM t0 WHERE c0 > 1)) AND x1.c0 < x2.c0 JOIN (VALUES (2), (8)) AS x3(c0) ON (x2.c0 <> x3.c0) ORDER BY ALL
++----
++1	2	8
++NULL	1	2
++NULL	1	8
++
++query I
++SELECT count(*) FROM t0 AS x1 FULL JOIN t0 AS x2 ON ((SELECT 0) <> (SELECT count(*) FROM t0)) JOIN (VALUES (7), (8), (9)) AS x3(c0) ON (x2.c0 <> x3.c0)
++----
++12
++
++query I
++SELECT count(*) FROM t0 AS x1 LEFT JOIN t0 AS x2 ON ('' NOT IN (SELECT '' FROM t0 WHERE false)) JOIN t0 AS x4 ON x1.c0 <> x4.c0
++----
++4

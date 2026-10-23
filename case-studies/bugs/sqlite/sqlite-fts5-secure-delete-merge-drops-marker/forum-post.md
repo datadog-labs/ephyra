@@ -138,7 +138,7 @@ The patch below records, when the multi-iterator skips an older entry for the sa
      }
 ```
 
-In detail=none tables this patch makes merges write entries with the delete flag in more cases, and secure-delete of such an entry is the case of the earlier report "FTS5: with detail=none, secure-delete of a rowid that was replaced while secure-delete was off corrupts the index". With this patch alone, the example with detail=none returns rowids 1, 5 and 6; with the patches for both reports it gives the expected output. The two patches touch different functions and apply in either order.
+In detail=none tables this patch makes merges write entries with the delete flag in more cases, and secure-delete of such an entry is the case of our earlier report https://sqlite.org/forum/forumpost/e380b6876c. With this patch alone, the example with detail=none returns rowids 1, 5 and 6; with the patches for both reports it gives the expected output. The two patches touch different functions and apply in either order.
 
 **Versions:** wrong in 3.46.0, 3.50.2, 3.51.0 (the macOS /usr/bin/sqlite3, dated 2025-06-12), 3.53.2 and trunk.
 

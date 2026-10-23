@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9841 (https://github.com/tursodatabase/turso/issues/9841) (line 1 corrected 2026-10-21).
 
 Title: json_error_position('') is an internal error, and whitespace before end of input shifts the position
 

@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "-n",
+    "2",
+    "--verbose"
+  ],
+  "aspect": "stdout",
+  "message": "split -n 2 --verbose  <stdin \"\"  | uu: code=Some(0) out=\"\" err=\"\" | gnu: code=Some(0) out=\"creating file 'xaa'\\ncreating file 'xab'\\n\" err=\"\"",
+  "oracle": "diff",
+  "seed": "1:11400714819323198486",
+  "signature": "diff__split_stdout",
+  "util": "split"
+}

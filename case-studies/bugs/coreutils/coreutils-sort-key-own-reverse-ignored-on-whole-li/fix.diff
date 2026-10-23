@@ -1,0 +1,48 @@
+diff --git a/src/uu/sort/src/sort.rs b/src/uu/sort/src/sort.rs
+index af39628f1..d3f883bed 100644
+--- a/src/uu/sort/src/sort.rs
++++ b/src/uu/sort/src/sort.rs
+@@ -465,6 +465,9 @@ impl GlobalSettings {
+             && !selector.settings.dictionary_order
+             && !selector.settings.ignore_non_printing
+             && !selector.settings.ignore_blanks
++            // The fast path only applies the global `-r`; a key's own `r`
++            // (`-k1r`) has to be honoured by the per-key comparison.
++            && selector.settings.reverse == self.reverse
+     }
+ 
+     /// Returns true when the ASCII case-insensitive fast path is valid.
+@@ -483,6 +486,9 @@ impl GlobalSettings {
+             && !selector.settings.dictionary_order
+             && !selector.settings.ignore_non_printing
+             && !selector.settings.ignore_blanks
++            // The fast path only applies the global `-r`; a key's own `r`
++            // (`-k1r`) has to be honoured by the per-key comparison.
++            && selector.settings.reverse == self.reverse
+     }
+ }
+ 
+diff --git a/tests/by-util/test_sort.rs b/tests/by-util/test_sort.rs
+index bcc4bbc6c..3589e3789 100644
+--- a/tests/by-util/test_sort.rs
++++ b/tests/by-util/test_sort.rs
+@@ -353,6 +353,19 @@ fn test_numeric_sort_rejects_leading_plus_sign() {
+         .stdout_is("+1\n+10\n+2\n");
+ }
+ 
++#[test]
++fn test_whole_line_key_with_its_own_reverse() {
++    // The key spans the whole line but has its own `r`, which overrides the
++    // global ordering for that key.
++    for args in [&["-k1r"][..], &["-k1.1r"], &["-f", "-k1fr"]] {
++        new_ucmd!()
++            .args(args)
++            .pipe_in("a\n\nb\n")
++            .succeeds()
++            .stdout_is("b\na\n\n");
++    }
++}
++
+ #[test]
+ fn test_numeric_sort_uses_the_key_not_the_whole_line() {
+     // `-n` compares a number parsed from the line as a whole, which only

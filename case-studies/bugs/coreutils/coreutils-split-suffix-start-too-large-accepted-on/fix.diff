@@ -1,0 +1,68 @@
+diff --git a/src/uu/split/src/filenames.rs b/src/uu/split/src/filenames.rs
+index 21e0e7159..bfb368587 100644
+--- a/src/uu/split/src/filenames.rs
++++ b/src/uu/split/src/filenames.rs
+@@ -98,6 +98,10 @@ pub enum SuffixError {
+     /// Suffix is not large enough to split into specified chunks
+     #[error("{}", translate!("split-error-suffix-too-small", "length" => .0))]
+     TooSmall(usize),
++
++    /// Suffix start value does not fit in the fixed suffix length
++    #[error("{}", translate!("split-error-numerical-suffix-start-too-large"))]
++    StartTooLarge,
+ }
+ 
+ impl Suffix {
+@@ -225,6 +229,13 @@ impl Suffix {
+             length = default_length;
+         }
+ 
++        // A fixed-width suffix must be able to hold the start value. Check it
++        // here, not when the first output file is created, so that empty
++        // input is rejected too.
++        if !auto_widening && FixedWidthNumber::new(stype.radix(), length, start).is_err() {
++            return Err(SuffixError::StartTooLarge);
++        }
++
+         let additional = matches
+             .get_one::<OsString>(options::ADDITIONAL_SUFFIX)
+             .unwrap()
+diff --git a/src/uu/split/src/split.rs b/src/uu/split/src/split.rs
+index d683bb343..bbcdb782c 100644
+--- a/src/uu/split/src/split.rs
++++ b/src/uu/split/src/split.rs
+@@ -299,7 +299,7 @@ impl SettingsError {
+         matches!(
+             self,
+             Self::Strategy(StrategyError::MultipleWays)
+-                | Self::Suffix(SuffixError::ContainsSeparator(_))
++                | Self::Suffix(SuffixError::ContainsSeparator(_) | SuffixError::StartTooLarge)
+         )
+     }
+ }
+diff --git a/tests/by-util/test_split.rs b/tests/by-util/test_split.rs
+index 29a6a7dad..1751cc9d3 100644
+--- a/tests/by-util/test_split.rs
++++ b/tests/by-util/test_split.rs
+@@ -2336,3 +2336,21 @@ fn test_obsolete_lines_not_read_after_double_dash() {
+         .fails()
+         .stderr_contains("cannot open '-1' for reading");
+ }
++
++#[test]
++fn test_numeric_suffix_start_too_large_on_empty_input() {
++    for args in [
++        &["--numeric-suffixes=100"][..],
++        &["-a", "1", "--hex-suffixes=15"],
++    ] {
++        new_ucmd!()
++            .args(args)
++            .pipe_in("")
++            .fails_with_code(1)
++            .stderr_contains("numerical suffix start value is too large for the suffix length");
++    }
++    new_ucmd!()
++        .args(&["-a", "1", "--hex-suffixes=f"])
++        .pipe_in("")
++        .succeeds();
++}

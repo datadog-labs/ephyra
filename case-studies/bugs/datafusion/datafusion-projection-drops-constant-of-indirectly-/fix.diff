@@ -1,0 +1,108 @@
+diff --git a/datafusion/physical-expr/src/equivalence/class.rs b/datafusion/physical-expr/src/equivalence/class.rs
+index b55e3a3..aed224c 100644
+--- a/datafusion/physical-expr/src/equivalence/class.rs
++++ b/datafusion/physical-expr/src/equivalence/class.rs
+@@ -752,7 +752,14 @@ impl EquivalenceGroup {
+     pub fn project(&self, mapping: &ProjectionMapping) -> Self {
+         let projected_classes = self.iter().map(|cls| {
+             let new_exprs = self.project_expressions(mapping, cls.iter());
+-            EquivalenceClass::new(new_exprs.flatten())
++            let mut new_cls = EquivalenceClass::new(new_exprs.flatten());
++            // The projected expressions are equal to the members of `cls`, so
++            // they are constant whenever `cls` is (even if the literal or the
++            // expression that made it constant does not survive the projection):
++            if new_cls.constant.is_none() {
++                new_cls.constant = cls.constant.clone();
++            }
++            new_cls
+         });
+ 
+         // The key is the source expression, and the value is the equivalence
+@@ -1321,6 +1328,59 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test]
++    fn test_project_keeps_constant_of_indirectly_projected_class() -> Result<()> {
++        // - columns: [a, b], "a + b" is constant (e.g. due to a filter).
++        // - projection [b, a] renumbers the columns, so "a + b" is projected
++        //   indirectly and must stay constant.
++        let schema = Arc::new(Schema::new(vec![
++            Field::new("a", DataType::Int32, false),
++            Field::new("b", DataType::Int32, false),
++        ]));
++        let a_plus_b = binary(
++            col("a", &schema)?,
++            Operator::Plus,
++            col("b", &schema)?,
++            &schema,
++        )?;
++        let mut group = EquivalenceGroup::default();
++        group.add_constant(ConstExpr::new(
++            Arc::clone(&a_plus_b),
++            AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(3)))),
++        ));
++
++        let projected_schema = Arc::new(Schema::new(vec![
++            Field::new("b", DataType::Int32, false),
++            Field::new("a", DataType::Int32, false),
++        ]));
++        let mapping = [
++            (
++                col("b", &schema)?,
++                vec![(col("b", &projected_schema)?, 0)].into(),
++            ),
++            (
++                col("a", &schema)?,
++                vec![(col("a", &projected_schema)?, 1)].into(),
++            ),
++        ]
++        .into_iter()
++        .collect::<ProjectionMapping>();
++
++        let projected = group.project(&mapping);
++        let projected_a_plus_b = binary(
++            col("a", &projected_schema)?,
++            Operator::Plus,
++            col("b", &projected_schema)?,
++            &projected_schema,
++        )?;
++        assert_eq!(
++            projected.is_expr_constant(&projected_a_plus_b),
++            Some(AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(3)))))
++        );
++
++        Ok(())
++    }
++
+     /// Builds a group from a list of equated column pairs.
+     fn group_of(schema: &SchemaRef, pairs: &[(&str, &str)]) -> Result<EquivalenceGroup> {
+         let mut group = EquivalenceGroup::default();
+diff --git a/datafusion/sqllogictest/test_files/sort_merge_join.slt b/datafusion/sqllogictest/test_files/sort_merge_join.slt
+index 5c563c8..1ebfeae 100644
+--- a/datafusion/sqllogictest/test_files/sort_merge_join.slt
++++ b/datafusion/sqllogictest/test_files/sort_merge_join.slt
+@@ -1029,6 +1029,23 @@ DROP TABLE c;
+ statement ok
+ set datafusion.execution.target_partitions = 4;
+ 
++# A filter makes `upper(c2)` constant on the left side. The constant must
++# survive the projection embedded into the join (which renumbers `c2`), so
++# that the sort that relies on it still satisfies the merge above it.
++statement ok
++CREATE TABLE t0(c0 BIGINT, c1 BIGINT, c2 VARCHAR) AS VALUES (1, 1, 'a'), (2, 1, 'A'), (3, 2, 'b');
++
++query TI
++SELECT upper(a1.c2) AS x0, a2.c1 AS x1 FROM t0 AS a1 LEFT JOIN t0 AS a2 ON a1.c0 = a2.c1
++WHERE upper(a1.c2) = 'A' ORDER BY 1, 2 DESC;
++----
++A 2
++A 1
++A 1
++
++statement ok
++DROP TABLE t0;
++
+ # Config reset
+ statement ok
+ RESET datafusion.optimizer.prefer_hash_join;

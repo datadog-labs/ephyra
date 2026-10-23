@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9882 (https://github.com/tursodatabase/turso/issues/9882) (line 1 corrected 2026-10-21).
 
 # Panic "cursor id N is None" when a materialized CTE is first read inside a nested subquery's loop and then read by the outer query
 

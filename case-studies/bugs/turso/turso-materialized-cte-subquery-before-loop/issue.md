@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9848 (https://github.com/tursodatabase/turso/issues/9848) (line 1 corrected 2026-10-21).
 
 # "Parse error: all before-loop subqueries should have already been emitted" for a materialized CTE with a correlated subquery, read from a nested subquery
 

@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9844 (https://github.com/tursodatabase/turso/issues/9844) (line 1 corrected 2026-10-21).
 
 Title: json_set/json_insert/json_replace/json_remove: a JSON `null` result becomes SQL NULL, and NULL arguments aren't handled like SQLite (follow-up to #5750)
 

@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9881 (https://github.com/tursodatabase/turso/issues/9881) (line 1 corrected 2026-10-21).
 
 # A REAL column read through a hash join comes back as an integer (SQLite-created file)
 

@@ -1,0 +1,2 @@
+CREATE TABLE t(a INT) AS VALUES (2), (1);
+SELECT a AS x, a AS y FROM t UNION ALL SELECT a AS x, a AS y FROM t ORDER BY x, y;

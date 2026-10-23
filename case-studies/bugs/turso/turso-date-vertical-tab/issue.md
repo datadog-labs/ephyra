@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9968 (https://github.com/tursodatabase/turso/issues/9968) (line 1 corrected 2026-10-21).
 Title: Date/time functions don't accept a trailing vertical tab (0x0B) after the time value (like #8454, for dates)
 
 SQLite skips whitespace after a time value, and its whitespace includes the vertical tab (`char(11)`). Turso returns NULL. Other whitespace (`char(12)`, space, tab) already works.

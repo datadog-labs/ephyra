@@ -1,0 +1,74 @@
+--- a/ext/fts5/fts5_expr.c
++++ b/ext/fts5/fts5_expr.c
+@@ -929,7 +929,16 @@
+       ){
+         int bMatch = 0;
+         rc = fts5ExprPhraseIsMatch(pNode, pPhrase, &bMatch);
+-        if( bMatch==0 ) break;
++        if( bMatch==0 ){
++          /* The current row is not a match. Clear the position lists of
++          ** all phrases in the nearset, so that none of them report
++          ** entries for this row or retain entries from a previous row.  */
++          int j;
++          for(j=0; j<pNear->nPhrase; j++){
++            pNear->apPhrase[j]->poslist.n = 0;
++          }
++          break;
++        }
+       }else{
+         Fts5IndexIter *pIter = pPhrase->aTerm[0].pIter;
+         fts5BufferSet(&rc, &pPhrase->poslist, pIter->nData, pIter->pData);
+--- a/ext/fts5/test/fts5near.test
++++ b/ext/fts5/test/fts5near.test
+@@ -80,4 +80,51 @@
+   SELECT count(*) FROM t WHERE t MATCH 'NEAR(aaa aaa, 4)';
+ } {1}
+ 
++#-------------------------------------------------------------------------
++# If the phrases of a NEAR group do not all match the current row, then
++# none of them may report instances for that row (via xInst, xPhraseFirst,
++# highlight() or snippet()) when the row is matched by another part of
++# the query. This includes entries left over from an earlier row.
++#
++reset_db
++do_execsql_test 3.0 {
++  CREATE VIRTUAL TABLE t1 USING fts5(a, b);
++  INSERT INTO t1(rowid, a, b) VALUES(1, 'one', 'h e d c');
++  INSERT INTO t1(rowid, a, b) VALUES(2, 'r h c', 'p q s t u');
++}
++
++do_execsql_test 3.1 {
++  SELECT rowid, highlight(t1, 1, '[', ']') FROM t1('b : NEAR(h c, 2) OR r');
++} {1 {[h] e d [c]} 2 {p q s t u}}
++
++do_execsql_test 3.2 {
++  SELECT rowid, highlight(t1, 1, '[', ']') FROM t1('b : NEAR(h c, 2) OR r')
++  ORDER BY rank;
++} {1 {[h] e d [c]} 2 {p q s t u}}
++
++do_execsql_test 3.3 {
++  SELECT rowid, snippet(t1, 1, '[', ']', '..', 3)
++  FROM t1('b : NEAR(h c, 2) OR r');
++} {1 {[h] e d..} 2 {p q s..}}
++
++do_execsql_test 3.4 {
++  CREATE VIRTUAL TABLE t2 USING fts5(a);
++  INSERT INTO t2(rowid, a) VALUES(1, 'r h d c');
++  SELECT rowid, highlight(t2, 0, '[', ']') FROM t2('NEAR(h "c d") OR r');
++} {1 {[r] h d c}}
++
++do_execsql_test 3.4.1 {
++  INSERT INTO t2(rowid, a) VALUES(2, 'a b');
++  SELECT bm25(t2) = (SELECT bm25(t2) FROM t2('r'))
++  FROM t2('NEAR(h "c d") OR r');
++} {1}
++
++do_execsql_test 3.5 {
++  CREATE VIRTUAL TABLE t3 USING fts5(a, b);
++  INSERT INTO t3(rowid, a, b) VALUES(1, 'one', 'h e d c');
++  INSERT INTO t3(rowid, a, b) VALUES(2, 'r h c', 'x');
++  SELECT rowid, snippet(t3, 1, '[', ']', '..', 3)
++  FROM t3('b : NEAR(h c, 2) OR r');
++} {1 {[h] e d..} 2 x}
++
+ finish_test

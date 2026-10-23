@@ -1,0 +1,50 @@
+diff --git a/src/uu/chmod/src/chmod.rs b/src/uu/chmod/src/chmod.rs
+index f586ef8a6..5eeba5d0e 100644
+--- a/src/uu/chmod/src/chmod.rs
++++ b/src/uu/chmod/src/chmod.rs
+@@ -172,8 +172,9 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
+     let cmode = if fmode.is_some() {
+         // "--reference" and MODE are mutually exclusive
+         // if "--reference" was used MODE needs to be interpreted as another FILE
+-        // it wasn't possible to implement this behavior directly with clap
+-        files.push(OsString::from(cmode));
++        // it wasn't possible to implement this behavior directly with clap.
++        // It is the first operand, so put it first to keep the command-line order.
++        files.insert(0, OsString::from(cmode));
+         None
+     } else {
+         Some(cmode)
+diff --git a/tests/by-util/test_chmod.rs b/tests/by-util/test_chmod.rs
+index f4e07d9bd..9b3267751 100644
+--- a/tests/by-util/test_chmod.rs
++++ b/tests/by-util/test_chmod.rs
+@@ -905,6 +905,29 @@ fn test_changes_from_identical_reference() {
+         .no_stdout();
+ }
+ 
++#[test]
++fn test_reference_keeps_operand_order() {
++    let scene = TestScenario::new(util_name!());
++    let at = &scene.fixtures;
++    at.touch("ref");
++    at.touch("a");
++    at.touch("b");
++    set_permissions(at.plus("ref"), Permissions::from_mode(0o644)).unwrap();
++    set_permissions(at.plus("a"), Permissions::from_mode(0o600)).unwrap();
++    set_permissions(at.plus("b"), Permissions::from_mode(0o600)).unwrap();
++    scene
++        .ucmd()
++        .arg("-c")
++        .arg("--reference=ref")
++        .arg("a")
++        .arg("b")
++        .succeeds()
++        .stdout_is(
++            "mode of 'a' changed from 0600 (rw-------) to 0644 (rw-r--r--)\n\
++             mode of 'b' changed from 0600 (rw-------) to 0644 (rw-r--r--)\n",
++        );
++}
++
+ #[test]
+ fn test_gnu_invalid_mode() {
+     let scene = TestScenario::new(util_name!());

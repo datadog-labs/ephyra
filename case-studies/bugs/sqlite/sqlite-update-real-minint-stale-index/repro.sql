@@ -1,0 +1,9 @@
+CREATE TABLE t1(a INT, b);
+CREATE INDEX t1a ON t1(a);
+INSERT INTO t1 VALUES('-9223372036854775809', 1);
+UPDATE t1 SET b = 2;
+SELECT a, typeof(a) FROM t1 NOT INDEXED;
+SELECT a, typeof(a) FROM t1 INDEXED BY t1a WHERE a < 0;
+PRAGMA integrity_check;
+-- trunk 03f699544e6b: -9223372036854775808|integer, then -9.2233720368547758e+18|real, ok
+-- expected (3769f60be38b, 3.54.0): -9.2233720368547758e+18|real twice, ok

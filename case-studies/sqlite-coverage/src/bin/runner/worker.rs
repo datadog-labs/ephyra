@@ -38,7 +38,10 @@
 //! A failure is shrunk (candidates that fail with the same first line, each
 //! under a deadline of 5 seconds and more with its queries, for at most 2
 //! minutes) and recorded
-//! ([`findings::record_failure`]). Every 10 seconds, and during shrinking,
+//! ([`findings::record_failure`]); a statement error's example (`statement
+//! N: ..`, no such column, table or index) keeps the input before shrinking
+//! too, in `unshrunk/`, since a candidate with the same first line can fail
+//! for another reason. Every 10 seconds, and during shrinking,
 //! `workers/K/stats` is rewritten: the worker's totals and its heartbeat.
 //! Every 30 seconds a `worker` line goes to `D/snapshots.jsonl`: the totals,
 //! by oracle too (inputs, failures, timeouts, seconds), and the SQLite
@@ -614,7 +617,7 @@ pub fn run(args: &[String]) {
                     let (shrunk, why) = shrink(&input, oracle, &storage, &message, &mut || {
                         totals.save(&stats_path, n, &lp);
                     });
-                    if findings::record_failure(&dir, &ident, id, name, storage_tag, n, oracle_name, &why, &shrunk) {
+                    if findings::record_failure(&dir, &ident, id, name, storage_tag, n, oracle_name, &why, &shrunk, Some((&message, &input))) {
                         totals.signatures += 1;
                     }
                     failed = Some(shrunk);
@@ -787,8 +790,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("runner-findings-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let ident = crate::records::Identity { run: "r".into(), campaign: "c".into(), tag: "t".into(), version: "v".into(), target: "x".into() };
-        assert!(findings::record_failure(&root, &ident, 3, "gen+wal", "wal", 7, "fake", &why, &shrunk));
-        assert!(!findings::record_failure(&root, &ident, 3, "gen+wal", "wal", 8, "fake", &why, &shrunk));
+        assert!(findings::record_failure(&root, &ident, 3, "gen+wal", "wal", 7, "fake", &why, &shrunk, Some((&message, &input))));
+        assert!(!findings::record_failure(&root, &ident, 3, "gen+wal", "wal", 8, "fake", &why, &shrunk, Some((&message, &input))));
         let sig = root.join("findings").join(findings::signature("fake", &why));
         assert_eq!(std::fs::read_to_string(sig.join("count")).unwrap(), "2");
         let finding = std::fs::read_to_string(sig.join("finding.json")).unwrap();
@@ -799,7 +802,59 @@ mod tests {
         for f in ["message.txt", "input.txt", "queries.sql", "after.db", "before.db", "case.sql", "example.json"] {
             assert!(sig.join("w3-7").join(f).exists(), "{f}");
         }
+        // Not a statement error: no unshrunk input.
+        assert!(!sig.join("w3-7").join(findings::UNSHRUNK).exists());
         assert_eq!(findings::signatures(&root), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Fails as a case's statement would whenever there is a query.
+    fn statement_fails_with_queries(_: &Case, queries: &[Query]) -> Result<Tally, String> {
+        if queries.is_empty() {
+            Ok(Tally::default())
+        } else {
+            Err(format!("statement 2: UPDATE t0 SET c1 = 1: no such column: c1\n  {} queries", queries.len()))
+        }
+    }
+
+    /// A statement error's example also keeps the input before shrinking,
+    /// in `unshrunk/`, with its own message; the example count is the
+    /// examples' alone.
+    #[test]
+    fn statement_errors_keep_the_unshrunk_input() {
+        let gen = case_queries();
+        let input = (0..200)
+            .map(|s| gen.generate(&mut Source::new(s, 60)))
+            .find(|v| v.1.len() >= 2)
+            .expect("an input with two queries");
+        let Some(Err(message)) = check(statement_fails_with_queries, &input, 5, &Storage::Memory) else {
+            panic!("the fake oracle fails");
+        };
+        let (shrunk, why) = shrink(&input, statement_fails_with_queries, &Storage::Memory, &message, &mut || {});
+        assert_eq!(shrunk.1.len(), 1);
+
+        let root = std::env::temp_dir().join(format!("runner-unshrunk-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ident = crate::records::Identity { run: "r".into(), campaign: "c".into(), tag: "t".into(), version: "v".into(), target: "x".into() };
+        assert!(findings::record_failure(&root, &ident, 1, "gen", "memory", 5, "fake", &why, &shrunk, Some((&message, &input))));
+        let ex = root.join("findings").join(findings::signature("fake", &why)).join("w1-5");
+        let un = ex.join(findings::UNSHRUNK);
+        for f in ["message.txt", "input.txt", "queries.sql", "after.db", "before.db", "case.sql"] {
+            assert!(un.join(f).exists(), "{f}");
+        }
+        assert!(!un.join("example.json").exists());
+        let events = std::fs::read_to_string(root.join("events.jsonl")).unwrap();
+        assert!(events.contains("\"unshrunk\":true"), "{events}");
+        assert_eq!(std::fs::read_to_string(un.join("message.txt")).unwrap(), message);
+        assert_eq!(std::fs::read_to_string(un.join("input.txt")).unwrap(), format!("{:?}\n{:?}\n", input.0, input.1));
+        assert_eq!(std::fs::read_to_string(ex.join("input.txt")).unwrap(), format!("{:?}\n{:?}\n", shrunk.0, shrunk.1));
+        // A second example: the signature has two, the unshrunk dirs not counted.
+        assert!(!findings::record_failure(&root, &ident, 1, "gen", "memory", 6, "fake", &why, &shrunk, Some((&message, &input))));
+        let sig = root.join("findings").join(findings::signature("fake", &why));
+        assert_eq!(std::fs::read_dir(&sig).unwrap().filter_map(Result::ok).filter(|e| e.path().is_dir()).count(), 2);
+        // Nothing shrunk: no copy.
+        assert!(!findings::record_failure(&root, &ident, 1, "gen", "memory", 7, "fake", &message, &input, Some((&message, &input))));
+        assert!(!sig.join("w1-7").join(findings::UNSHRUNK).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

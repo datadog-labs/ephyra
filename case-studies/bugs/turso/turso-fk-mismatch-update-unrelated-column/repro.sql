@@ -1,0 +1,6 @@
+CREATE TABLE p(a, b);
+CREATE TABLE c(x, y REFERENCES p(b));
+INSERT INTO c VALUES (1, NULL);
+PRAGMA foreign_keys = 1;
+UPDATE c SET x = 2;
+SELECT * FROM c;

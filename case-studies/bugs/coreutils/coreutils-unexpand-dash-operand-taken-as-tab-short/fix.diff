@@ -1,0 +1,70 @@
+diff --git a/src/uu/expand/src/expand.rs b/src/uu/expand/src/expand.rs
+index 886f4f64a..512afeb78 100644
+--- a/src/uu/expand/src/expand.rs
++++ b/src/uu/expand/src/expand.rs
+@@ -194,6 +194,7 @@ fn expand_shortcuts(args: Vec<OsString>) -> Vec<OsString> {
+ 
+     for arg in args {
+         if let Some(arg) = arg.to_str()
++            && arg.len() > 1
+             && arg.starts_with('-')
+             && arg[1..].chars().all(is_digit_or_comma)
+         {
+diff --git a/src/uu/unexpand/src/unexpand.rs b/src/uu/unexpand/src/unexpand.rs
+index 1353585a5..a64219c2b 100644
+--- a/src/uu/unexpand/src/unexpand.rs
++++ b/src/uu/unexpand/src/unexpand.rs
+@@ -201,7 +201,8 @@ fn expand_shortcuts(args: Vec<OsString>) -> Vec<OsString> {
+ 
+     for arg in args {
+         if let Some(arg) = arg.to_str() {
+-            if arg.starts_with('-') && arg[1..].chars().all(is_digit_or_comma) {
++            // A bare "-" is the standard input operand, not an empty shortcut.
++            if arg.len() > 1 && arg.starts_with('-') && arg[1..].chars().all(is_digit_or_comma) {
+                 arg[1..]
+                     .split(',')
+                     .filter(|s| !s.is_empty())
+diff --git a/tests/by-util/test_expand.rs b/tests/by-util/test_expand.rs
+index 8a5613d50..06e793fd9 100644
+--- a/tests/by-util/test_expand.rs
++++ b/tests/by-util/test_expand.rs
+@@ -510,3 +510,15 @@ fn test_buffered_reads_new_line_no_tabs_in_first_chunk() {
+         .succeeds()
+         .stdout_is_fixture("new_line_in_chunk_expected.txt");
+ }
++
++#[test]
++fn test_dash_operand_is_stdin_not_shortcut() {
++    use uutests::at_and_ucmd;
++
++    let (at, mut ucmd) = at_and_ucmd!();
++    at.write("f", "X\n");
++    ucmd.args(&["-", "f"])
++        .pipe_in("S\n")
++        .succeeds()
++        .stdout_is("S\nX\n");
++}
+diff --git a/tests/by-util/test_unexpand.rs b/tests/by-util/test_unexpand.rs
+index 675b83f35..1c2c6a221 100644
+--- a/tests/by-util/test_unexpand.rs
++++ b/tests/by-util/test_unexpand.rs
+@@ -544,3 +544,19 @@ fn test_buffered_read_edgecase_behaviour() {
+             .stdout_only(String::from_utf8(expected).unwrap());
+     }
+ }
++
++#[test]
++fn test_dash_operand_is_stdin_not_shortcut() {
++    // A bare "-" must not be taken for a "-N" shortcut (which implies --first-only)
++    new_ucmd!()
++        .args(&["-t", "3", "-"])
++        .pipe_in("a  ")
++        .succeeds()
++        .stdout_is("a\t");
++    let (at, mut ucmd) = at_and_ucmd!();
++    at.write("f", "X\n");
++    ucmd.args(&["-", "f"])
++        .pipe_in("S\n")
++        .succeeds()
++        .stdout_is("S\nX\n");
++}

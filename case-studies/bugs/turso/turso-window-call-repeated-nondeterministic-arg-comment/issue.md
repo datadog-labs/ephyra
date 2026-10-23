@@ -28,4 +28,23 @@ SQLite 3.50.4 (and trunk): no rows, no error.
 
 Each of these changes avoids the panic: a deterministic argument (`abs(b)`, `b+1`, `b`); dropping `count(*) OVER ()`; dropping the `ORDER BY 2` or the repeated call. `group_concat(random())` in the same position does not panic.
 
+The non-deterministic expression does not have to be an argument. In the window's `PARTITION BY` or `ORDER BY`, it gives the same panic for the literal second argument of `nth_value`/`lag`:
+
+```sql
+CREATE TABLE t(a, b);
+SELECT count(*) OVER (), nth_value(a, 1) OVER (PARTITION BY random() ORDER BY a) FROM t ORDER BY 2;
+SELECT count(*) OVER (), lag(a, 1) OVER (PARTITION BY random() ORDER BY a) FROM t ORDER BY 2;
+SELECT count(*) OVER (), nth_value(a, 1) OVER (ORDER BY random()) FROM t ORDER BY 2;
+```
+
+```
+thread 'main' panicked at core/translate/window.rs:3549:26:
+internal error: entered unreachable code: nth_value arg[1] must be a subquery column ref after planner rewrite, got Some(Literal(Numeric("1")))
+
+thread 'main' panicked at core/translate/window.rs:3434:26:
+internal error: entered unreachable code: lag/lead arg[1] must be a buffer column reference after planner rewrite, got Literal(Numeric("1"))
+```
+
+SQLite 3.50.4 (and trunk): no rows, no error. `PARTITION BY time(NULL)` does the same. A deterministic `PARTITION BY abs(b)` does not panic.
+
 Tested on Turso main cbd5ac4e.

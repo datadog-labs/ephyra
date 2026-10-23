@@ -1,0 +1,34 @@
+--- a/ext/fts5/test/fts5trigram2.test	2026-10-21 12:05:34
++++ b/ext/fts5/test/fts5trigram2.test	2026-10-21 23:11:41
+@@ -134,4 +134,31 @@
+   SELECT rowid FROM t5 WHERE c1 LIKE 'abc%xyxz'
+ } {2}
+ 
++#-------------------------------------------------------------------------
++# LIKE and GLOB constraints on an UNINDEXED column are not passed to
++# the trigram index, which holds no tokens for that column.
++#
++reset_db
++do_execsql_test 6.0 {
++  CREATE VIRTUAL TABLE t6 USING fts5(a, b UNINDEXED, tokenize=trigram);
++  INSERT INTO t6(rowid, a, b) VALUES(1, 'xyz', 'abcdef');
++  INSERT INTO t6(rowid, a, b) VALUES(2, 'abcdef', 'xyz');
++} {}
++do_execsql_test 6.1 {
++  SELECT rowid FROM t6 WHERE b LIKE '%bcd%'
++} {1}
++do_execsql_test 6.2 {
++  SELECT rowid FROM t6 WHERE b GLOB '*bcd*'
++} {1}
++do_execsql_test 6.3 {
++  SELECT rowid FROM t6 WHERE a LIKE '%bcd%'
++} {2}
++do_execsql_test 6.4 {
++  CREATE VIRTUAL TABLE t7 USING fts5(
++      a, b UNINDEXED, tokenize='trigram case_sensitive 1'
++  );
++  INSERT INTO t7(rowid, a, b) VALUES(1, 'xyz', 'abcdef');
++  SELECT rowid FROM t7 WHERE b GLOB '*bcd*';
++} {1}
++
+ finish_test

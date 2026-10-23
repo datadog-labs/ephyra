@@ -1,0 +1,51 @@
+diff --git a/src/uu/csplit/src/csplit.rs b/src/uu/csplit/src/csplit.rs
+index d5b1a728c..274358297 100644
+--- a/src/uu/csplit/src/csplit.rs
++++ b/src/uu/csplit/src/csplit.rs
+@@ -385,6 +385,11 @@ impl SplitWriter<'_> {
+         let mut ret = Err(CsplitError::LineOutOfRange(pattern_as_str.to_string()));
+         while let Some((ln, line)) = input_iter.next() {
+             let line = line?;
++            // like GNU, with suppress-matched the line `n` to suppress may be the one just past
++            // the end of the input, as long as this split is not empty
++            if self.options.suppress_matched && ln + 2 == n {
++                ret = Ok(());
++            }
+             match n.cmp(&(&ln + 1)) {
+                 Ordering::Less => {
+                     assert!(
+diff --git a/tests/by-util/test_csplit.rs b/tests/by-util/test_csplit.rs
+index 3812aaf1d..fa55bb1fd 100644
+--- a/tests/by-util/test_csplit.rs
++++ b/tests/by-util/test_csplit.rs
+@@ -33,6 +33,30 @@ fn test_line_numbers_suppress_matched_final_empty() {
+     assert_eq!(at.read("xx03"), "");
+ }
+ 
++#[test]
++fn test_line_number_suppress_matched_just_past_end() {
++    // like GNU, the suppressed line may be the one just past the end of the input
++    let (at, mut ucmd) = at_and_ucmd!();
++    ucmd.args(&["--suppress-matched", "-", "3"])
++        .pipe_in("1\n2\n")
++        .succeeds()
++        .stdout_only("4\n0\n");
++    assert_eq!(at.read("xx00"), "1\n2\n");
++    assert_eq!(at.read("xx01"), "");
++
++    new_ucmd!()
++        .args(&["--suppress-matched", "-", "4"])
++        .pipe_in("1\n2\n")
++        .fails_with_code(1)
++        .stderr_contains("csplit: '4': line number out of range");
++
++    new_ucmd!()
++        .args(&["--suppress-matched", "-", "2", "3"])
++        .pipe_in("1\n2\n")
++        .fails_with_code(1)
++        .stderr_contains("csplit: '3': line number out of range");
++}
++
+ #[test]
+ fn test_line_numbers_suppress_matched_final_empty_elided_with_z() {
+     let (at, mut ucmd) = at_and_ucmd!();

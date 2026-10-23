@@ -1,0 +1,11 @@
+PRAGMA encoding = 'UTF-16le';
+CREATE TABLE t1(b);
+INSERT INTO t1 VALUES (zeroblob(4));
+SELECT hex(CAST(zeroblob(4) AS TEXT));
+SELECT hex(CAST(x'00000000' AS TEXT));
+SELECT hex(CAST(b AS TEXT)) FROM t1;
+WITH x AS MATERIALIZED (SELECT zeroblob(4) AS b FROM t1) SELECT hex(CAST(b AS TEXT)) FROM x;
+CREATE TABLE t2(c);
+INSERT INTO t2 VALUES ('ab'), ('abc');
+WITH x AS (SELECT zeroblob(length(c)) AS z FROM t2) SELECT count(*) FROM (SELECT 1 FROM x GROUP BY upper(z));
+WITH x AS MATERIALIZED (SELECT zeroblob(length(c)) AS z FROM t2) SELECT count(*) FROM (SELECT 1 FROM x GROUP BY upper(z));

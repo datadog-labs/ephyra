@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9839 (https://github.com/tursodatabase/turso/issues/9839) (line 1 corrected 2026-10-21).
 
 Title: json_each/json_tree error "number too large to fit in target type" on integers outside the i64 range
 

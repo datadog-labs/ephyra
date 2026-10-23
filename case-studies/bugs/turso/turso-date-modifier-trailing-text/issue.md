@@ -1,4 +1,4 @@
-DRAFT, not filed.
+Filed as #9837 (https://github.com/tursodatabase/turso/issues/9837) (line 1 corrected 2026-10-21).
 
 Title: date/time "NNN units" and "±YYYY-MM-DD" modifiers accept trailing whitespace and trailing text that SQLite rejects
 

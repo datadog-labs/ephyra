@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "--sort=numeric"
+  ],
+  "aspect": "stdout",
+  "message": "sort --sort=numeric  <stdin \"b\\n\\u{c}2\"  | uu: code=Some(0) out=\"b\\n\\u{c}2\\n\" err=\"\" | gnu: code=Some(0) out=\"\\u{c}2\\nb\\n\" err=\"\"",
+  "oracle": "diff",
+  "seed": "1:11400714819323198532",
+  "signature": "diff__sort_stdout",
+  "util": "sort"
+}

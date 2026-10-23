@@ -1,0 +1,3 @@
+CREATE TABLE t(b BOOLEAN);
+INSERT INTO t VALUES (false);
+SELECT b FROM t WHERE (1 IN ((SELECT max(1) WHERE b), 1)) <> b;

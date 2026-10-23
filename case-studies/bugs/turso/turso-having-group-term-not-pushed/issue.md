@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9880 (https://github.com/tursodatabase/turso/issues/9880) (line 1 corrected 2026-10-21).
 
 # Aggregates of groups removed by a GROUP BY-only HAVING term still run, so they raise errors SQLite never reaches
 

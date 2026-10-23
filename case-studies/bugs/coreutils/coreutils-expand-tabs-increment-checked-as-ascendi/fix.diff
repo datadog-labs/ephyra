@@ -1,0 +1,44 @@
+diff --git a/src/uu/expand/src/expand.rs b/src/uu/expand/src/expand.rs
+index 21f3cc36f..886f4f64a 100644
+--- a/src/uu/expand/src/expand.rs
++++ b/src/uu/expand/src/expand.rs
+@@ -92,8 +92,12 @@ fn tabstops_parse(s: &str) -> Result<(RemainingMode, Vec<usize>), ParseError> {
+                     match s.parse::<usize>() {
+                         // Tab size must be positive.
+                         Ok(0) => return Err(ParseError::TabSizeCannotBeZero),
+-                        // Tab sizes must be ascending.
+-                        Ok(num) if nums.last().is_some_and(|last| *last >= num) => {
++                        // Tab sizes must be ascending. A "/" or "+" value is an
++                        // increment, not a position, so it is exempt.
++                        Ok(num)
++                            if remaining_mode == RemainingMode::None
++                                && nums.last().is_some_and(|last| *last >= num) =>
++                        {
+                             return Err(ParseError::TabSizesMustBeAscending);
+                         }
+                         Ok(num) => {
+diff --git a/tests/by-util/test_expand.rs b/tests/by-util/test_expand.rs
+index 49d19bbe9..8a5613d50 100644
+--- a/tests/by-util/test_expand.rs
++++ b/tests/by-util/test_expand.rs
+@@ -166,6 +166,20 @@ fn test_tabs_trailing_plus() {
+         .stdout_is(" a    b    c");
+ }
+ 
++#[test]
++fn test_tabs_trailing_specifier_not_larger_than_last_tabstop() {
++    new_ucmd!()
++        .arg("--tabs=2,/2")
++        .pipe_in("a\tb\tc\td")
++        .succeeds()
++        .stdout_is("a b c d");
++    new_ucmd!()
++        .arg("--tabs=4,+2")
++        .pipe_in("\ta\tb\tc")
++        .succeeds()
++        .stdout_is("    a b c");
++}
++
+ #[test]
+ fn test_tabs_trailing_plus_long_columns() {
+     new_ucmd!()

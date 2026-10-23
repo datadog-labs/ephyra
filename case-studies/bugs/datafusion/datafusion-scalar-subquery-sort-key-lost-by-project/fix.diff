@@ -1,0 +1,71 @@
+diff --git a/datafusion/physical-expr/src/equivalence/class.rs b/datafusion/physical-expr/src/equivalence/class.rs
+index b68d20fcc..91da5baef 100644
+--- a/datafusion/physical-expr/src/equivalence/class.rs
++++ b/datafusion/physical-expr/src/equivalence/class.rs
+@@ -25,6 +25,7 @@ use super::ProjectionMapping;
+ use crate::expressions::Literal;
+ use crate::physical_expr::add_offset_to_expr;
+ use crate::projection::ProjectionTargets;
++use crate::scalar_subquery::ScalarSubqueryExpr;
+ use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
+ 
+ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+@@ -359,8 +360,9 @@ impl EquivalenceGroup {
+             return;
+         }
+         // If the expression is not in any equivalence class, but has the same
+-        // constant value with some class, add it to that class:
+-        if let AcrossPartitions::Uniform(_) = &const_expr.across_partitions {
++        // constant value with some class, add it to that class. Two constants
++        // whose values are unknown are not necessarily equal:
++        if let AcrossPartitions::Uniform(Some(_)) = &const_expr.across_partitions {
+             for (idx, cls) in self.classes.iter_mut().enumerate() {
+                 if cls
+                     .constant
+@@ -782,6 +784,11 @@ impl EquivalenceGroup {
+         if let Some(lit) = expr.downcast_ref::<Literal>() {
+             return Some(AcrossPartitions::Uniform(Some(lit.value().clone())));
+         }
++        // An uncorrelated scalar subquery is evaluated once per query, so it has
++        // the same (not yet known) value in every row of every partition:
++        if expr.is::<ScalarSubqueryExpr>() {
++            return Some(AcrossPartitions::Uniform(None));
++        }
+         if let Some(cls) = self.get_equivalence_class(expr)
+             && cls.constant.is_some()
+         {
+@@ -1365,4 +1372,34 @@ mod tests {
+ 
+         Ok(())
+     }
++
++    #[test]
++    fn test_scalar_subquery_is_uniform_constant() {
++        use datafusion_expr::physical_planning_context::{
++            ScalarSubqueryResults, SubqueryIndex,
++        };
++
++        let results = ScalarSubqueryResults::new(2);
++        let sq = |i| -> Arc<dyn PhysicalExpr> {
++            Arc::new(ScalarSubqueryExpr::new(
++                DataType::Int32,
++                true,
++                SubqueryIndex::new(i),
++                results.clone(),
++            ))
++        };
++        let group = EquivalenceGroup::default();
++        assert_eq!(
++            group.is_expr_constant(&sq(0)),
++            Some(AcrossPartitions::Uniform(None))
++        );
++
++        // Two constants with unknown values must not be considered equal:
++        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
++        let b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
++        let mut group = EquivalenceGroup::default();
++        group.add_constant(ConstExpr::new(a, AcrossPartitions::Uniform(None)));
++        group.add_constant(ConstExpr::new(b, AcrossPartitions::Uniform(None)));
++        assert_eq!(group.len(), 2);
++    }
+ }

@@ -19,7 +19,7 @@ use crate::{
     model::{Action, Column, Compression, Deferral, ForeignKey, Index, Method, Model, Storage, Table, TrigAction, Trigger, Value},
     semantics::{self, inserted_rows, next_value},
     setup::{self, draw_columns, draw_index, draw_pred, draw_type, draw_value, fresh, setup_ok, simpler_indexes, simpler_values, Pool, Setup, Setups},
-    statements::{CmpOp, Delete, Enable, FromTable, Insert, Lit, Merge, MergeAction, MergeKind, OnConflict, OrderTerm, Phys, Pred, Returning, Select, SetVal, Setting, Stat, Statement, Target, Update, When, Which},
+    statements::{CmpOp, Delete, DomOp, Enable, FromTable, Insert, Lit, Merge, MergeAction, MergeKind, OnConflict, OrderTerm, Phys, Pred, Returning, Select, SetVal, Setting, Stat, Statement, Target, Update, When, Which},
 };
 
 /// A database to start from and the statements to run on it, in order.
@@ -237,6 +237,12 @@ pub fn draw_statement(g: &mut Source, m: &Model, pool: &Pool) -> Statement {
             (1, 27),
             (2, 28),
             (14, 29),
+            (ALTER_TYPES, 30),
+            (TRIPS, 31),
+            (CONSTRAINTS, 32),
+            (PARTITIONS, 33),
+            (DOMAINS, 34),
+            (KEYS, 35),
         ]);
         let s = match k {
             0 => Statement::Select(draw_select(g, t, pool)),
@@ -340,15 +346,53 @@ pub fn draw_statement(g: &mut Source, m: &Model, pool: &Pool) -> Statement {
                 Some(s) => s,
                 None => continue,
             },
+            32 => match g.int(0..5) {
+                0 | 1 => Statement::AddCheck { table: t.id, id: t.next_check, pred: draw_pred(g, t, 2, Some(pool)), not_valid: g.bool_with(0.3) },
+                2 if !t.named.is_empty() => Statement::DropCheck { table: t.id, id: t.named[g.index(t.named.len())].0 },
+                3 if !t.named.is_empty() => Statement::ValidateCheck { table: t.id, id: t.named[g.index(t.named.len())].0 },
+                _ => {
+                    let c = &t.columns[g.index(t.columns.len())];
+                    Statement::SetNotNull { table: t.id, column: c.id, on: true }
+                },
+            },
+            35 => match draw_key_change(g, t) {
+                Some(s) if semantics::valid(m, &s) => s,
+                Some(s @ Statement::AddKey { .. }) => match &s {
+                    Statement::AddKey { table, columns, using } => match semantics::add_key(m, *table, columns, *using) {
+                        Some(Err(code)) => Statement::Expect(code, Box::new(s.clone())),
+                        _ => continue,
+                    },
+                    _ => continue,
+                },
+                _ => continue,
+            },
+            34 => match draw_domain(g, m, t, pool) {
+                Some(s) => s,
+                None => continue,
+            },
+            33 => match draw_partition_change(g, m, t, pool) {
+                Some(s) => s,
+                None => continue,
+            },
+            31 => match draw_trip(g, t) {
+                Some(op) => Statement::Trip { table: t.id, op },
+                None => continue,
+            },
+            30 => match draw_alter_type(g, m, t) {
+                Some(s) => s,
+                None => continue,
+            },
             _ => Statement::Vacuum { tables: vec![t.id], full: g.bool_with(0.2), freeze: g.bool_with(0.2), analyze: g.bool_with(0.3) },
         };
         if semantics::valid(m, &s) {
             return returning(g, m, s);
         }
         // A write PostgreSQL refuses with one error: run where it is caught.
-        if matches!(s, Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_) | Statement::AddForeignKey { not_valid: false, .. }) && g.bool_with(0.8) {
+        if (matches!(s, Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_) | Statement::AddForeignKey { not_valid: false, .. } | Statement::AddCheck { not_valid: false, .. }) || CONSTRAINTS > 0 && matches!(s, Statement::SetNotNull { on: true, .. })) && g.bool_with(0.8) {
             let code = match &s {
                 Statement::AddForeignKey { .. } => Some(fk::Code::ForeignKey),
+                Statement::AddCheck { .. } => Some(fk::Code::Check),
+                Statement::SetNotNull { .. } => Some(fk::Code::NotNull),
                 _ => semantics::dml_write(m, &s).and_then(|(w, _)| w.errors.code()),
             };
             if let Some(code) = code {
@@ -361,6 +405,164 @@ pub fn draw_statement(g: &mut Source, m: &Model, pool: &Pool) -> Statement {
     }
     let t = &m.tables[g.index(m.tables.len())];
     Statement::Count { table: t.id, filter: None }
+}
+
+/// The weight of primary keys added and dropped.
+const KEYS: u32 = 6;
+
+/// `DROP CONSTRAINT t{t}_pkey` of a table with a key; for one without,
+/// `ADD .. PRIMARY KEY` of 1 or 2 columns (the partition key among them),
+/// or USING INDEX of a unique index now and then.
+fn draw_key_change(g: &mut Source, t: &Table) -> Option<Statement> {
+    if !t.key.is_empty() {
+        return Some(Statement::DropKey(t.id));
+    }
+    let uniques: Vec<&Index> = t.indexes.iter().filter(|i| i.unique).collect();
+    if !uniques.is_empty() && g.bool_with(0.4) {
+        let i = uniques[g.index(uniques.len())];
+        return Some(Statement::AddKey { table: t.id, columns: i.columns.iter().map(|c| c.column).collect(), using: Some(i.id) });
+    }
+    let mut columns = vec![t.columns[g.index(t.columns.len())].id];
+    if let Some(p) = &t.partitioning {
+        columns = vec![p.column];
+    }
+    if t.columns.len() > 1 && g.bool_with(0.35) {
+        let c = t.columns[g.index(t.columns.len())].id;
+        if !columns.contains(&c) {
+            columns.push(c);
+        }
+    }
+    Some(Statement::AddKey { table: t.id, columns, using: None })
+}
+
+/// The weight of domains: a column changed to a new domain over its type,
+/// or its domain altered.
+const DOMAINS: u32 = 10;
+
+fn draw_domain(g: &mut Source, m: &Model, t: &Table, pool: &Pool) -> Option<Statement> {
+    let c = &t.columns[g.index(t.columns.len())];
+    let at = t.pos(c.id)?;
+    let shape = Table { columns: vec![c.clone()], rows: t.rows.iter().map(|r| vec![r[at].clone()]).collect(), ..Table::new(t.id, &[]) };
+    let s = match &c.dom {
+        Some(d) if g.bool_with(0.7) => {
+            let op = match g.int(0..4) {
+                0 => DomOp::AddCheck(draw_pred(g, &shape, 2, Some(pool)), g.bool_with(0.3)),
+                1 => DomOp::DropCheck,
+                2 => DomOp::Validate,
+                _ => DomOp::NotNull(!d.not_null),
+            };
+            let s = Statement::AlterDomain { table: t.id, column: c.id, name: d.name, op };
+            // NOT VALID is taken by any rows; drawn only on rows that keep it.
+            if let Statement::AlterDomain { op: DomOp::AddCheck(_, true), .. } = &s {
+                return semantics::valid(m, &s).then_some(s);
+            }
+            s
+        },
+        _ => {
+            let dom = crate::model::Domain { name: t.next_check, not_null: g.bool_with(0.3), check: g.bool_with(0.75).then(|| draw_pred(g, &shape, 2, Some(pool))) };
+            Statement::SetDomain { table: t.id, column: c.id, ty: c.ty, dom }
+        },
+    };
+    if semantics::valid(m, &s) {
+        return Some(s);
+    }
+    let code = match &s {
+        Statement::SetDomain { table, column, dom, .. } => semantics::set_domain(m, *table, *column, dom)?.err()?,
+        Statement::AlterDomain { table, column, op, .. } => semantics::alter_domain(m, *table, *column, op)?.err()?,
+        _ => return None,
+    };
+    let e = Statement::Expect(code, Box::new(s));
+    semantics::valid(m, &e).then_some(e)
+}
+
+/// The weight of partitions dropped and added (of a partitioned table).
+const PARTITIONS: u32 = 0;
+
+/// A partition of `t` detached and dropped, or a new one created (run
+/// where its one error is caught when the default partition holds rows
+/// of its bound).
+fn draw_partition_change(g: &mut Source, m: &Model, t: &Table, pool: &Pool) -> Option<Statement> {
+    use crate::model::{PartBound, Strategy};
+    let p = t.partitioning.as_ref()?;
+    if g.bool_with(0.4) {
+        return Some(Statement::DropPartition { table: t.id, name: p.name(g.index(p.parts.len())) });
+    }
+    let ty = t.column(p.column)?.ty;
+    let name = (0..p.parts.len()).map(|k| p.name(k) + 1).max().unwrap_or(0);
+    let bound = match p.strategy {
+        Strategy::Hash => return None,
+        _ if g.bool_with(0.15) => PartBound::Default,
+        Strategy::Range => {
+            let a = draw_value(g, ty, Some(pool));
+            let b = draw_value(g, ty, Some(pool));
+            if a == Value::Null || b == Value::Null {
+                return None;
+            }
+            let (lo, hi) = if crate::model::compare(&a, &b).is_le() { (a, b) } else { (b, a) };
+            PartBound::Range((!g.bool_with(0.1)).then_some(lo), (!g.bool_with(0.1)).then_some(hi))
+        },
+        Strategy::List => PartBound::List((0..g.int(1..=3)).map(|_| draw_value(g, ty, Some(pool))).collect()),
+    };
+    let s = Statement::AddPartition { table: t.id, name, bound };
+    if semantics::valid(m, &s) {
+        return Some(s);
+    }
+    let e = Statement::Expect(fk::Code::Check, Box::new(s));
+    semantics::valid(m, &e).then_some(e)
+}
+
+/// The weight of named CHECK constraints added, dropped and validated,
+/// and SET NOT NULL (refused on a column holding NULL).
+const CONSTRAINTS: u32 = 0;
+
+/// The weight of round trips (renames there and back, a partition
+/// detached and attached) among the statements.
+const TRIPS: u32 = 0;
+
+/// A round trip through a schema change of one of `t`'s objects.
+fn draw_trip(g: &mut Source, t: &Table) -> Option<crate::statements::Trip> {
+    use crate::statements::Trip;
+    let mut ops = vec![Trip::Column(t.columns[g.index(t.columns.len())].id), Trip::Table];
+    if !t.indexes.is_empty() {
+        ops.push(Trip::Index(t.indexes[g.index(t.indexes.len())].id));
+    }
+    if !t.key.is_empty() {
+        ops.push(Trip::Key);
+    }
+    if t.fk.is_some() {
+        ops.push(Trip::ForeignKey);
+    }
+    if !t.triggers.is_empty() {
+        ops.push(Trip::Trigger(t.triggers[g.index(t.triggers.len())].id));
+    }
+    if let Some(p) = &t.partitioning {
+        let k = g.index(p.parts.len());
+        ops.push(Trip::Partition(k, p.clone()));
+        ops.push(Trip::Partition(k, p.clone()));
+    }
+    Some(g.pick(&ops).clone())
+}
+
+/// The weight of `ALTER COLUMN .. TYPE` among the statements.
+const ALTER_TYPES: u32 = 10;
+
+/// `ALTER COLUMN .. TYPE` of a column of `t` to a type it converts to,
+/// with USING when the conversion needs it (now and then without, or
+/// with it when it does not); run where its one error is caught when it
+/// must fail (see [`semantics::alter_type`]).
+fn draw_alter_type(g: &mut Source, m: &Model, t: &Table) -> Option<Statement> {
+    let c = &t.columns[g.index(t.columns.len())];
+    let to: Vec<crate::model::Type> = crate::model::Type::ALL.iter().copied().filter(|&ty| semantics::cast_needs_using(c.ty, ty).is_some()).collect();
+    if to.is_empty() {
+        return None;
+    }
+    let ty = *g.pick(&to);
+    let using = if semantics::cast_needs_using(c.ty, ty) == Some(true) { g.bool_with(0.85) } else { g.bool_with(0.15) };
+    let s = Statement::AlterType { table: t.id, column: c.id, ty, using };
+    match semantics::alter_type(m, t.id, c.id, ty, using)? {
+        Ok(_) => Some(s),
+        Err(code) => Some(Statement::Expect(code, Box::new(s))),
+    }
 }
 
 /// A storage or estimation change of `t` (maybe invalid for it: the caller
@@ -735,7 +937,7 @@ fn draw_merge(g: &mut Source, m: &Model, t: &Table, pool: &Pool, join: bool) -> 
         reference(g, m, t, &columns, &mut row);
         rows.push(row);
     }
-    let src = Table { columns: t.columns.iter().filter(|c| columns.contains(&c.id)).cloned().collect(), rows: Vec::new(), indexes: Vec::new(), key: Vec::new(), checks: Vec::new(), ..t.clone() };
+    let src = Table { columns: t.columns.iter().filter(|c| columns.contains(&c.id)).cloned().collect(), rows: Vec::new(), indexes: Vec::new(), key: Vec::new(), checks: Vec::new(), named: Vec::new(), ..t.clone() };
     let mut whens: Vec<When> = Vec::new();
     let mut terminal = [false; 3];
     for _ in 0..if join { 1 } else { g.int(1..=3) } {
@@ -955,6 +1157,18 @@ pub fn statement_cost(s: &Statement) -> u64 {
         Statement::AddColumn { column, .. } => 1 + u64::from(column.not_null) + column.default.as_ref().map_or(0, |v| 1 + v.cost()) + u64::from(column.storage.is_some()) + u64::from(column.compression.is_some()),
         Statement::SetNotNull { on, .. } => 1 + u64::from(*on),
         Statement::SetDefault { value, .. } => 1 + value.as_ref().map_or(0, |v| 1 + v.cost()),
+        Statement::AlterType { using, .. } => 2 + u64::from(*using),
+        Statement::DropPartition { .. } => 1,
+        Statement::AddKey { columns, using, .. } => 1 + columns.len() as u64 + u64::from(using.is_some()),
+        Statement::DropKey(_) => 1,
+        Statement::SetDomain { dom, .. } => 2 + u64::from(dom.not_null) + dom.check.as_ref().map_or(0, |p| 1 + p.cost()),
+        Statement::AlterDomain { op, .. } => 1 + match op {
+            DomOp::AddCheck(p, nv) => p.cost() + u64::from(*nv),
+            _ => 1,
+        },
+        Statement::AddPartition { bound, .. } => crate::model::Partitioning { strategy: crate::model::Strategy::List, column: 0, parts: vec![bound.clone()], names: Vec::new() }.cost(),
+        Statement::Trip { .. } | Statement::DropCheck { .. } | Statement::ValidateCheck { .. } => 1,
+        Statement::AddCheck { pred, not_valid, .. } => 1 + pred.cost() + u64::from(*not_valid),
         Statement::Vacuum { tables, full, freeze, analyze } => tables.len() as u64 + u64::from(*full) + u64::from(*freeze) + u64::from(*analyze),
         Statement::Analyze(tables) => tables.len() as u64,
         Statement::Cluster { .. } => 2,
@@ -1647,7 +1861,8 @@ pub fn case_metrics(case: &Case, _size: usize) -> Vec<(&'static str, f64)> {
             | Statement::AddColumn { .. }
             | Statement::DropColumn { .. }
             | Statement::SetNotNull { .. }
-            | Statement::SetDefault { .. } => 4,
+            | Statement::SetDefault { .. }
+            | Statement::AlterType { .. } => 4,
             Statement::Savepoint(_) | Statement::RollbackTo(_) | Statement::Release(_) | Statement::Rollback => 6,
             _ => 5,
         }] += 1;

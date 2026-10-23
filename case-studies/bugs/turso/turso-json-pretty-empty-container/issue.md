@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9885 (https://github.com/tursodatabase/turso/issues/9885) (line 1 corrected 2026-10-21).
 
 # json_pretty() prints an empty object or array on two lines
 

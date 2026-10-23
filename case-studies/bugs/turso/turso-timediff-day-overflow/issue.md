@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9886 (https://github.com/tursodatabase/turso/issues/9886) (line 1 corrected 2026-10-21).
 
 # timediff() gives wrong (sometimes malformed) results for dates with an overflowing day such as 2023-02-29
 

@@ -1,0 +1,56 @@
+--- a/test/altercol.test
++++ b/test/altercol.test
+@@ -958,5 +958,53 @@
+   PRAGMA foreign_keys = 1;
+   ALTER TABLE t2 ADD COLUMN d REFERENCES t1 DEFAULT 123;
+ } {1 {Cannot add a REFERENCES column with non-NULL default value}}
++
++#-------------------------------------------------------------------------
++# RENAME COLUMN of an INTEGER PRIMARY KEY column that is also named by a
++# UNIQUE table constraint. The UNIQUE follows the PRIMARY KEY in a WITHOUT
++# ROWID table, or precedes it in a rowid table.
++#
++reset_db
++do_execsql_test 25.0 {
++  CREATE TABLE t1(c INTEGER, PRIMARY KEY(c), UNIQUE(c)) WITHOUT ROWID;
++  CREATE TABLE t2(c INTEGER PRIMARY KEY, d, UNIQUE(d, c)) WITHOUT ROWID;
++  CREATE TABLE t3(c INTEGER, d, PRIMARY KEY(c DESC), UNIQUE(c COLLATE nocase))
++      WITHOUT ROWID;
++  CREATE TABLE t4(c INTEGER, d, UNIQUE(d, c), PRIMARY KEY(c));
++  CREATE TABLE t5(c INTEGER, UNIQUE(c), PRIMARY KEY(c));
++  INSERT INTO t2 VALUES(1, 2);
++  INSERT INTO t4 VALUES(1, 2);
++}
++foreach {tn tbl} {1 t1 2 t2 3 t3 4 t4 5 t5} {
++  do_execsql_test 25.1.$tn "ALTER TABLE $tbl RENAME COLUMN c TO z"
++}
++do_execsql_test 25.2 {
++  SELECT sql FROM sqlite_schema WHERE type='table' ORDER BY name;
++} {
++  {CREATE TABLE t1(z INTEGER, PRIMARY KEY(z), UNIQUE(z)) WITHOUT ROWID}
++  {CREATE TABLE t2(z INTEGER PRIMARY KEY, d, UNIQUE(d, z)) WITHOUT ROWID}
++  {CREATE TABLE t3(z INTEGER, d, PRIMARY KEY(z DESC), UNIQUE(z COLLATE nocase))
++      WITHOUT ROWID}
++  {CREATE TABLE t4(z INTEGER, d, UNIQUE(d, z), PRIMARY KEY(z))}
++  {CREATE TABLE t5(z INTEGER, UNIQUE(z), PRIMARY KEY(z))}
++}
++do_execsql_test 25.3 {
++  SELECT z, d FROM t2;
++  SELECT z, d, rowid FROM t4;
++  PRAGMA integrity_check;
++} {1 2 1 2 1 ok}
+ 
++# Renaming another column of such a table must leave the INTEGER PRIMARY
++# KEY column references alone.
++do_execsql_test 25.4 {
++  CREATE TABLE t6(c INTEGER PRIMARY KEY, d, UNIQUE(d, c)) WITHOUT ROWID;
++  CREATE TABLE t7(c INTEGER, d, UNIQUE(d, c), PRIMARY KEY(c));
++  ALTER TABLE t6 RENAME COLUMN d TO e;
++  ALTER TABLE t7 RENAME COLUMN d TO e;
++  SELECT sql FROM sqlite_schema WHERE name IN ('t6', 't7') ORDER BY name;
++} {
++  {CREATE TABLE t6(c INTEGER PRIMARY KEY, e, UNIQUE(e, c)) WITHOUT ROWID}
++  {CREATE TABLE t7(c INTEGER, e, UNIQUE(e, c), PRIMARY KEY(c))}
++}
++
+ finish_test

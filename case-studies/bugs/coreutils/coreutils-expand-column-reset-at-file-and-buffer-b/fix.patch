@@ -1,0 +1,190 @@
+From 914f69c5c8cd3d9a9615d0961bf95095afbc7aa4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Fri, 16 Oct 2026 21:52:13 +0000
+Subject: [PATCH] expand: keep the column across input files and read buffers
+
+expand restarted the output column, and the -i "still in leading
+blanks" state, at every input file, and the -i state also at every read
+buffer. The fast path for a buffer without tabs wrote it unchanged but
+did not advance the column unless the buffer contained a newline. Tabs
+after a file that does not end in a newline, and tabs on lines longer
+than one read buffer, were then expanded as if the line started at the
+boundary.
+
+Keep col and init for the whole run and pass them through expand_file
+and expand_buf. In the fast path, reset them at the last newline and
+advance them over the bytes after it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/uu/expand/src/expand.rs  | 41 +++++++++++++++++++++++++++---------
+ tests/by-util/test_expand.rs | 31 +++++++++++++++++++++++++++
+ 2 files changed, 62 insertions(+), 10 deletions(-)
+
+diff --git a/src/uu/expand/src/expand.rs b/src/uu/expand/src/expand.rs
+index 21f3cc36f..1dc537762 100644
+--- a/src/uu/expand/src/expand.rs
++++ b/src/uu/expand/src/expand.rs
+@@ -367,6 +367,7 @@ fn expand_buf(
+     tabstops: &[usize],
+     options: &Options,
+     col: &mut usize,
++    init: &mut bool,
+ ) -> std::io::Result<()> {
+     use self::CharType::{Backspace, Other, Tab};
+ 
+@@ -378,14 +379,28 @@ fn expand_buf(
+         .any(|&b| b == b'\t' || b == b'\x08' || (!options.utf8 && b == b'\r'));
+     if !needs_processing {
+         output.write_all(buf)?;
+-        if let Some(n) = buf.iter().rposition(|&b| b == b'\n') {
+-            *col = buf.len() - n - 1;
++        // Only the part after the last newline affects the column state.
++        let tail = match buf.iter().rposition(|&b| b == b'\n') {
++            Some(n) => {
++                *col = 0;
++                *init = true;
++                &buf[n + 1..]
++            }
++            None => buf,
++        };
++        let mut byte = 0;
++        while byte < tail.len() {
++            let (_, cwidth, nbytes) = classify_char(tail, byte, options.utf8);
++            *col += cwidth;
++            if tail[byte] != b' ' {
++                *init = false;
++            }
++            byte += nbytes;
+         }
+         return Ok(());
+     }
+ 
+     let mut byte = 0;
+-    let mut init = true;
+ 
+     while byte < buf.len() {
+         let (ctype, cwidth, nbytes) = classify_char(buf, byte, options.utf8);
+@@ -398,7 +413,7 @@ fn expand_buf(
+                 *col += nts;
+ 
+                 // now dump out either spaces if we're expanding, or a literal tab if we're not
+-                if init || !options.iflag {
++                if *init || !options.iflag {
+                     write_spaces(output, nts)?;
+                 } else {
+                     output.write_all(&buf[byte..byte + nbytes])?;
+@@ -410,7 +425,7 @@ fn expand_buf(
+                 // if we're writing anything other than a space, then we're
+                 // done with the line's leading spaces
+                 if buf[byte] != b' ' {
+-                    init = false;
++                    *init = false;
+                 }
+ 
+                 output.write_all(&buf[byte..byte + nbytes])?;
+@@ -421,12 +436,12 @@ fn expand_buf(
+                 // if we're writing anything other than a space, then we're
+                 // done with the line's leading spaces
+                 if buf[byte] != b' ' {
+-                    init = false;
++                    *init = false;
+                 }
+ 
+                 if buf[byte] == b'\n' {
+                     *col = 0;
+-                    init = true;
++                    *init = true;
+                 }
+ 
+                 output.write_all(&buf[byte..byte + nbytes])?;
+@@ -439,19 +454,23 @@ fn expand_buf(
+     Ok(())
+ }
+ 
++/// `col` and `init` carry the state of the current output line across buffers
++/// and files: the input files are processed as one concatenated stream, so a
++/// line that is not terminated at the end of one file continues in the next.
+ fn expand_file(
+     file: &OsString,
+     output: &mut BufWriter<std::io::Stdout>,
+     options: &Options,
++    col: &mut usize,
++    init: &mut bool,
+ ) -> UResult<()> {
+     let mut input = open(file)?;
+     let ts = options.tabstops.as_ref();
+-    let mut col = 0;
+     loop {
+         match input.fill_buf() {
+             Ok([]) => break,
+             Ok(buf) => {
+-                expand_buf(buf, output, ts, options, &mut col)
++                expand_buf(buf, output, ts, options, col, init)
+                     .map_err_context(|| translate!("expand-error-failed-to-write-output"))?;
+                 let len = buf.len();
+                 input.consume(len);
+@@ -465,8 +484,10 @@ fn expand_file(
+ fn expand(options: &Options) -> UResult<()> {
+     let mut output = BufWriter::new(stdout());
+ 
++    let mut col = 0;
++    let mut init = true;
+     for file in &options.files {
+-        if let Err(e) = expand_file(file, &mut output, options) {
++        if let Err(e) = expand_file(file, &mut output, options, &mut col, &mut init) {
+             show!(e);
+             set_exit_code(1);
+         }
+diff --git a/tests/by-util/test_expand.rs b/tests/by-util/test_expand.rs
+index 49d19bbe9..9a2b4339f 100644
+--- a/tests/by-util/test_expand.rs
++++ b/tests/by-util/test_expand.rs
+@@ -6,6 +6,7 @@
+ // spell-checker:ignore (ToDO) taaaa tbbbb tcccc
+ 
+ use uucore::display::Quotable;
++use uutests::at_and_ucmd;
+ use uutests::new_ucmd;
+ 
+ #[test]
+@@ -67,6 +68,36 @@ fn test_with_multiple_files() {
+         .stdout_contains("        ");
+ }
+ 
++#[test]
++fn test_column_continues_across_files() {
++    let (at, mut ucmd) = at_and_ucmd!();
++    at.write("f1", "a");
++    at.write("f2", "\tb\n");
++    ucmd.args(&["f1", "f2"]).succeeds().stdout_is("a       b\n");
++}
++
++#[test]
++fn test_initial_continues_across_files() {
++    let (at, mut ucmd) = at_and_ucmd!();
++    at.write("f1", "    ");
++    at.write("f2", "\tx\n");
++    ucmd.args(&["-i", "f1", "f2"])
++        .succeeds()
++        .stdout_is("        x\n");
++}
++
++#[test]
++fn test_column_tracked_across_buffers_without_tabs() {
++    // The first read buffer holds no tab and no newline.
++    let input = format!("{}bcd\tx\n", "a".repeat(8190));
++    let expected = format!("{}bcd   x\n", "a".repeat(8190));
++    new_ucmd!()
++        .arg("-t3")
++        .pipe_in(input)
++        .succeeds()
++        .stdout_is(expected);
++}
++
+ #[test]
+ fn test_tabs() {
+     for list in ["3 6 9", "3,6,9", "3\t6\t9", ", \t3,\t6 9,"] {
+-- 
+2.55.0
+

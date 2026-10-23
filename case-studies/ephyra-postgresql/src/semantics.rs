@@ -53,9 +53,11 @@
 //! - Foreign keys and the writes they act on: [`crate::fk`]. `DROP TABLE`
 //!   and `TRUNCATE` say CASCADE (the referencing foreign keys go, the
 //!   referencing tables are emptied too); a column or UNIQUE index a
-//!   foreign key references is not dropped (PostgreSQL would need
-//!   CASCADE); `SET LOGGED | UNLOGGED` keeps linked tables' persistence
-//!   compatible; `ALTER CONSTRAINT` runs outside a transaction only (a
+//!   foreign key references is not dropped, nor a column such an index
+//!   reads, `INCLUDE` too (PostgreSQL would need CASCADE, see
+//!   [`fk::may_back`]); a column a trigger names is not dropped either
+//!   ([`fk::trigger_column`]); extended statistics go with a column;
+//!   `SET LOGGED | UNLOGGED` keeps linked tables' persistence compatible; `ALTER CONSTRAINT` runs outside a transaction only (a
 //!   generator restriction: the deferred state of a constraint whose
 //!   deferrability changes mid-transaction is not modelled).
 //! - `INSERT .. ON CONFLICT` ([`crate::fk`]'s `upsert`, row by row as
@@ -82,9 +84,9 @@
 use std::cmp::Ordering;
 
 use crate::{
-    fk::{self, Change, Write},
-    model::{compare, identical, order_nulls, sizes_ok, unique_ok, Column, Index, Method, Model, Row, Snapshot, Table, Value, MAX_COLUMNS, MAX_INDEXES, MAX_TABLES},
-    statements::{method_takes, outside_transaction, CmpOp, Insert, Lit, OrderTerm, Phys, Pred, FromTable, Merge, MergeAction, MergeKind, Returning, SetVal, Stat, Statement, Target, Update, When, Which},
+    fk::{self, Change, Code, Write},
+    model::{compare, identical, order_nulls, sizes_ok, unique_ok, Column, Index, Method, Model, Row, Snapshot, Table, Type, Value, MAX_COLUMNS, MAX_INDEXES, MAX_TABLES},
+    statements::{method_takes, outside_transaction, CmpOp, DomOp, Trip, Insert, Lit, OrderTerm, Phys, Pred, FromTable, Merge, MergeAction, MergeKind, Returning, SetVal, Stat, Statement, Target, Update, When, Which},
 };
 
 /// The most savepoints open at once.
@@ -163,8 +165,8 @@ fn selects(t: &Table, r: &Row, filter: &Option<Pred>) -> bool {
 pub fn rows_ok(t: &Table, rows: &[Row]) -> bool {
     rows.iter().all(|r| {
         r.len() == t.columns.len()
-            && r.iter().zip(&t.columns).all(|(v, c)| c.ty.admits(v) && !(*v == Value::Null && (c.not_null || c.identity || t.key.contains(&c.id))))
-            && t.checks.iter().all(|p| eval(t, r, p) != Some(false))
+            && r.iter().zip(&t.columns).all(|(v, c)| c.ty.admits(v) && !(*v == Value::Null && (c.refuses_null() || t.key.contains(&c.id))))
+            && t.all_checks().all(|p| eval(t, r, p) != Some(false))
             && t.partitioning.as_ref().is_none_or(|p| t.pos(p.column).is_some_and(|k| crate::model::routes(p, &r[k])))
     }) && t.uniques().iter().all(|(cols, nnd)| unique_ok(t, cols, *nnd, rows))
         && sizes_ok(t, rows)
@@ -628,7 +630,7 @@ fn ddl_tables(m: &Model, s: &Statement) -> Vec<u32> {
     };
     match s {
         Statement::Truncate(t) => fk::truncated(&m.tables, *t).into_iter().flat_map(linked).collect(),
-        Statement::DropTable(t) | Statement::DropColumn { table: t, .. } | Statement::DropForeignKey(t) | Statement::ValidateForeignKey(t) => linked(*t),
+        Statement::DropTable(t) | Statement::DropColumn { table: t, .. } | Statement::AlterType { table: t, .. } | Statement::DropForeignKey(t) | Statement::ValidateForeignKey(t) => linked(*t),
         Statement::AddForeignKey { table, fk, .. } => vec![*table, fk.parent],
         Statement::CreateTable(def) => def.fk.iter().map(|f| f.parent).collect(),
         Statement::CreateIndex { table, .. }
@@ -638,7 +640,17 @@ fn ddl_tables(m: &Model, s: &Statement) -> Vec<u32> {
         | Statement::SetDefault { table, .. }
         | Statement::Cluster { table, .. }
         | Statement::Reindex { table, .. }
-        | Statement::Phys { table, .. } => vec![*table],
+        | Statement::Phys { table, .. }
+        | Statement::Trip { table, .. }
+        | Statement::DropPartition { table, .. }
+        | Statement::SetDomain { table, .. }
+        | Statement::AddKey { table, .. }
+        | Statement::DropKey(table)
+        | Statement::AlterDomain { table, .. }
+        | Statement::AddPartition { table, .. }
+        | Statement::AddCheck { table, .. }
+        | Statement::DropCheck { table, .. }
+        | Statement::ValidateCheck { table, .. } => vec![*table],
         Statement::Expect(_, inner) => ddl_tables(m, inner),
         Statement::CreateTrigger { table, .. } | Statement::DropTrigger { table, .. } | Statement::EnableTrigger { table, .. } => vec![*table],
         _ => Vec::new(),
@@ -679,6 +691,8 @@ pub fn new_table_ok(t: &Table) -> bool {
         && distinct(&t.key)
         && t.key.iter().all(|&c| t.column(c).is_some())
         && t.checks.iter().all(|p| pred_valid(t, p))
+        && t.named.is_empty()
+        && t.next_check == 0
         && partitioned_ok(t)
         && t.rows.is_empty()
         && t.indexes.is_empty()
@@ -793,6 +807,10 @@ pub fn valid(m: &Model, s: &Statement) -> bool {
                 && (!s.columns.is_empty() || !t.columns.is_empty())
         }),
         Statement::Count { table: k, filter } => table(*k).is_some_and(|t| filter_ok(t, filter)),
+        // Not an upsert into a table with a domain column: its proposed
+        // rows are coerced to the domain (and checked) before the conflict
+        // check, the conflicting ones too (see [`set_domain`]).
+        Statement::Upsert(i, _) if table(i.table).is_some_and(fk::has_domain) => false,
         Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_) | Statement::Upsert(..) | Statement::Merge(_) | Statement::JoinWrite(_) | Statement::InsertSelect { .. } => dml_write(m, s).is_some_and(|(w, _)| w.errors.none()),
         // RETURNING of a valid write, 1 to 4 items of its table's columns.
         Statement::Returning(inner, r) => {
@@ -817,19 +835,8 @@ pub fn valid(m: &Model, s: &Statement) -> bool {
         Statement::CreateIndex { table: k, def } => table(*k).is_some_and(|t| {
             t.index(def.id).is_none() && t.indexes.len() < MAX_INDEXES && index_ok(t, def)
         }),
-        // Not a UNIQUE index on the columns a foreign key references (it
-        // may be the one the constraint depends on).
-        Statement::DropIndex { table: k, index } => table(*k).is_some_and(|t| {
-            t.index(*index).is_some_and(|i| {
-                let mut cols: Vec<u32> = i.columns.iter().map(|c| c.column).collect();
-                cols.sort();
-                !i.unique || !m.tables.iter().any(|c| c.fk.as_ref().is_some_and(|f| f.parent == *k && {
-                    let mut p = f.parent_columns.clone();
-                    p.sort();
-                    p == cols
-                }))
-            })
-        }),
+        // Not a UNIQUE index a foreign key may depend on.
+        Statement::DropIndex { table: k, index } => table(*k).is_some_and(|t| t.index(*index).is_some_and(|i| !fk::may_back(&m.tables, *k, i))),
         Statement::AddColumn { table: k, column } => table(*k).is_some_and(|t| {
             t.column(column.id).is_none()
                 && t.columns.len() < MAX_COLUMNS
@@ -847,6 +854,9 @@ pub fn valid(m: &Model, s: &Statement) -> bool {
                     && t.partitioning.as_ref().is_none_or(|p| p.column != *column)
                     && !fk::referenced_column(&m.tables, *k, *column)
                     && !fk::trigger_column(&m.tables, *k, *column)
+                    // Nor one an index a foreign key may depend on reads,
+                    // `INCLUDE` too (the index would go with the column).
+                    && !t.indexes.iter().any(|i| i.columns_read().contains(column) && fk::may_back(&m.tables, *k, i))
             })
         },
         Statement::SetNotNull { table: k, column, on } => table(*k).is_some_and(|t| {
@@ -863,6 +873,18 @@ pub fn valid(m: &Model, s: &Statement) -> bool {
         Statement::SetDefault { table: k, column, value } => table(*k).is_some_and(|t| {
             t.column(*column).is_some_and(|c| !c.identity && value.as_ref().is_none_or(|v| *v != Value::Null && c.ty.admits(v)))
         }),
+        Statement::AlterType { table, column, ty, using } => matches!(alter_type(m, *table, *column, *ty, *using), Some(Ok(_))),
+        Statement::Trip { table: k, op } => table(*k).is_some_and(|t| trip_ok(m, t, op)),
+        Statement::SetDomain { table, column, dom, .. } => matches!(set_domain(m, *table, *column, dom), Some(Ok(_))),
+        Statement::AddKey { table, columns, using } => matches!(add_key(m, *table, columns, *using), Some(Ok(_))),
+        // Not of a table a foreign key references, itself too (it may
+        // depend on the key's index: 2BP01).
+        Statement::DropKey(k) => table(*k).is_some_and(|t| !t.key.is_empty()) && !m.tables.iter().any(|x| x.fk.as_ref().is_some_and(|f| f.parent == *k)),
+        Statement::AlterDomain { table, column, op, .. } => matches!(alter_domain(m, *table, *column, op), Some(Ok(_))),
+        Statement::DropPartition { table: k, name } => table(*k).is_some_and(|t| partition_droppable(m, t, *name)),
+        Statement::AddPartition { table: k, name, bound } => table(*k).is_some_and(|t| partition_addable(t, *name, bound) == Some(true)),
+        Statement::AddCheck { table: k, id, pred, .. } => table(*k).is_some_and(|t| check_addable(t, *id, pred) == Some(true)),
+        Statement::DropCheck { table: k, id } | Statement::ValidateCheck { table: k, id } => table(*k).is_some_and(|t| t.named.iter().any(|(x, _)| x == id)),
         Statement::Vacuum { tables, .. } | Statement::Analyze(tables) => !tables.is_empty() && distinct(tables) && tables.iter().all(|&k| table(k).is_some()),
         Statement::Cluster { table: k, index } => {
             table(*k).is_some_and(|t| t.index(*index).is_some_and(|i| i.method == Method::Btree && i.filter.is_none()))
@@ -906,7 +928,7 @@ pub fn valid(m: &Model, s: &Statement) -> bool {
         // Inside a transaction (outside, PostgreSQL only warns), with
         // only savepoint 0 open: set in an inner savepoint that is then
         // released, a ROLLBACK TO does not undo it
-        // (`../bugs/candidates/pg-set-constraints-released-savepoint`); a
+        // (`../bugs/postgresql/pg-set-constraints-released-savepoint`); a
         // named constraint must be deferrable.
         Statement::SetConstraints { table: k, .. } => {
             m.savepoints.len() == 1 && k.is_none_or(|k| table(k).is_some_and(|t| t.fk.as_ref().is_some_and(|f| f.deferral != crate::model::Deferral::No)))
@@ -925,6 +947,19 @@ pub fn valid(m: &Model, s: &Statement) -> bool {
             Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_) => dml_write(m, inner).is_some_and(|(w, _)| w.errors.code() == Some(*code)),
             Statement::AddForeignKey { table, fk, not_valid: false } => {
                 *code == fk::Code::ForeignKey && fk_addable(m, *table, fk) == Some(false) && !fk::is_target(&m.tables, *table) && !fk::is_target(&m.tables, fk.parent)
+            },
+            Statement::AlterType { table, column, ty, using } => matches!(alter_type(m, *table, *column, *ty, *using), Some(Err(c)) if c == *code),
+            // A CHECK some row makes false: `23514` (NOT VALID would take it).
+            Statement::AddCheck { table, id, pred, not_valid: false } => *code == Code::Check && table_of(m, *table).is_some_and(|t| check_addable(t, *id, pred) == Some(false)),
+            // A partition whose bound takes rows the default partition
+            // holds: `23514`.
+            Statement::AddPartition { table, name, bound } => *code == Code::Check && table_of(m, *table).is_some_and(|t| partition_addable(t, *name, bound) == Some(false)),
+            Statement::SetDomain { table, column, dom, .. } => matches!(set_domain(m, *table, *column, dom), Some(Err(c)) if c == *code),
+            Statement::AddKey { table, columns, using } => matches!(add_key(m, *table, columns, *using), Some(Err(c)) if c == *code),
+            Statement::AlterDomain { table, column, op, .. } => matches!(alter_domain(m, *table, *column, op), Some(Err(c)) if c == *code),
+            // SET NOT NULL of a column holding NULL: `23502`.
+            Statement::SetNotNull { table, column, on: true } => {
+                *code == Code::NotNull && table_of(m, *table).is_some_and(|t| t.pos(*column).is_some_and(|p| t.rows.iter().any(|r| r[p] == Value::Null)))
             },
             _ => false,
         },
@@ -1072,8 +1107,480 @@ fn drop_column(t: &mut Table, id: u32) {
     }
     t.indexes.retain(|i| !i.columns_read().contains(&id));
     t.checks.retain(|c| !c.reads(id));
+    t.named.retain(|(_, c)| !c.reads(id));
     t.widest.remove(&id);
     t.infinite.remove(&id);
+}
+
+fn table_of(m: &Model, k: u32) -> Option<&Table> {
+    m.table(k)
+}
+
+/// Whether `ALTER TABLE t ADD CONSTRAINT t{t}_k{id} CHECK (pred)` is one
+/// PostgreSQL takes (None if not drawn: a name in use, more than three,
+/// a predicate that does not resolve), and whether every row satisfies it.
+pub fn check_addable(t: &Table, id: u32, pred: &Pred) -> Option<bool> {
+    (id >= t.next_check && t.named.len() < 3 && pred_valid(t, pred)).then(|| t.rows.iter().all(|r| eval(t, r, pred) != Some(false)))
+}
+
+/// Whether partition `t{t}_p{name}` may be detached and dropped: of RANGE
+/// or LIST (the model does not know which rows a HASH partition holds),
+/// not the last one, on a table no foreign key links (a detach checks the
+/// references to its rows) and no trigger writes to (its rows would find
+/// no partition), without an identity column (shared with the
+/// partitions).
+fn partition_droppable(m: &Model, t: &Table, name: u32) -> bool {
+    t.partitioning.as_ref().is_some_and(|p| {
+        p.strategy != crate::model::Strategy::Hash && p.parts.len() > 1 && p.position(name).is_some()
+    }) && t.fk.is_none()
+        && fk::children(&m.tables, t.id).is_empty()
+        && !fk::is_target(&m.tables, t.id)
+        && t.identity().is_none()
+}
+
+/// Whether `CREATE TABLE t{t}_p{name} PARTITION OF t bound` is one
+/// PostgreSQL takes (None if not drawn: a name in use, HASH, a bound of
+/// another kind, an overlap or a second DEFAULT, more than eight), and
+/// whether no row the default partition holds falls in the new bound (else
+/// `23514`; without a default every row is in another partition).
+pub fn partition_addable(t: &Table, name: u32, bound: &crate::model::PartBound) -> Option<bool> {
+    use crate::model::{PartBound, Strategy};
+    let p = t.partitioning.as_ref()?;
+    let ty = t.column(p.column)?.ty;
+    let kind = matches!((p.strategy, bound), (Strategy::Range, PartBound::Range(..)) | (Strategy::List, PartBound::List(_)) | (Strategy::Range | Strategy::List, PartBound::Default));
+    if !kind || p.position(name).is_some() || name >= 64 {
+        return None;
+    }
+    let mut with = p.clone();
+    with.parts.push(bound.clone());
+    with.names.clear();
+    if !crate::model::partitioning_ok(&with, ty) {
+        return None;
+    }
+    let col = t.pos(p.column)?;
+    let new = with.parts.len() - 1;
+    Some(match p.parts.iter().position(|b| *b == PartBound::Default) {
+        Some(d) if *bound != PartBound::Default => !t.rows.iter().any(|r| p.holds(d, &r[col]) && with.holds(new, &r[col])),
+        _ => true,
+    })
+}
+
+/// `ALTER TABLE t ADD CONSTRAINT t{t}_pkey PRIMARY KEY ..`: the table with
+/// the key (its columns NOT NULL, as PostgreSQL 18 adds a NOT NULL
+/// constraint for each, which stays when the key goes), or the one error
+/// its rows raise (`23502` for a NULL, `23505` for a duplicate; None when
+/// both, whose order depends on the scan), or None when not drawn: a key
+/// already, 1 to 3 distinct columns, on a partitioned table one that has
+/// the partition key; USING INDEX of a unique B-tree index on plain
+/// columns in the default order, without INCLUDE or NULLS NOT DISTINCT,
+/// not on a partitioned table (PostgreSQL refuses it there), which then is
+/// the key's and no longer an index of its own.
+pub fn add_key(m: &Model, k: u32, columns: &[u32], using: Option<u32>) -> Option<Result<Table, Code>> {
+    let t = m.table(k)?;
+    if !t.key.is_empty() || columns.is_empty() || columns.len() > 3 || !distinct(columns) {
+        return None;
+    }
+    let mut new = t.clone();
+    if let Some(i) = using {
+        let ix = t.index(i)?;
+        let plain = ix.unique
+            && ix.method == Method::Btree
+            && ix.expr.is_none()
+            && ix.filter.is_none()
+            && ix.include.is_empty()
+            && !ix.nulls_not_distinct
+            && ix.columns.iter().all(|c| !c.desc && c.nulls_first.is_none());
+        if !plain || t.partitioning.is_some() || ix.columns.iter().map(|c| c.column).collect::<Vec<_>>() != columns {
+            return None;
+        }
+        new.indexes.retain(|x| x.id != i);
+    } else if !index_ok(t, &Index { unique: false, ..Index::btree(u32::MAX, columns) }) {
+        return None;
+    }
+    new.key = columns.to_vec();
+    if !partitioned_ok(&new) {
+        return None;
+    }
+    let pos: Vec<usize> = columns.iter().map(|&c| t.pos(c)).collect::<Option<_>>()?;
+    let nulls = t.rows.iter().any(|r| pos.iter().any(|&p| r[p] == Value::Null));
+    let dups = !unique_ok(t, columns, false, &t.rows);
+    match (nulls, dups) {
+        (false, false) => {},
+        (true, false) => return Some(Err(Code::NotNull)),
+        (false, true) => return Some(Err(Code::Unique)),
+        (true, true) => return None,
+    }
+    for &p in &pos {
+        new.columns[p].not_null = true;
+    }
+    Some(Ok(new))
+}
+
+/// The one error rows raise against a column's new constraints: Ok when
+/// none, None when both a NULL refused (`23502`) and a CHECK false
+/// (`23514`) occur (which comes first depends on the physical order).
+fn domain_errors(t: &Table, p: usize, not_null: bool, check: Option<&Pred>) -> Option<Result<(), Code>> {
+    let nulls = not_null && t.rows.iter().any(|r| r[p] == Value::Null);
+    let falses = check.is_some_and(|c| t.rows.iter().any(|r| eval(t, r, c) == Some(false)));
+    match (nulls, falses) {
+        (false, false) => Some(Ok(())),
+        (true, false) => Some(Err(Code::NotNull)),
+        (false, true) => Some(Err(Code::Check)),
+        (true, true) => None,
+    }
+}
+
+/// `CREATE DOMAIN t{t}_d{name} AS ty ..; ALTER TABLE t{t} ALTER COLUMN c
+/// TYPE t{t}_d{name}`: the table with the column of the domain, or the one
+/// error the rows raise, or None when not drawn. A value is checked
+/// against its domain when it is coerced to it, which is before BEFORE
+/// triggers run and before an upsert's conflict check (a row a trigger
+/// skips, or one that conflicts, is still checked): so not on a table
+/// with triggers or one a trigger writes to (and no trigger is created on
+/// a table with a domain column, `fk::trigger_ok`), and no upsert into
+/// such a table ([`valid`]). Otherwise the restrictions of
+/// [`alter_type`] but defaults (a default is a constant of the base type,
+/// coerced to the domain, and checked, at each INSERT that takes it, as
+/// the model checks the rows written), a name in use, a CHECK that reads
+/// another column or does not resolve.
+pub fn set_domain(m: &Model, k: u32, column: u32, dom: &crate::model::Domain) -> Option<Result<Table, Code>> {
+    let t = m.table(k)?;
+    let p = t.pos(column)?;
+    let col = &t.columns[p];
+    // A known bug, excluded: a boolean clause on a column of a domain
+    // over bool that an extended statistics object covers fails to plan
+    // ("expression not found in statistics object",
+    // `../bugs/candidates/pg-statext-bool-domain`): no domain over bool.
+    if col.identity
+        || col.ty == Type::Bool
+        || !t.triggers.is_empty()
+        || fk::is_target(&m.tables, k)
+        || dom.name < t.next_check
+        || t.partitioning.as_ref().is_some_and(|q| q.column == column)
+        || t.fk.as_ref().is_some_and(|f| f.columns.contains(&column))
+        || fk::referenced_column(&m.tables, k, column)
+        || fk::trigger_column(&m.tables, k, column)
+        || t.indexes.iter().any(|i| i.expr.is_some() && i.columns[0].column == column)
+        || reads_backing_index(m, t, column)
+        || dom.check.as_ref().is_some_and(|c| !pred_valid(t, c) || c.reads_other(column))
+    {
+        return None;
+    }
+    if let Err(code) = domain_errors(t, p, dom.not_null, dom.check.as_ref())? {
+        return Some(Err(code));
+    }
+    let mut new = t.clone();
+    new.columns[p].dom = Some(dom.clone());
+    new.next_check = dom.name + 1;
+    Some(Ok(new))
+}
+
+/// `ALTER DOMAIN` of the domain of column `c{column}` (see [`DomOp`]): the
+/// table after it, or the one error its rows raise (a CHECK added that a
+/// row breaks, `23514`; SET NOT NULL over a NULL, `23502`), or None when
+/// not drawn (no domain, a CHECK to drop or validate that is not there,
+/// a second one, DROP CONSTRAINT inside a transaction block).
+pub fn alter_domain(m: &Model, k: u32, column: u32, op: &DomOp) -> Option<Result<Table, Code>> {
+    let t = m.table(k)?;
+    let p = t.pos(column)?;
+    let dom = t.columns[p].dom.clone()?;
+    let mut d = dom.clone();
+    match op {
+        DomOp::AddCheck(c, _) => {
+            if dom.check.is_some() || !pred_valid(t, c) || c.reads_other(column) {
+                return None;
+            }
+            if let Err(code) = domain_errors(t, p, false, Some(c))? {
+                return Some(Err(code));
+            }
+            d.check = Some(c.clone());
+        },
+        DomOp::DropCheck | DomOp::Validate => {
+            dom.check.as_ref()?;
+            // A known bug, excluded: after DROP CONSTRAINT of a domain in a
+            // transaction block, a statement failing in a subtransaction
+            // later raises "cannot start a subtransaction when there are
+            // unprocessed inval messages" (XX000) instead of its error
+            // (`../bugs/candidates/pg-domain-inval-subxact`): outside a
+            // transaction block only.
+            if *op == DomOp::DropCheck && !m.savepoints.is_empty() {
+                return None;
+            }
+            if *op == DomOp::DropCheck {
+                d.check = None;
+            }
+        },
+        DomOp::NotNull(on) => {
+            if *on {
+                if let Err(code) = domain_errors(t, p, true, None)? {
+                    return Some(Err(code));
+                }
+            }
+            d.not_null = *on;
+        },
+    }
+    let mut new = t.clone();
+    new.columns[p].dom = Some(d);
+    Some(Ok(new))
+}
+
+/// Whether a round trip ([`Trip`]) names objects `t` has. A partition is
+/// detached and attached again only on a table no foreign key links (a
+/// detach checks the references to its rows; an attach clones the
+/// table's key onto it) and without an identity column (its partitions
+/// share the parent's sequence).
+fn trip_ok(m: &Model, t: &Table, op: &Trip) -> bool {
+    match op {
+        Trip::Column(c) => t.column(*c).is_some(),
+        Trip::Table => true,
+        Trip::Index(i) => t.index(*i).is_some(),
+        Trip::Key => !t.key.is_empty(),
+        Trip::ForeignKey => t.fk.is_some(),
+        Trip::Trigger(g) => t.triggers.iter().any(|x| x.id == *g),
+        Trip::Partition(k, p) => {
+            t.partitioning.as_ref() == Some(p) && *k < p.parts.len() && t.fk.is_none() && fk::children(&m.tables, t.id).is_empty() && t.identity().is_none()
+        },
+    }
+}
+
+// ------------------------------------------------------------------ ALTER COLUMN TYPE
+
+/// How a column of type `from` converts to `to` in `ALTER COLUMN .. TYPE`:
+/// Some(false) by an assignment cast (no USING needed), Some(true) by an
+/// explicit cast only (`USING c::to`; without it PostgreSQL refuses with
+/// `42804`). None for a pair not drawn: reals print to text and numeric
+/// with a precision of their own (`float8out`, `float8_numeric`'s
+/// `%.15g`), text reads as dates and booleans in many forms, and `int4` is
+/// the only integer with a cast to and from boolean.
+pub fn cast_needs_using(from: Type, to: Type) -> Option<bool> {
+    use Type::*;
+    if from == to {
+        return None;
+    }
+    Some(match (from, to) {
+        (a, b) if a.is_int() && b.is_int() => false,
+        (a, Numeric | Float4 | Float8) if a.is_int() => false,
+        (Numeric | Float4 | Float8, b) if b.is_int() => false,
+        (Numeric, Float4 | Float8) | (Float4, Float8) | (Float8, Float4) => false,
+        (Int2 | Int4 | Int8 | Numeric | Bool | Bytea | Date | Timestamp, Text) => false,
+        (Date, Timestamp) | (Timestamp, Date) => false,
+        (Text, Int2 | Int4 | Int8 | Numeric) | (Bool, Int4) | (Int4, Bool) => true,
+        _ => return None,
+    })
+}
+
+/// A value of type `from` converted to `to` (a pair [`cast_needs_using`]
+/// takes) as the cast does: Err(Some(code)) for the error it raises,
+/// Err(None) when the model does not know (text that is neither plainly
+/// a number nor plainly not one: `int4in` takes `0x1F`, `1_000`, `+ 5 `).
+/// Integers narrow or fail with `22003`; numeric and reals round to an
+/// integer (numeric half away from zero, reals half to even, `rint`), NaN
+/// and infinity fail (`0A000` from numeric, `22003` from a real); numeric
+/// to a real goes through its text (`float8in`, which refuses overflow and
+/// underflow to zero); a timestamp to its day; a date past the last
+/// timestamp fails with `22008`.
+pub fn convert(v: &Value, from: Type, to: Type) -> Result<Value, Option<Code>> {
+    use crate::model::{Numeric, MICROS_PER_DAY};
+    let int = |i: i128| -> Result<Value, Option<Code>> {
+        let v = Value::Int(i64::try_from(i).map_err(|_| Some(Code::OutOfRange))?);
+        if to.admits(&v) { Ok(v) } else { Err(Some(Code::OutOfRange)) }
+    };
+    let real = |x: f64| -> Result<Value, Option<Code>> {
+        if from == Type::Float8 && to == Type::Float4 {
+            let y = x as f32;
+            if y.is_infinite() && !x.is_infinite() || y == 0.0 && x != 0.0 {
+                return Err(Some(Code::OutOfRange));
+            }
+            return Ok(Value::Float(f64::from(y)));
+        }
+        Ok(Value::Float(x))
+    };
+    match (v, to) {
+        (Value::Null, _) => Ok(Value::Null),
+        (Value::Int(i), t) if t.is_int() => int(i128::from(*i)),
+        (Value::Int(i), Type::Numeric) => Ok(Value::Numeric(Numeric::int(*i))),
+        (Value::Int(i), Type::Float8) => Ok(Value::Float(*i as f64)),
+        (Value::Int(i), Type::Float4) => Ok(Value::Float(f64::from(*i as f32))),
+        (Value::Int(i), Type::Bool) => Ok(Value::Bool(*i != 0)),
+        (Value::Bool(b), Type::Int4) => Ok(Value::Int(i64::from(*b))),
+        (Value::Numeric(n), t) if t.is_int() => match n {
+            Numeric::Finite { neg, digits, scale } => {
+                let scale = usize::from(*scale);
+                let mut padded = vec![b'0'; (scale + 1).saturating_sub(digits.len())];
+                padded.extend_from_slice(digits);
+                let (whole, frac) = padded.split_at(padded.len() - scale);
+                let first = whole.iter().position(|&d| d != b'0').unwrap_or(whole.len());
+                if whole.len() - first > 30 {
+                    return Err(Some(Code::OutOfRange));
+                }
+                let mut i: i128 = std::str::from_utf8(&whole[first..]).unwrap().parse().unwrap_or(0);
+                if frac.first().is_some_and(|&d| d >= b'5') {
+                    i += 1;
+                }
+                int(if *neg { -i } else { i })
+            },
+            _ => Err(Some(Code::Unsupported)),
+        },
+        (Value::Numeric(n), Type::Float4 | Type::Float8) => match n {
+            Numeric::NaN => Ok(Value::Float(f64::NAN)),
+            Numeric::Inf => Ok(Value::Float(f64::INFINITY)),
+            Numeric::NegInf => Ok(Value::Float(f64::NEG_INFINITY)),
+            Numeric::Finite { digits, .. } => {
+                let s = n.to_string();
+                let x = if to == Type::Float4 { s.parse::<f32>().map(f64::from) } else { s.parse::<f64>() }.map_err(|_| None)?;
+                if x.is_infinite() || x == 0.0 && !digits.is_empty() {
+                    return Err(Some(Code::OutOfRange));
+                }
+                Ok(Value::Float(x))
+            },
+        },
+        (Value::Float(x), t) if t.is_int() => {
+            let r = x.round_ties_even();
+            let bound = match t {
+                Type::Int2 => 32768.0,
+                Type::Int4 => 2147483648.0,
+                _ => 9223372036854775808.0,
+            };
+            if r >= -bound && r < bound { int(r as i128) } else { Err(Some(Code::OutOfRange)) }
+        },
+        (Value::Float(x), Type::Float4 | Type::Float8) => real(*x),
+        (Value::Int(_) | Value::Numeric(_) | Value::Bool(_) | Value::Bytea(_) | Value::Date(_) | Value::Timestamp(_), Type::Text) => Ok(Value::Text(v.text().unwrap())),
+        (Value::Date(d), Type::Timestamp) => match *d {
+            i32::MIN => Ok(Value::Timestamp(i64::MIN)),
+            i32::MAX => Ok(Value::Timestamp(i64::MAX)),
+            d => {
+                match i64::from(d).checked_mul(MICROS_PER_DAY).map(Value::Timestamp) {
+                    Some(t) if Type::Timestamp.admits(&t) => Ok(t),
+                    _ => Err(Some(Code::DatetimeOverflow)),
+                }
+            },
+        },
+        (Value::Timestamp(t), Type::Date) => Ok(Value::Date(match *t {
+            i64::MIN => i32::MIN,
+            i64::MAX => i32::MAX,
+            t => t.div_euclid(MICROS_PER_DAY) as i32,
+        })),
+        (Value::Text(s), t) if t.is_int() => {
+            let body = s.strip_prefix('-').unwrap_or(s);
+            if !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit()) {
+                let digits = body.trim_start_matches('0');
+                if digits.len() > 30 {
+                    return Err(Some(Code::OutOfRange));
+                }
+                let i: i128 = digits.parse().unwrap_or(0);
+                int(if body.len() < s.len() { -i } else { i })
+            } else if !s.bytes().any(|b| b.is_ascii_digit()) {
+                Err(Some(Code::InvalidText))
+            } else {
+                Err(None)
+            }
+        },
+        (Value::Text(s), Type::Numeric) => match Numeric::parse(s) {
+            Some(n) => Ok(Value::Numeric(n)),
+            None if !s.bytes().any(|b| b.is_ascii_digit())
+                && !["nan", "infinity", "+infinity", "-infinity", "inf", "+inf", "-inf"].contains(&s.trim_matches(|c: char| c.is_ascii_whitespace()).to_ascii_lowercase().as_str()) =>
+            {
+                Err(Some(Code::InvalidText))
+            },
+            None => Err(None),
+        },
+        _ => Err(None),
+    }
+}
+
+/// Whether an index that a foreign key may depend on reads column
+/// `c{column}` (an `INCLUDE` column too): rebuilding it for a new type
+/// drops it RESTRICT, which the foreign key's dependency stops (`2BP01`,
+/// `../bugs/candidates/pg-alter-type-include-fk-index`); a key column of
+/// it is the foreign key's own, excluded anyway.
+fn reads_backing_index(m: &Model, t: &Table, column: u32) -> bool {
+    t.indexes.iter().any(|i| i.columns_read().contains(&column) && fk::may_back(&m.tables, t.id, i))
+}
+
+/// `ALTER TABLE t{k} ALTER COLUMN c{column} TYPE ty [USING ..]`: the table
+/// after it (Ok), the one error PostgreSQL must raise (Err), or None when
+/// the statement is not drawn. Not drawn (each a refusal or a rebuild the
+/// model does not follow):
+/// - the identity column (its sequence changes type too), the partition
+///   key (`42P16`), a column of a foreign key either way (its types must
+///   match), one a trigger reads or writes (a WHEN refuses with `0A000`;
+///   functions assign and copy typed values), one an expression index
+///   reads, or one an index of a method that does not take the new type
+///   reads;
+/// - a column whose CHECK constraints or partial index predicates do not
+///   compare with the new type as the model does ([`pred_valid`]):
+///   PostgreSQL re-parses their text against the new type;
+/// - a column with a default: PostgreSQL keeps the default's constant
+///   under an implicit cast, and at the next ALTER strips that cast and
+///   converts the constant again from its first type
+///   (`strip_implicit_coercions`), so the outcome depends on the default's
+///   history (a numeric default of a column now text converts to int4
+///   without USING; one that does not convert fails only at an INSERT);
+/// - rows the result breaks (a NOT NULL, a CHECK, a unique constraint,
+///   sizes), or rows with conversion errors of more than one code (which
+///   one comes first depends on the physical order), or with an error and
+///   another row that a CHECK would refuse.
+/// The table is rewritten: only live rows are copied, so the column's
+/// widest value is that of its new values.
+pub fn alter_type(m: &Model, k: u32, column: u32, ty: Type, using: bool) -> Option<Result<Table, Code>> {
+    let t = m.table(k)?;
+    let p = t.pos(column)?;
+    let col = &t.columns[p];
+    let needs = cast_needs_using(col.ty, ty)?;
+    if col.identity
+        || t.partitioning.as_ref().is_some_and(|q| q.column == column)
+        || t.fk.as_ref().is_some_and(|f| f.columns.contains(&column))
+        || fk::referenced_column(&m.tables, k, column)
+        || fk::trigger_column(&m.tables, k, column)
+        || t.indexes.iter().any(|i| i.columns_read().contains(&column) && (i.expr.is_some() && i.columns[0].column == column || !method_takes(i.method, ty)))
+        || reads_backing_index(m, t, column)
+    {
+        return None;
+    }
+    if col.default.is_some() {
+        return None;
+    }
+    if needs && !using {
+        return Some(Err(Code::Mismatch));
+    }
+    let mut new = t.clone();
+    let c = &mut new.columns[p];
+    c.ty = ty;
+    c.dom = None;
+    c.storage = None;
+    if !ty.varlena() {
+        c.compression = None;
+    }
+    if !new.all_checks().all(|c| pred_valid(&new, c)) || !new.indexes.iter().all(|i| i.filter.as_ref().is_none_or(|f| pred_valid(&new, f))) {
+        return None;
+    }
+    let mut codes: Vec<Code> = Vec::new();
+    let mut converted: Vec<Row> = Vec::new();
+    for r in &t.rows {
+        match convert(&r[p], col.ty, ty) {
+            Ok(v) => {
+                let mut r = r.clone();
+                r[p] = v;
+                converted.push(r);
+            },
+            Err(None) => return None,
+            Err(Some(code)) => codes.push(code),
+        }
+    }
+    if let Some(&code) = codes.first() {
+        let checks_pass = converted.iter().all(|r| new.all_checks().all(|c| eval(&new, r, c) != Some(false)));
+        return (codes.iter().all(|&c| c == code) && checks_pass).then_some(Err(code));
+    }
+    if !rows_ok(&new, &converted) {
+        return None;
+    }
+    new.rows = converted;
+    new.widest.insert(column, new.rows.iter().map(|r| r[p].width()).max().unwrap_or(0));
+    new.infinite.remove(&column);
+    if new.rows.iter().any(|r| matches!(r[p], Value::Date(i32::MIN | i32::MAX))) {
+        new.infinite.insert(column);
+    }
+    Some(Ok(new))
 }
 
 /// Apply a statement [`valid`] against `m` to it.
@@ -1194,6 +1701,66 @@ pub fn apply(m: &mut Model, s: &Statement) -> Effect {
             t.columns[p].default = value.clone();
             nothing()
         },
+        Statement::Trip { .. } | Statement::ValidateCheck { .. } => nothing(),
+        Statement::AddCheck { table, id, pred, .. } => {
+            let t = m.table_mut(*table).unwrap();
+            t.named.push((*id, pred.clone()));
+            t.next_check = t.next_check.max(id + 1);
+            nothing()
+        },
+        Statement::DropCheck { table, id } => {
+            m.table_mut(*table).unwrap().named.retain(|(x, _)| x != id);
+            nothing()
+        },
+        Statement::AddKey { table, columns, using } => {
+            let Some(Ok(new)) = add_key(m, *table, columns, *using) else { unreachable!() };
+            *m.table_mut(*table).unwrap() = new;
+            nothing()
+        },
+        Statement::DropKey(k) => {
+            // The NOT NULL constraints of its columns stay.
+            let t = m.table_mut(*k).unwrap();
+            for c in std::mem::take(&mut t.key) {
+                let p = t.pos(c).unwrap();
+                t.columns[p].not_null = true;
+            }
+            nothing()
+        },
+        Statement::SetDomain { table, column, dom, .. } => {
+            let Some(Ok(new)) = set_domain(m, *table, *column, dom) else { unreachable!() };
+            *m.table_mut(*table).unwrap() = new;
+            nothing()
+        },
+        Statement::AlterDomain { table, column, op, .. } => {
+            let Some(Ok(new)) = alter_domain(m, *table, *column, op) else { unreachable!() };
+            *m.table_mut(*table).unwrap() = new;
+            nothing()
+        },
+        Statement::DropPartition { table, name } => {
+            let t = m.table_mut(*table).unwrap();
+            let mut p = t.partitioning.clone().unwrap();
+            let k = p.position(*name).unwrap();
+            let col = t.pos(p.column).unwrap();
+            t.rows.retain(|r| !p.holds(k, &r[col]));
+            p.names = (0..p.parts.len()).map(|j| p.name(j)).collect();
+            p.parts.remove(k);
+            p.names.remove(k);
+            t.partitioning = Some(p);
+            nothing()
+        },
+        Statement::AddPartition { table, name, bound } => {
+            let t = m.table_mut(*table).unwrap();
+            let p = t.partitioning.as_mut().unwrap();
+            p.names = (0..p.parts.len()).map(|j| p.name(j)).collect();
+            p.parts.push(bound.clone());
+            p.names.push(*name);
+            nothing()
+        },
+        Statement::AlterType { table, column, ty, using } => {
+            let Some(Ok(new)) = alter_type(m, *table, *column, *ty, *using) else { unreachable!() };
+            *m.table_mut(*table).unwrap() = new;
+            nothing()
+        },
         Statement::Vacuum { .. }
         | Statement::Analyze(_)
         | Statement::Cluster { .. }
@@ -1299,7 +1866,7 @@ pub fn apply(m: &mut Model, s: &Statement) -> Effect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Numeric, Type};
+    use crate::model::{Action, Deferral, ForeignKey, Numeric, Type};
 
     #[test]
     fn unique_constraints_follow_postgres_equality() {
@@ -1316,6 +1883,36 @@ mod tests {
         t.indexes = vec![Index { unique: true, ..Index::btree(1, &[1]) }];
         let n = |s: &str| Value::Numeric(Numeric::parse(s).unwrap());
         assert!(!rows_ok(&t, &[row(Value::Null, n("1.0")), row(Value::Null, n("1.00"))]));
+    }
+
+    #[test]
+    fn a_column_an_index_a_foreign_key_depends_on_reads_stays() {
+        // `CREATE UNIQUE INDEX t0_i0 ON t0 (c1) INCLUDE (c0)` and t1's key
+        // references t0 (c1): the constraint depends on the index, so
+        // DROP COLUMN c0 needs CASCADE (2BP01, run 20261021-1716).
+        let mut parent = Table::new(0, &[Type::Int8, Type::Date]);
+        parent.indexes.push(Index { unique: true, include: vec![0], ..Index::btree(0, &[1]) });
+        let mut child = Table::new(1, &[Type::Date]);
+        child.fk = Some(ForeignKey {
+            columns: vec![0],
+            parent: 0,
+            parent_columns: vec![1],
+            on_delete: Action::NoAction,
+            delete_set: vec![],
+            on_update: Action::NoAction,
+            full: false,
+            deferral: Deferral::No,
+        });
+        let mut m = Model { tables: vec![parent, child], ..Model::default() };
+        let drop = Statement::DropColumn { table: 0, column: 0 };
+        assert!(!valid(&m, &drop));
+        assert!(!valid(&m, &Statement::DropIndex { table: 0, index: 0 }));
+        // A partial unique index is never the one.
+        m.tables[0].indexes[0].filter = Some(Pred::IsNull(1, false));
+        assert!(valid(&m, &drop));
+        m.tables[0].indexes[0].filter = None;
+        m.tables[1].fk = None;
+        assert!(valid(&m, &drop));
     }
 
     #[test]

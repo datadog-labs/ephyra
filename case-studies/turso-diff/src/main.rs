@@ -119,9 +119,19 @@ fn sqlite_budget() {
     DEADLINE.with(|d| d.set(Some(Instant::now() + SQLITE_BUDGET)));
 }
 
+/// An empty in-memory SQLite. The vendored build defines
+/// SQLITE_DEFAULT_FOREIGN_KEYS=1; Turso, like a default SQLite, starts with
+/// foreign keys off, so they are turned off here (a case's own PRAGMA
+/// foreign_keys still runs in both engines).
+fn sqlite_memory() -> Result<Connection, String> {
+    let db = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    db.execute_batch("PRAGMA foreign_keys = OFF").map_err(|e| e.to_string())?;
+    Ok(db)
+}
+
 /// The case's file in memory, its statements run; or the first error.
 fn open_sqlite(case: &Case) -> Result<Connection, String> {
-    let mut db = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    let mut db = sqlite_memory()?;
     db.progress_handler(10_000, Some(past_deadline));
     let bytes = &case.file.0;
     if !bytes.is_empty() {
@@ -191,7 +201,7 @@ fn utf16(bytes: &[u8]) -> bool {
 
 /// The file in memory, a WAL header read as rollback mode.
 fn deserialized(bytes: &[u8]) -> Result<Connection, String> {
-    let mut db = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    let mut db = sqlite_memory()?;
     let mut b = bytes.to_vec();
     for at in [18, 19] {
         if b[at] == 2 {
@@ -211,7 +221,7 @@ fn deserialized(bytes: &[u8]) -> Result<Connection, String> {
 fn to_utf8(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let e = |e: rusqlite::Error| format!("utf-16 to utf-8 copy: {e}");
     let src = deserialized(bytes)?;
-    let dst = Connection::open_in_memory().map_err(e)?;
+    let dst = sqlite_memory().map_err(|m| format!("utf-16 to utf-8 copy: {m}"))?;
     let page: i64 = src.query_row("PRAGMA page_size", [], |r| r.get(0)).map_err(e)?;
     let uv: i64 = src.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(e)?;
     let app: i64 = src.query_row("PRAGMA application_id", [], |r| r.get(0)).map_err(e)?;
@@ -349,7 +359,7 @@ fn without_autovacuum(case: &Case) -> Result<Case, String> {
     if bytes.len() < 100 || bytes[52..56] == [0, 0, 0, 0] {
         return Ok(case.clone());
     }
-    let mut db = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    let mut db = sqlite_memory()?;
     let mut b = bytes.to_vec();
     for at in [18, 19] {
         if b[at] == 2 {
@@ -607,6 +617,7 @@ fn text_for_blobs(rows: &Rows, like: &Rows) -> Rows {
 fn has_fffd(rows: &Rows) -> bool {
     rows.iter().flatten().any(|c| match c {
         Cell::Text(t) | Cell::Json(t) => t.contains('\u{FFFD}') || t.to_lowercase().contains("efbfbd") || t.contains("65533"),
+        Cell::Blob(b) => b.windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]),
         _ => false,
     })
 }
@@ -636,10 +647,25 @@ fn trunk_result(input: &Input, f: &Finding, dir: &Path) -> Option<Result<Rows, S
     let (db, sql) = (dir.join(format!("trunk-{n}.db")), dir.join(format!("trunk-{n}.sql")));
     fs::write(&db, &case.file.0).ok()?;
     fs::write(&sql, format!("{}{}", script(&case), queries_sql(&input.1, Some(k)))).ok()?;
-    let out = std::process::Command::new(TRUNK_ORACLE).arg(&db).arg(&sql).output();
+    // The helper interrupts each statement after SQLite's budget; this bounds
+    // the whole run too (a hang here was reported as a worker hang).
+    let out = std::process::Command::new(TRUNK_ORACLE).arg(&db).arg(&sql).stdout(std::process::Stdio::piped()).spawn().ok().and_then(|mut child| {
+        let start = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break child.wait_with_output().ok(),
+                Ok(None) if start.elapsed() < Duration::from_secs(30) => thread::sleep(Duration::from_millis(20)),
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                },
+            }
+        }
+    });
     let _ = fs::remove_file(&db);
     let _ = fs::remove_file(&sql);
-    let text = String::from_utf8_lossy(&out.ok()?.stdout).into_owned();
+    let text = String::from_utf8_lossy(&out?.stdout).into_owned();
     let mut lines = text.lines();
     let head = lines.next()?;
     if let Some(e) = head.strip_prefix("E:") {
@@ -788,6 +814,45 @@ fn negative_zero(s: &str) -> bool {
     s.match_indices("-0.0").any(|(i, m)| !s[i + m.len()..].starts_with(|c: char| c.is_ascii_digit() || c == 'e' || c == 'E'))
 }
 
+/// `rootpage` (a schema table's column) as the literal 0.
+fn without_rootpage(sql: &str) -> String {
+    let l = sql.to_lowercase();
+    let mut out = String::new();
+    let mut last = 0;
+    for (i, m) in l.match_indices("rootpage") {
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        if !l[..i].ends_with(word) && !l[i + m.len()..].starts_with(word) {
+            out.push_str(&sql[last..i]);
+            out.push('0');
+            last = i + m.len();
+        }
+    }
+    out.push_str(&sql[last..]);
+    out
+}
+
+/// A row value on the left of `[NOT] IN (SELECT ...)`: turso #9087.
+fn row_value_in_subquery(l: &str) -> bool {
+    l.match_indices(" in (select").chain(l.match_indices(" in(select")).any(|(i, _)| {
+        let before = l[..i].trim_end().trim_end_matches(" not");
+        if !before.ends_with(')') {
+            return false;
+        }
+        // The `(` matching that `)`, and a comma at the top level between.
+        let (mut depth, mut comma) = (0, false);
+        for c in before.chars().rev() {
+            match c {
+                ')' => depth += 1,
+                '(' if depth == 1 => return comma,
+                '(' => depth -= 1,
+                ',' if depth == 1 => comma = true,
+                _ => {},
+            }
+        }
+        false
+    })
+}
+
 /// A simple CASE (`CASE x WHEN ...`), whose comparisons Turso makes without
 /// SQLite's affinity rules (turso #8225).
 fn simple_case(l: &str) -> bool {
@@ -810,9 +875,14 @@ fn known(f: &Finding, sql: &str) -> Option<&'static str> {
 fn known_rules(f: &Finding, sql: &str) -> Vec<&'static str> {
     let mut hits: Vec<&'static str> = Vec::new();
     let sig = f.signature.as_str();
-    let l = sql.to_lowercase();
+    // A statement error's text is "statement K: <sql>;\nSQLite: ...": the
+    // statement, which can span lines (a newline in a string literal).
+    let l = match sig.starts_with("statement-error") {
+        true => sql.split("\nSQLite:").next().unwrap_or("").split_once(": ").map_or(sql, |(_, s)| s).to_lowercase(),
+        false => sql.to_lowercase(),
+    };
     let any = |ps: &[&str]| ps.iter().any(|p| l.contains(p));
-    let joins = any(&["right join", "full join"]);
+    let joins = any(&["right join", "full join", "right outer join", "full outer join"]);
     if sig.starts_with("transaction-state") {
         hits.push("6864");
     }
@@ -832,10 +902,13 @@ fn known_rules(f: &Finding, sql: &str) -> Vec<&'static str> {
         if sig.contains("WITHOUT ROWID table has no secondary index") {
             hits.push("9852");
         }
+        if sig.contains("non-REPLACE constraint after REPLACE constraint") || sig.contains("constraints must have all REPLACE entries at the end") {
+            hits.push("8718");
+        }
         if sig.contains("GroupConcat accumulator is Text") {
             hits.push("10352");
         }
-        if any(&[" over ", " over("]) && (sig.contains("must be a buffer") || sig.contains("first_value") || sig.contains("lag/lead")) {
+        if any(&[" over ", " over("]) && (sig.contains("must be a buffer") || sig.contains("first_value") || sig.contains("lag/lead") || sig.contains("nth_value arg") || sig.contains("must be a subquery column ref")) {
             hits.push("8336");
         }
         return hits;
@@ -853,6 +926,20 @@ fn known_rules(f: &Finding, sql: &str) -> Vec<&'static str> {
         }
         if sig.contains("syntax error") && l.trim_start().starts_with("alter table") && f.detail.contains("names a WITHOUT ROWID table") {
             hits.push("9572");
+        }
+        // An ALTER of a STRICT WITHOUT ROWID table writes "WITHOUT ROWID
+        // STRICT" (no comma); the next ALTER, of any table, rereads it.
+        if f.exact.contains("near \"STRICT\": syntax error") && l.trim_start().starts_with("alter table") {
+            hits.push("9572");
+        }
+        if sig.contains("UNIQUE constraint failed") && f.detail.contains("WITHOUT ROWID") {
+            hits.push("6749");
+        }
+        if sig.contains("cannot store") && l.contains("or ignore") {
+            hits.push("10392");
+        }
+        if (sig.contains("no such table") || sig.contains("no such column")) && l.contains("on conflict") {
+            hits.push("10393");
         }
         if sig.contains("cannot drop column") && sig.contains("referenced in VIEW") {
             hits.push("4009");
@@ -886,8 +973,48 @@ fn known_rules(f: &Finding, sql: &str) -> Vec<&'static str> {
                 hits.push("10355");
             }
         }
+        if l.contains("replace(") && l.contains(", null)") {
+            hits.push("10426");
+        }
         if l.contains("soundex(") {
             hits.push("10356");
+        }
+        if sig.starts_with("rows-differ") {
+            if f.detail.contains("#10355 shape") && any(&["sqlite_schema", "sqlite_master", "pragma_table_list"]) {
+                hits.push("10355");
+            }
+            if f.detail.contains("#9071 shape") && f.detail.contains("reads a WITHOUT ROWID table") {
+                hits.push("9071");
+            }
+            if f.detail.contains("#10397 shape") && any(&["pragma_table_list", "pragma_table_info", "pragma_table_xinfo"]) {
+                hits.push("10397");
+            }
+            if f.detail.contains("#5762 shape") && any(&["pragma_table_info", "pragma_table_xinfo"]) {
+                hits.push("5762");
+            }
+            if row_value_in_subquery(&l) {
+                hits.push("9087");
+            }
+        }
+        if sig.contains("ORDER BY term does not match any column") && any(&["isnull", "notnull", "is null", "not null"]) {
+            hits.push("10395");
+        }
+        if sig.contains("no such column: main.") || sig.contains("no such column: temp.") {
+            hits.push("10396");
+        }
+        if sig.contains("subquery not found") {
+            hits.push("10389");
+        }
+        if sig.starts_with("rows-differ") {
+            if l.contains("concat_ws") {
+                hits.push("10394");
+            }
+            if any(&["sqlite_schema", "sqlite_master"]) && f.detail.contains("CREATE ") {
+                hits.push("10398");
+            }
+            if any(&["pragma_index_list", "pragma_index_info", "pragma_index_xinfo"]) && f.detail.contains("reads a WITHOUT ROWID table") {
+                hits.push("10399");
+            }
         }
         if sig.contains("second argument to likelihood()") {
             hits.push("10338");
@@ -910,6 +1037,11 @@ fn known_rules(f: &Finding, sql: &str) -> Vec<&'static str> {
     }
     if sig.contains("table not found") && l.contains(" over ") {
         hits.push("9883");
+    }
+    // A HAVING subquery reading a GROUP BY column (turso #8221), before the
+    // broader GROUP BY + HAVING rule below.
+    if sig.starts_with("rows-differ") && l.contains("group by") && l.split("having").nth(1).is_some_and(|h| h.contains("(select")) {
+        hits.push("8221");
     }
     if ((sig.starts_with("query-error") && !sig.contains("Parse error")) || sig.starts_with("rows-differ")) && l.contains("group by") && l.contains("having") {
         hits.push(if sig.starts_with("query-error") { "9880" } else { "9887" });
@@ -1048,19 +1180,20 @@ fn run_input(input: &Input, path: &Path, experimental: bool) -> Outcome {
             return out;
         },
     };
-    let notes = affinity_order_note(&sdb);
+    let mut notes = affinity_order_note(&sdb);
+    let wr_ever = without_rowid_ever(&sdb, case);
     for (k, s) in case.statements.iter().enumerate() {
         let sql = s.to_string();
         if let Err(e) = turso_exec(&t, &sql) {
             if unsupported(&e) {
                 out.skips.push(format!("turso unsupported (statement): {}", normalize(&e)));
                 out.failed_statement = Some(k);
-            } else if documented_without_rowid(&e) && writes_without_rowid(&sdb, &sql) {
+            } else if documented_without_rowid(&e) && (writes_without_rowid(&wr_ever, &sql) || writes_without_rowid(&wr_ever, &e)) {
                 out.skips.push(format!("turso documented (WITHOUT ROWID): {}", normalize(&e)));
                 out.failed_statement = Some(k);
             } else {
                 out.failed_statement = Some(k);
-                let wr = if writes_without_rowid(&sdb, &sql) { "note: the statement names a WITHOUT ROWID table\n" } else { "" };
+                let wr = if writes_without_rowid(&wr_ever, &sql) { "note: the statement names a WITHOUT ROWID table\n" } else { "" };
                 out.findings.push(Finding {
                     signature: format!("statement-error: {}", normalize(&e)),
                     detail: format!("statement {k}: {sql};\nSQLite: ok\nTurso: error: {e}\n{notes}{wr}"),
@@ -1076,17 +1209,21 @@ fn run_input(input: &Input, path: &Path, experimental: bool) -> Outcome {
         out.findings.push(f);
         return out;
     }
+    notes.push_str(&statement_notes(&sdb, &t, case, &wr_ever));
     let wr_tables = without_rowid_tables(&sdb);
     for (qi, q) in queries.iter().enumerate() {
         let sql = q.sql();
         out.queries += 1;
         // Function sets differ by design (Turso's extensions; SQLite's
         // build options), and so do the rows describing them.
-        // page_count depends on how each engine lays out the file.
-        if ["pragma_function_list", "pragma_page_count"].iter().any(|p| sql.to_lowercase().contains(p)) {
-            out.skips.push("query reads pragma_function_list or pragma_page_count".into());
+        // page_count and freelist_count depend on how each engine lays out
+        // the file.
+        if ["pragma_function_list", "pragma_page_count", "pragma_freelist_count"].iter().any(|p| sql.to_lowercase().contains(p)) {
+            out.skips.push("query reads pragma_function_list, page_count or freelist_count".into());
             continue;
         }
+        // rootpage depends on how each engine lays out the file: both read 0.
+        let sql = without_rootpage(&sql);
         let s = sqlite_query(&sdb, &sql);
         // SQLite over its budget: don't run Turso on it either (a slow query
         // in both engines is not a Turso hang).
@@ -1204,16 +1341,61 @@ fn run_input(input: &Input, path: &Path, experimental: bool) -> Outcome {
     out
 }
 
+/// Notes on the state after the statements, for rules on queries whose
+/// output alone doesn't show the cause (counts, filters).
+fn statement_notes(sdb: &Connection, t: &Turso, case: &Case, wr_ever: &[String]) -> String {
+    let mut n = String::new();
+    let stat1 = "SELECT count(*) FROM sqlite_schema WHERE name = 'sqlite_stat1'";
+    let s_has = sdb.query_row(stat1, [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    let t_has = matches!(turso_query(t, stat1).as_deref(), Ok([row]) if row.first() == Some(&Cell::Int(1)));
+    if s_has && !t_has {
+        n.push_str("note: sqlite_stat1 exists in SQLite only (turso #10355 shape)\n");
+    }
+    let dropped_wr_column = case.statements.iter().map(|s| s.to_string().to_lowercase()).any(|s| {
+        s.trim_start().starts_with("alter table") && s.contains(" drop ") && wr_ever.iter().any(|w| mentions(&s, w))
+    });
+    if dropped_wr_column {
+        n.push_str("note: a column of a WITHOUT ROWID table was dropped (turso #9071 shape)\n");
+    }
+    let has_view = sdb.query_row("SELECT count(*) FROM sqlite_schema WHERE type = 'view'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    let altered = case.statements.iter().map(|s| s.to_string().to_lowercase()).any(|s| s.contains("drop table") || s.contains("alter table"));
+    if has_view && altered {
+        n.push_str("note: a view exists and a table was altered or dropped (turso #10397 shape)\n");
+    }
+    let typed = "SELECT count(*) FROM sqlite_schema s, pragma_table_info(s.name) p WHERE s.type = 'table' AND p.type LIKE '%(%'";
+    if sdb.query_row(typed, [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0 {
+        n.push_str("note: a declared type has parameters (turso #5762 shape)\n");
+    }
+    n
+}
+
 /// COMPAT.md: WITHOUT ROWID tables take plain INSERTs only (UPSERT is
 /// rejected) and can't be a foreign key's parent.
 fn documented_without_rowid(e: &str) -> bool {
     e.contains("ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint") || e.contains("foreign key mismatch")
 }
 
-/// `sql` names a WITHOUT ROWID table of `db` (its state after all the
-/// statements, which is close enough for a note).
-fn writes_without_rowid(db: &Connection, sql: &str) -> bool {
-    without_rowid_tables(db).iter().any(|t| mentions(sql, &t.to_lowercase()))
+/// `sql` (a statement, or an error naming tables) names one of `tables`.
+fn writes_without_rowid(tables: &[String], sql: &str) -> bool {
+    tables.iter().any(|t| mentions(sql, t))
+}
+
+/// The WITHOUT ROWID tables the case has at any point, lowercased: those in
+/// the file, in SQLite after the statements, and those any statement
+/// creates (a later DROP or RENAME hides them from the others).
+fn without_rowid_ever(db: &Connection, case: &Case) -> Vec<String> {
+    let mut t: Vec<String> = without_rowid_tables(db).iter().map(|n| n.to_lowercase()).collect();
+    // An input can start from an empty file (no header to read).
+    if let Some(Ok(file)) = (case.file.0.len() >= 100).then(|| deserialized(&case.file.0)) {
+        t.extend(without_rowid_tables(&file).iter().map(|n| n.to_lowercase()));
+    }
+    for s in &case.statements {
+        let s = s.to_string();
+        if s.to_lowercase().contains("without rowid") {
+            t.extend(created_name(&s));
+        }
+    }
+    t
 }
 
 /// `statement K: ...` from [`open_sqlite`]: K.
@@ -1399,7 +1581,12 @@ fn record(out: &Path, input: &Input, f: &Finding, path: &Path, experimental: boo
     let _ = fs::write(ex.join("finding.txt"), format!("{}\n{note}", f.detail));
     let _ = fs::write(ex.join("queries.sql"), queries_sql(&input.1, None));
     let _ = fs::write(ex.join("replay.sql"), format!("{}{}", script(&input.0), queries_sql(&input.1, f.query)));
-    let (small, why) = shrink(input, f, path, experimental);
+    // The generator's shrinker can panic on a statement list the runner
+    // edited (a dropped failing statement); the unshrunk example stays.
+    let Ok((small, why)) = panic::catch_unwind(AssertUnwindSafe(|| shrink(input, f, path, experimental))) else {
+        let _ = fs::write(ex.join("shrink-panicked.txt"), "the generator's shrinker panicked; use the unshrunk files\n");
+        return;
+    };
     let _ = fs::write(ex.join("shrunk-case.db"), prepared(&small.0).map(|c| c.file.0).unwrap_or_else(|_| small.0.file.0.clone()));
     let _ = fs::write(ex.join("shrunk-statements.sql"), script(&small.0));
     let _ = fs::write(ex.join("shrunk-queries.sql"), queries_sql(&small.1, None));
@@ -1441,7 +1628,10 @@ fn report(stats: &Stats, elapsed: Duration) -> String {
 /// SQLite, each statement of the file SQL run on both, and what each gives
 /// printed.
 fn replay(db: &Path, sql: &Path, experimental: bool) {
-    let bytes = fs::read(db).expect("database file");
+    // The file as a run gives it to both engines ([`prepared`]); a shrunk
+    // example's shrunk-case.db already is.
+    let raw = fs::read(db).expect("database file");
+    let bytes = prepared(&Case { file: SqliteFile(raw.clone()), statements: Vec::new() }).map(|c| c.file.0).unwrap_or(raw);
     let text = fs::read_to_string(sql).expect("SQL file");
     let path = std::env::temp_dir().join(format!("turso-diff-replay-{}.db", std::process::id()));
     for ext in ["", "-wal", "-shm"] {
@@ -1454,7 +1644,7 @@ fn replay(db: &Path, sql: &Path, experimental: bool) {
     }
     let tdb = pollster::block_on(b.build()).expect("turso open");
     let t = Turso { conn: tdb.connect().expect("turso connect"), _db: tdb };
-    let mut sdb = Connection::open_in_memory().unwrap();
+    let mut sdb = sqlite_memory().unwrap();
     if !bytes.is_empty() {
         let mut b2 = bytes.clone();
         for at in [18, 19] {
@@ -1517,6 +1707,13 @@ fn main() {
                             continue;
                         },
                     };
+                    // COMPAT.md: PRAGMA optimize is unsupported, but Turso
+                    // accepts it as a no-op while SQLite may ANALYZE.
+                    // Same for reverse_unordered_selects (unsupported in COMPAT.md).
+                    input.0.statements.retain(|s| {
+                        let l = s.to_string().to_lowercase();
+                        !l.replace(' ', "").contains("pragmaoptimize") && !l.contains(".optimize") && !l.contains("reverse_unordered_selects")
+                    });
                     // A statement either engine rejects ends the input; it is
                     // dropped (after its finding, if any, is recorded) and the
                     // rest runs again, so one known bug or unsupported feature

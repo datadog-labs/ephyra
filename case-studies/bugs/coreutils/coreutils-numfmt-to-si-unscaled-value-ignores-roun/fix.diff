@@ -1,0 +1,71 @@
+diff --git a/src/uu/numfmt/src/format.rs b/src/uu/numfmt/src/format.rs
+index 8f3368c02..521367bef 100644
+--- a/src/uu/numfmt/src/format.rs
++++ b/src/uu/numfmt/src/format.rs
+@@ -585,7 +585,9 @@ fn consider_suffix(
+     };
+ 
+     let i = match abs_n {
+-        _ if abs_n <= bases[1] - 1.0 => return Ok((n, None)),
++        // stays without a suffix when it rounds, with the chosen method, to
++        // a whole number below the first base
++        _ if round_method.round(n).abs() < bases[1] => return Ok((n, None)),
+         _ if abs_n < bases[2] => 1,
+         _ if abs_n < bases[3] => 2,
+         _ if abs_n < bases[4] => 3,
+@@ -743,7 +745,9 @@ fn transform_to(
+             let i2 = round_with_precision(i2, round_method, 0);
+             localize(format_float(i2, precision))
+         }
+-        None => localize(format_float(i2, 0)),
++        // Below the first base the value is printed as a whole number, but
++        // still rounded with the chosen method, as when it is scaled.
++        None => localize(format_float(div_round(i2, 1.0, round_method), 0)),
+         Some(s) if precision > 0 && precision <= u16::MAX.into() => localize(format!(
+             "{i2:.precision$}{unit_separator}{}",
+             DisplayableSuffix(s, opts.to),
+diff --git a/tests/by-util/test_numfmt.rs b/tests/by-util/test_numfmt.rs
+index f73091fbe..efa314312 100644
+--- a/tests/by-util/test_numfmt.rs
++++ b/tests/by-util/test_numfmt.rs
+@@ -738,6 +738,40 @@ fn test_round() {
+     }
+ }
+ 
++#[test]
++fn test_round_to_si_below_first_suffix() {
++    for (method, exp) in [
++        ("from-zero", ["13", "-13", "13", "-999", "1.0k", "-1.0k"]),
++        ("towards-zero", ["12", "-12", "12", "-998", "999", "-999"]),
++        ("up", ["13", "-12", "13", "-998", "1.0k", "-999"]),
++        ("down", ["12", "-13", "12", "-999", "999", "-1.0k"]),
++        ("nearest", ["12", "-12", "13", "-999", "999", "-999"]),
++    ] {
++        new_ucmd!()
++            .args(&[
++                "--to=si",
++                &format!("--round={method}"),
++                "--",
++                "12.1",
++                "-12.1",
++                "12.5",
++                "-998.5",
++                "999.4",
++                "-999.4",
++            ])
++            .succeeds()
++            .stdout_only(exp.join("\n") + "\n");
++    }
++}
++
++#[test]
++fn test_round_to_si_stays_unscaled_with_format_precision() {
++    new_ucmd!()
++        .args(&["--to=si", "--round=down", "--format=%.1f", "999.9"])
++        .succeeds()
++        .stdout_only("999.0\n");
++}
++
+ #[test]
+ fn test_to_unitless_small_values_use_display_rounding() {
+     new_ucmd!()

@@ -48,9 +48,25 @@
 //!     BY K` (no HAVING) against `.. GROUP BY K HAVING (h)`, `.. HAVING NOT
 //!     (h)`, `.. HAVING (h) IS NULL`, rows as a multiset (a set with
 //!     DISTINCT): HAVING keeps or drops whole groups.
-//!   - None for an aggregate query with neither (its WHERE would split
-//!     groups and change their aggregates): counted in
-//!     [`Tally::inapplicable`].
+//!   - `tlp-outer`: an aggregate query with neither (its WHERE would
+//!     split groups and change their aggregates), partitioned on its
+//!     result rows as `tlp-window` partitions a window query (below,
+//!     [`tlp_window`]): `Q` against `WITH tw(r0, ..) AS (Q) SELECT * FROM
+//!     tw WHERE (x)`, .., which SQLite may push down into `Q`'s HAVING
+//!     (and on a GROUP BY term on into its WHERE, `havingToWhere`); `x` is
+//!     over a GROUP BY term half of the time when an item is one, else
+//!     half of the time over a GROUP BY term added as an item of its own.
+//!     With `tlp-outer-union`, the same partitions as one compound.
+//!   - `tlp-window`: a SELECT with window items, whatever its shape: the
+//!     SELECT `Q` as written (WHERE, GROUP BY, HAVING; no ORDER BY, LIMIT)
+//!     against `WITH tw(r0, ..) AS (Q) SELECT * FROM tw WHERE (x)`, `..
+//!     WHERE NOT (x)`, `.. WHERE (x) IS NULL`, `x` over a result column
+//!     (see [`tlp_window`]): the windows are computed before the
+//!     partition, which SQLite may push down into `Q` only on a PARTITION
+//!     BY term of every window (`x` is over such a term often, an item
+//!     of its own when none is one, see [`tlp_window`]). Rows as a
+//!     multiset (a set with DISTINCT).
+//!     With `tlp-window-union`, the same partitions as one compound.
 //!   - `tlp-union`, for every variant but `tlp-agg`: its partitions as one
 //!     compound, joined by UNION ALL (by UNION when compared as sets).
 //!   - `tlp-intersect`, for `tlp-where` and `tlp-distinct`, as sets:
@@ -63,12 +79,19 @@
 //!
 //!   On a compound query, NoREC and TLP check each of its SELECTs.
 //! - [`order`], ORDER BY and LIMIT, for queries with a total ORDER BY:
-//!   `order-multiset`, `order-limit`, `order-sorted` (see [`order`]).
+//!   `order-multiset`, `order-limit`, `order-sorted` (see [`order`]); a
+//!   query without ORDER BY the same under one by every result column
+//!   ([`added_order`]): `order-all-multiset`, `order-all-limit`,
+//!   `order-all-sorted`.
 //! - [`windows`], window functions, for queries with window items:
 //!   `window-def`, the windows' values against their definition computed
-//!   from the rows they read (see [`window_values`]). TLP does not apply to
-//!   such queries (a partition of the WHERE clause changes the windows'
-//!   partitions); NoREC, the plan variants and ORDER BY do.
+//!   from the rows they read (see [`window_values`]). TLP partitions such
+//!   queries on their result rows (`tlp-window`: a partition of the WHERE
+//!   clause would change the windows' partitions); NoREC, the plan
+//!   variants and ORDER BY apply as to any query. Any other query (and a
+//!   window query in a UTF-16 database or compared folded) is wrapped,
+//!   each of its SELECTs in a CTE read by `count(*)` windows over its
+//!   rows: `window-wrap`, `window-count` (see [`window_wrap`]).
 //! - [`ctes`], common table expressions, for queries with a WITH clause:
 //!   `cte-inline`, every CTE read as a subquery in FROM; `cte-materialized`
 //!   and `cte-not-materialized`, every CTE with that hint. Every other
@@ -76,7 +99,8 @@
 //! - [`setops`], set operations, for compound queries: `setops-def`, the
 //!   compound against its definition computed from its SELECTs' rows;
 //!   `setops-swap`, the operands of a commutative operator swapped (see
-//!   [`setops`]).
+//!   [`setops`]); for any other query, `setops-self`, its SELECT as both
+//!   members of a compound against its rows (see [`setops_self`]).
 //! - [`plans`], differential query plans: the query as written against
 //!   variants a correct planner must answer alike, compared as the query's
 //!   results are (in order with ORDER BY, which every variant keeps):
@@ -245,7 +269,9 @@
 //!   GROUP BY query's rows is compared without its sign. Columns outside
 //!   GROUP BY terms and aggregates are never generated in such queries.
 //! - Known SQLite behaviour, skipped per query ([`known_issue`], counted
-//!   in [`Tally::known_skips`]):
+//!   in [`Tally::known_skips`]), and one query in three rewritten around
+//!   it ([`as_checked`]; all of them cost the runner's throughput past its
+//!   budget):
 //!   - a LIKE or GLOB whose pattern is a text literal with a non-ASCII
 //!     character before its first wildcard, in a query reading a table
 //!     that holds a value that is not valid text in the database's
@@ -255,6 +281,10 @@
 //!     never visits it: "SQLite follows a policy of Garbage-In,
 //!     Garbage-Out", and invalid UTF includes "using more bytes of UTF-8
 //!     than necessary" (invalidutf.html; bugs/sqlite/sqlite-glob-index-blob).
+//!     One such query in three is checked with each such pattern `'p'` written `('p'
+//!     || '')` ([`patterns_computed`], counted in [`Tally::known_rewrites`]):
+//!     the same pattern, but the LIKE optimization takes only a literal,
+//!     so every plan matches each row alike.
 //!
 //!   The last two before it, a
 //!   flattened compound CTE with a RIGHT join losing WHERE terms
@@ -292,8 +322,9 @@
 //!   included, BINARY where none is declared; skipped where the model does
 //!   not tell, `*` over a join or a subquery item, and where a group of
 //!   the members that SQLite computes as a compound of its own tells rows
-//!   apart under other sequences, counted in [`Tally::coll_skips`]), and
-//!   `window-def` skips it; so does
+//!   apart under other sequences, counted in [`Tally::coll_skips`]; for
+//!   that reason `order-multiset` skips such a compound too, where it
+//!   differs with ORDER BY or without), and `window-def` skips it; so does
 //!   `setops-swap` where swapping the members changes the sequence a
 //!   column of the compound takes. The queries never expose the pick
 //!   otherwise: a `CAST(x AS TEXT)` keeps `x`'s sequence, so aggregates'
@@ -377,7 +408,7 @@ use rusqlite::{types::ValueRef, Connection};
 use crate::{
     cases::Case,
     expr::{
-        alias, never_blob, table_name, Agg, BinOp, Bound, CastType, CteBody, Exclude, Expr, FrameMode, Func, Items, JoinKind, JoinOp, Order,
+        alias, never_blob, table_name, Agg, BinOp, Bound, By, CastType, CteBody, Exclude, Expr, FrameMode, Func, Items, JoinKind, JoinOp, Limit, Order,
         OrderKey, Query, RowKey, Schema, SetOp, TableInfo, Vtab, WinFunc, Window, PRAGMAS,
     },
     model::{fold, int_real, Coll, Encoding, Model, Value},
@@ -961,13 +992,14 @@ pub struct Tally {
     /// `INDEXED BY` such an index finds no plan where the planner may not
     /// use it.
     pub hint_skips: u64,
-    /// `setops-def` comparisons skipped: a group of the compound's members
-    /// that SQLite computes as a compound of its own tells rows apart under
-    /// sequences other than the compound's ([`steps_share_colls`]).
+    /// `setops-def` and `order-multiset` comparisons skipped: a group of
+    /// the compound's members that SQLite computes as a compound of its own
+    /// tells rows apart under sequences other than the compound's
+    /// ([`steps_share_colls`]), with or without ORDER BY.
     pub coll_skips: u64,
-    /// Queries the oracle has no formulation for (TLP on an aggregate
-    /// query with neither one aggregate nor HAVING nor an aggregate-free
-    /// GROUP BY).
+    /// Queries the oracle has no formulation for (ctes on a query without
+    /// a WITH clause, setops on one `sum` that is not a compound, windows
+    /// on a RANGE frame with offsets over values near the ends).
     pub inapplicable: u64,
     /// The host's storage failing, not SQLite's logic ([`io_error`]: the
     /// disk full, an I/O error): [`storage`]'s comparisons where a side
@@ -978,6 +1010,11 @@ pub struct Tally {
     /// current time in an index, a CHECK constraint or a generated column
     /// ([`nondeterministic`]).
     pub nondeterministic_skips: u64,
+    /// Queries left out by a draw for throughput ([`thinned`]): one in
+    /// two of those [`order`], [`setops`] and [`windows`] check with a
+    /// formulation of their own ([`added_order`], [`setops_self`],
+    /// [`window_wrap`]), which run each a query the oracle ran none for.
+    pub thinned: u64,
     /// Comparisons per variant (see the module documentation).
     pub variants: BTreeMap<&'static str, u64>,
 }
@@ -1000,6 +1037,7 @@ impl Tally {
         self.inapplicable += o.inapplicable;
         self.io_skips += o.io_skips;
         self.nondeterministic_skips += o.nondeterministic_skips;
+        self.thinned += o.thinned;
         for (k, v) in &o.variants {
             *self.variants.entry(k).or_insert(0) += v;
         }
@@ -1380,7 +1418,8 @@ fn distinct_ambiguous(db: &Connection, q: &Query, filtered: bool, with: &str) ->
 }
 
 /// Whether `q`, on the final model `m`, meets known SQLite behaviour that
-/// the oracles would report (see the module documentation).
+/// the oracles would report (see the module documentation); one query in
+/// three of those [`as_checked`] rewrites around it.
 pub fn known_issue(m: &Model, q: &Query) -> bool {
     invalid_text_pattern(m, q)
 }
@@ -1410,12 +1449,8 @@ pub fn invalid_text_pattern(m: &Model, q: &Query) -> bool {
     let mut pattern = false;
     each_expr(q, &mut |e| {
         if let Expr::Bin(op, _, rhs) = e {
-            let glob = matches!(op, BinOp::Glob | BinOp::NotGlob);
-            if glob || matches!(op, BinOp::Like | BinOp::NotLike) {
-                if let Expr::Lit(Value::Text(p)) = &**rhs {
-                    let wild = |c: char| if glob { matches!(c, '*' | '?' | '[') } else { matches!(c, '%' | '_') };
-                    pattern |= p.chars().take_while(|&c| !wild(c)).any(|c| !c.is_ascii());
-                }
+            if let Expr::Lit(Value::Text(p)) = &**rhs {
+                pattern |= non_ascii_prefix(*op, p);
             }
         }
     });
@@ -1431,6 +1466,14 @@ pub fn invalid_text_pattern(m: &Model, q: &Query) -> bool {
         },
     };
     q.tables().iter().filter_map(|t| m.tables.get(*t)).any(|t| t.rows.iter().any(|r| r.values.iter().any(|v| matches!(v, Value::Blob(b) if invalid(b)))))
+}
+
+/// Whether `op` is LIKE or GLOB (or NOT) and its pattern `p` has a
+/// non-ASCII character before its first wildcard.
+fn non_ascii_prefix(op: BinOp, p: &str) -> bool {
+    let glob = matches!(op, BinOp::Glob | BinOp::NotGlob);
+    let wild = |c: char| if glob { matches!(c, '*' | '?' | '[') } else { matches!(c, '%' | '_') };
+    (glob || matches!(op, BinOp::Like | BinOp::NotLike)) && p.chars().take_while(|&c| !wild(c)).any(|c| !c.is_ascii())
 }
 
 /// Whether `m` is a UTF-16 database and `q` (or a query below it) has a
@@ -1546,7 +1589,8 @@ fn each_on(
 }
 
 /// The query the oracles check for `drawn` in `m` ([`concat_as_text`] of it
-/// when [`concat_blob_utf16`], owned then), and the schema with its CTEs as
+/// when [`concat_blob_utf16`], then [`patterns_computed`] of that when
+/// [`invalid_text_pattern`], for one such query in three, owned then), and the schema with its CTEs as
 /// sources. That schema is of the query as drawn: the rewrite is the same
 /// query, CTE columns of the same names, values, affinities and collating
 /// sequences (`CAST` passes its operand's collating sequence on, and a
@@ -1560,7 +1604,54 @@ fn each_on(
 pub fn as_checked<'a>(m: &Model, schema: &Schema, drawn: &'a Query) -> Result<(Cow<'a, Query>, Schema), String> {
     let scoped = drawn.scope(schema).ok_or_else(|| format!("a CTE of the query is not valid: {}", drawn.sql()))?;
     let q = if concat_blob_utf16(m, drawn) { Cow::Owned(concat_as_text(drawn)) } else { Cow::Borrowed(drawn) };
+    // One such query in three, for throughput (the others stay
+    // [`known_issue`]s, skipped).
+    let q = if invalid_text_pattern(m, &q) && (fnv(&drawn.sql()) >> 37).is_multiple_of(3) { Cow::Owned(patterns_computed(&q)) } else { q };
     Ok((q, scoped))
+}
+
+/// `q` with the pattern of every LIKE and GLOB that is a text literal with
+/// a non-ASCII character before its first wildcard ([`non_ascii_prefix`])
+/// written `('p' || '')`, in it and every query below it: the same query
+/// (the concatenation is the same text, and a pattern's collating sequence
+/// plays no part in LIKE and GLOB), but one the LIKE optimization does not
+/// apply to, as it takes only a literal pattern (`isLikeOrGlob`): every
+/// plan then reads each row and matches it alike, an over-length UTF-8
+/// value included, the known SQLite behaviour of
+/// [`invalid_text_pattern`].
+pub fn patterns_computed(q: &Query) -> Query {
+    fn query(q: &mut Query) {
+        for e in q.exprs_mut() {
+            expr(e);
+        }
+        for (_, m) in &mut q.compound {
+            query(m);
+        }
+        for cte in &mut q.with {
+            if let CteBody::Select(b) = &mut cte.body {
+                query(b);
+            }
+        }
+    }
+    fn expr(e: &mut Expr) {
+        if let Expr::Bin(op, _, rhs) = e {
+            if let Expr::Lit(Value::Text(p)) = &**rhs {
+                if non_ascii_prefix(*op, p) {
+                    let computed = Expr::Bin(BinOp::Concat, rhs.clone(), Box::new(Expr::Lit(Value::Text(String::new()))));
+                    **rhs = computed;
+                }
+            }
+        }
+        for c in e.children_mut() {
+            expr(c);
+        }
+        if let Some(s) = e.subquery_mut() {
+            query(s);
+        }
+    }
+    let mut q = q.clone();
+    query(&mut q);
+    q
 }
 
 /// The query's WHERE clause, `1` without one.
@@ -1613,10 +1704,10 @@ pub fn tlp(case: &Case, queries: &[Query]) -> Result<Tally, String> {
 /// TLP on one SELECT (a query's core or a compound member).
 fn tlp_core(db: &Connection, schema: &Schema, q: &Query, tally: &mut Tally) -> Result<(), String> {
     // A window's values depend on every row of its partition, which a
-    // partition of the WHERE clause splits.
+    // partition of the WHERE clause splits: the query is partitioned
+    // outside, on its result rows.
     if q.has_window() {
-        tally.inapplicable += 1;
-        return Ok(());
+        return tlp_window(db, q, TLP_WINDOW, tally);
     }
     let (p, from, select) = (predicate(q), q.from_sql(0, &[]), q.select_sql(0));
     let has_agg = q.items.exprs().iter().any(|e| e.has_agg());
@@ -1671,10 +1762,11 @@ fn tlp_core(db: &Connection, schema: &Schema, q: &Query, tally: &mut Tally) -> R
             let parts = partitions("WHERE", &p).iter().map(|w| format!("{select} FROM {from}{w}{group}")).collect();
             ("tlp-group", format!("{select} FROM {from}{group}"), parts)
         },
-        _ => {
-            tally.inapplicable += 1;
-            return Ok(());
-        },
+        // An aggregate query with neither one aggregate nor HAVING nor an
+        // aggregate-free GROUP BY: a partition of its WHERE clause would
+        // split groups and change their aggregates; partitioned outside,
+        // on its result rows, as a window query is.
+        _ => return tlp_window(db, q, TLP_OUTER, tally),
     };
     // Every statement run starts with the query's WITH clause.
     let with = q.with_sql();
@@ -1714,6 +1806,245 @@ fn tlp_core(db: &Connection, schema: &Schema, q: &Query, tally: &mut Tally) -> R
         return Ok(());
     };
     agree(tally, "tlp-except", Mode::Set, &esql, &eorig, &vsql, &run(db, &vsql), &|_| false)
+}
+
+/// TLP on a SELECT with window items (`tlp-window`, see the module
+/// documentation): the SELECT as written (its WINDOW clause too) but for
+/// its ORDER BY and LIMIT,
+/// `Q`, against `WITH tw(r0, ..) AS (Q) SELECT * FROM tw WHERE (x)`, `..
+/// WHERE NOT (x)`, `.. WHERE (x) IS NULL` (after the query's own CTEs),
+/// `x` over one result column `rk` ([`window_partition`]). The windows'
+/// values are computed in `Q` before any partition, so each result row
+/// of `Q` falls in exactly one; SQLite may push `x` down into `Q` only
+/// where the windows cannot see it (`pushDownWhereTerms`: a PARTITION BY
+/// term of every window), and that is what this checks: `x` is over such
+/// an item half of the time, and in a query neither grouped nor aggregate
+/// with no such item a term of every window's PARTITION BY is half of the
+/// time an item of its own after the query's (`Q` then has it). Also
+/// `tlp-window-union`, the partitions as one compound. The same for an
+/// aggregate query TLP has no other formulation for (`names`
+/// [`TLP_OUTER`]), a GROUP BY term in place of a PARTITION BY term: SQLite
+/// pushes `x` down into `Q`'s HAVING, and from there into its WHERE on a
+/// GROUP BY term (`havingToWhere`). Each group's values are those of `Q`
+/// (its aggregates' arguments are such that the plan does not change
+/// them, as the plans oracle checks; ambiguous groups are skipped), so
+/// each of its rows falls in exactly one partition.
+fn tlp_window(db: &Connection, q: &Query, names: [&'static str; 2], tally: &mut Tally) -> Result<(), String> {
+    // A group's (or a nested query's) bare columns come from a row of it
+    // the plan picks, which pushing `x` down may change.
+    if ambiguous_groups(db, q, true) {
+        tally.group_skips += 1;
+        return Ok(());
+    }
+    let items = q.items.exprs();
+    // The items SQLite may push a partition on down into `Q`: a term of
+    // every window's PARTITION BY.
+    let windows: Vec<&Window> = items.iter().filter_map(|e| if let Expr::Window(w) = e { Some(&**w) } else { None }).collect();
+    // Without windows (`tlp-outer`, an aggregate query), the items SQLite
+    // moves from the pushed-down HAVING to the WHERE (`havingToWhere`): a
+    // GROUP BY term.
+    let pushable: Vec<usize> = match windows[..] {
+        [] => (0..items.len()).filter(|&k| q.group.contains(items[k])).collect(),
+        _ => (0..items.len()).filter(|&k| windows.iter().all(|w| w.partition.contains(items[k]))).collect(),
+    };
+    // The tail of the core, without ORDER BY and LIMIT: its WINDOW clause.
+    let tail = q.core().tail_sql(0);
+    let (from, filter, group, having) = (q.from_sql(0, &[]), q.where_sql(0), q.group_sql(0), q.having_sql(0));
+    let with = q.with_sql();
+    let h = fnv(&format!("{with}{} FROM {from}{filter}{group}{having}{tail}", q.select_sql(0)));
+    // Without such an item, half of the time a term of every window's
+    // PARTITION BY is an item of its own after the query's, in a query
+    // neither grouped nor aggregate (where it is a value of each row).
+    // Without windows, a GROUP BY term (a value of each group).
+    let common: Vec<&Expr> = match windows[..] {
+        [] => q.group.iter().collect(),
+        [w, ..] => w.partition.iter().filter(|t| windows.iter().all(|w| w.partition.contains(t))).collect(),
+    };
+    let extra = match common[..] {
+        [_, ..] if pushable.is_empty() && (windows.is_empty() || !q.aggregate()) && (h >> 58).is_multiple_of(2) => {
+            Some(common[(h % common.len() as u64) as usize])
+        },
+        _ => None,
+    };
+    let (n, pushable) = match extra {
+        Some(_) => (items.len() + 1, vec![items.len()]),
+        None => (items.len(), pushable),
+    };
+    let select = q.select_sql(0) + &extra.map_or(String::new(), |t| format!(", {}", q.e(t, 0)));
+    let core = format!("{select} FROM {from}{filter}{group}{having}{tail}");
+    let osql = format!("{with}{core}");
+    let Some(orig) = original(db, &osql, tally)? else {
+        return Ok(());
+    };
+    let (x, materialized) = window_partition(h, n, &pushable, extra.is_some(), &orig);
+    let columns: Vec<String> = (0..n).map(|k| format!("r{k}")).collect();
+    let prefix = if with.is_empty() { "WITH ".to_string() } else { format!("{}, ", with.trim_end()) };
+    let hint = if materialized { "MATERIALIZED " } else { "" };
+    let base = format!("{prefix}tw({}) AS {hint}({core}) ", columns.join(", "));
+    let mode = unordered_mode(q);
+    let parts = partitions("WHERE", &x).map(|w| format!("SELECT * FROM tw{w}"));
+    let stmts: Vec<String> = parts.iter().map(|s| format!("{base}{s}")).collect();
+    agree(tally, names[0], mode, &osql, &orig, &stmts.join(";\n             "), &concat(db, &stmts), &|_| false)?;
+    let usql = format!("{base}{}", parts.join(if mode == Mode::Set { " UNION " } else { " UNION ALL " }));
+    agree(tally, names[1], mode, &osql, &orig, &usql, &run(db, &usql), &|_| false)
+}
+
+/// The variant names of [`tlp_window`] for a query with window items.
+const TLP_WINDOW: [&str; 2] = ["tlp-window", "tlp-window-union"];
+/// The variant names of [`tlp_window`] for an aggregate query TLP has no
+/// other formulation for (`tlp-outer`).
+const TLP_OUTER: [&str; 2] = ["tlp-outer", "tlp-outer-union"];
+
+/// `window-wrap`, for a query [`windows`] does not compute the windows of
+/// (no window items, or in a UTF-16 database, or compared folded), on
+/// each of its SELECTs `Q` (as TLP, [`window_wrap_core`]):
+/// `WITH tw(r0, ..) AS (Q) SELECT *, count(*) OVER (), count(*) OVER
+/// (PARTITION BY rk) FROM tw` (after the query's own CTEs; MATERIALIZED
+/// one time in four), one time in eight against `Q`, its first columns
+/// compared as `Q`'s rows are ([`unordered_mode`]); and always
+/// `window-count`, each row's counts against the variant's own rows: the
+/// first the number of rows, the second the number whose `rk` SQLite
+/// tells apart from the row's no more than in a partition
+/// ([`Cell::distinct_key`]: numbers by value, text and blobs by their
+/// bytes, NULLs alike). `rk` is a column drawn from [`fnv`] of `Q`'s
+/// text (deterministic). The partition is left out in a UTF-16 database
+/// (text read back in UTF-8) and where the query is compared folded (`rk`
+/// may be under NOCASE or RTRIM). Ambiguous groups are skipped (counted in
+/// [`Tally::group_skips`]).
+fn window_wrap(db: &Connection, m: &Model, schema: &Schema, q: &Query, tally: &mut Tally) -> Result<(), String> {
+    if thinned(fnv(&q.sql()), tally) {
+        return Ok(());
+    }
+    if ambiguous_groups(db, q, true) {
+        tally.group_skips += 1;
+        return Ok(());
+    }
+    q.cores().iter().try_for_each(|c| window_wrap_core(db, m, schema, c, tally))
+}
+
+/// [`window_wrap`] on one SELECT (a query's core or a compound member): a
+/// compound in a CTE gives its columns the affinity of its first member's,
+/// which converts another member's values (an integer 0 under a REAL
+/// column reads as 0.0).
+fn window_wrap_core(db: &Connection, m: &Model, schema: &Schema, body: &Query, tally: &mut Tally) -> Result<(), String> {
+    let osql = body.sql();
+    let h = fnv(&osql);
+    // `Q` itself one time in eight (`window-wrap`); the counts always.
+    let orig = match (h >> 44).is_multiple_of(8) {
+        true => match original(db, &osql, tally)? {
+            Some(o) => Some(o),
+            None => return Ok(()),
+        },
+        false => None,
+    };
+    let with = body.with_sql();
+    let Some(inner) = osql.strip_prefix(&with) else {
+        return Err(format!("the query does not start with its WITH clause: {osql}"));
+    };
+    let n = body.width(schema);
+    let k = (h % n.max(1) as u64) as usize;
+    let partitioned = m.encoding == Encoding::Utf8 && !folding();
+    let columns: Vec<String> = (0..n).map(|k| format!("r{k}")).collect();
+    let prefix = if with.is_empty() { "WITH ".to_string() } else { format!("{}, ", with.trim_end()) };
+    let hint = if (h >> 50).is_multiple_of(4) { "MATERIALIZED " } else { "" };
+    let windows = if partitioned { format!("count(*) OVER (), count(*) OVER (PARTITION BY r{k})") } else { "count(*) OVER ()".to_string() };
+    let vsql = format!("{prefix}tw({}) AS {hint}({inner}) SELECT *, {windows} FROM tw", columns.join(", "));
+    let variant = match &orig {
+        Some(orig) => {
+            let variant = run(db, &vsql);
+            let rows = variant.as_ref().map(|r| r.iter().map(|row| row[..n.min(row.len())].to_vec()).collect()).map_err(|e| e.clone());
+            agree(tally, "window-wrap", unordered_mode(body), &osql, orig, &vsql, &rows, &|_| false)?;
+            variant
+        },
+        // The variant alone is the original: it fails only as `Q` may.
+        None => match original(db, &vsql, tally)? {
+            Some(v) => v,
+            None => return Ok(()),
+        },
+    };
+    let Ok(rows) = variant else {
+        return Ok(());
+    };
+    tally.comparisons += 1;
+    *tally.variants.entry("window-count").or_insert(0) += 1;
+    let mut parts: BTreeMap<Cell, i64> = BTreeMap::new();
+    if partitioned {
+        for row in &rows {
+            *parts.entry(row[k].distinct_key()).or_insert(0) += 1;
+        }
+    }
+    for row in &rows {
+        let all = Cell::Int(rows.len() as i64);
+        let part = partitioned.then(|| Cell::Int(parts[&row[k].distinct_key()]));
+        if row.len() != n + 1 + usize::from(partitioned) || row[n] != all || part.as_ref().is_some_and(|p| row[n + 1] != *p) {
+            return Err(format!(
+                "a row's window counts are not its rows' (window-count: {} rows, {} in its partition on r{k})\n  query: {vsql}\n    -> {row:?}",
+                rows.len(),
+                part.map_or("-".to_string(), |p| format!("{p:?}"))
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the query whose text's [`fnv`] is `h` is left out of
+/// [`added_order`], [`setops_self`] and [`window_wrap`] (counted in
+/// [`Tally::thinned`]): one query in two. Each runs queries its oracle
+/// ran none of before, for every query of the runner's inputs it is given,
+/// so the runner's throughput would fall past its budget.
+fn thinned(h: u64, tally: &mut Tally) -> bool {
+    let out = (h >> 37).is_multiple_of(2);
+    tally.thinned += u64::from(out);
+    out
+}
+
+/// FNV-1a of `s`.
+fn fnv(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
+/// The partitioning predicate of [`tlp_window`] for a query of `n`
+/// result columns, and whether its CTE is MATERIALIZED, both drawn from
+/// `h` (the query's [`fnv`]; deterministic): a column `rk` (one of the
+/// `pushable` ones always when `push`, half of the time else, when there
+/// are), and `rk` itself (its truth), or `rk` compared (`<`, `=`, `>=`)
+/// with its value in one of the query's result rows `orig`, so that each
+/// partition tends to hold rows. A NULL, a JSONB value or a text that is
+/// not UTF-8 (or holds a NUL) is not written as a literal: `rk` then.
+fn window_partition(h: u64, n: usize, pushable: &[usize], push: bool, orig: &Outcome) -> (String, bool) {
+    let k = match pushable {
+        [_, ..] if push || (h >> 56).is_multiple_of(2) => pushable[(h % pushable.len() as u64) as usize],
+        _ => (h % n.max(1) as u64) as usize,
+    };
+    let column = format!("r{k}");
+    let value = match orig {
+        Ok(rows) if !rows.is_empty() => rows[((h >> 20) % rows.len() as u64) as usize].get(k).and_then(cell_literal),
+        _ => None,
+    };
+    let x = match (value, (h >> 40) % 4) {
+        (Some(v), 1) => format!("{column} < {v}"),
+        (Some(v), 2) => format!("{column} = {v}"),
+        (Some(v), 3) => format!("{column} >= {v}"),
+        _ => column,
+    };
+    (x, (h >> 50).is_multiple_of(4))
+}
+
+/// A result value as an SQL literal of the same value, where one is
+/// written ([`crate::statements::literal`]).
+fn cell_literal(c: &Cell) -> Option<String> {
+    let v = match c {
+        Cell::Int(i) => Value::Int(*i),
+        Cell::Real(b) => Value::Real(f64::from_bits(*b)),
+        Cell::Text(t) => Value::Text(std::str::from_utf8(t).ok().filter(|s| !s.contains('\0'))?.to_string()),
+        Cell::Blob(b) => Value::Blob(b.clone()),
+        Cell::Null | Cell::Jsonb(..) => return None,
+    };
+    Some(crate::statements::literal(&v))
 }
 
 /// The join-order variants of the plans oracle (see the module
@@ -1774,6 +2105,12 @@ fn join_variants(q: &Query, schema: &Schema) -> Vec<(&'static str, String)> {
         let columns: Vec<usize> = sources.iter().map(|t| schema.info(*t).map_or(0, |i| i.columns)).collect();
         let using = q.joins[0].using(columns[0], columns[1]);
         let on: Vec<String> = using.iter().map(|c| format!("(a0.c{c} = a1.c{c})")).collect();
+        // The query's expressions with every column qualified: a USING
+        // column's name written bare (`At::using`) is ambiguous under ON.
+        let mut qualified = q.clone();
+        qualified.joins[0].kind = JoinKind::Cross;
+        let q = &qualified;
+        let rest = format!("{}{}{}", q.group_sql(0), q.having_sql(0), q.tail_sql(0));
         // The later joins as written.
         let from = format!("{} {} {} ON {}{}", src(0), op.keyword(), src(1), on.join(" AND "), q.joins_sql(1));
         let items = match &q.items {
@@ -1997,12 +2334,13 @@ pub fn storage(case: &Case, queries: &[Query]) -> Result<Tally, String> {
         (Ok(_), Err(e)) => return Err(format!("the case opens in a WAL file but not in memory: {e}")),
     };
     let memory = memory?;
+    let functions_differ = wal_settings(case).reopen && case.statements.iter().any(registers_functions);
     each_on(&memory, case, queries, |db, _, schema, q, tally| {
         if ambiguous_groups(db, q, true) {
             tally.group_skips += 1;
             return Ok(());
         }
-        if reads_layout(q) {
+        if reads_layout(q) || functions_differ && reads_function_list(q) {
             tally.inapplicable += 1;
             return Ok(());
         }
@@ -2042,6 +2380,28 @@ fn reads_layout(q: &Query) -> bool {
         CteBody::Vtab(Vtab::Pragma { k, .. }) => matches!(PRAGMAS[*k % PRAGMAS.len()].0, "page_count" | "freelist_count"),
         _ => false,
     })
+}
+
+/// Whether statement `s` registers SQL functions on its connection:
+/// `PRAGMA case_sensitive_like` (a read-back of [`Statement::Synchronous`])
+/// registers `like` and `glob` again (`sqlite3RegisterLikeFunctions`), as
+/// functions of the connection, and `pragma_function_list` lists them
+/// besides the built-in ones (`like` of 2 and 3 arguments, `builtin` 0);
+/// a connection that did not run it lists only the built-in ones.
+fn registers_functions(s: &Statement) -> bool {
+    s.to_string().contains("case_sensitive_like")
+}
+
+/// Whether `q` reads `pragma_function_list`, the functions of the
+/// connection: the storage oracle leaves it out when the WAL file's
+/// connection is a new one ([`WalSettings::reopen`]) and the case's
+/// statements registered functions on the first ([`registers_functions`]),
+/// which the memory database's connection keeps and the new one has not.
+/// Found as run 20261022-0422 storage w13-4647 (`gen+wal`: `PRAGMA
+/// synchronous = EXTRA; ..; PRAGMA case_sensitive_like = 0; ..` on an empty
+/// file, two `like` rows more in memory).
+fn reads_function_list(q: &Query) -> bool {
+    q.with.iter().any(|c| matches!(&c.body, CteBody::Vtab(Vtab::Pragma { k, .. }) if PRAGMAS[*k % PRAGMAS.len()].0 == "function_list"))
 }
 
 /// SQLite's order of two result values (BINARY collation, UTF-8 text):
@@ -2134,76 +2494,163 @@ fn term_colls(q: &Query, schema: &Schema) -> Option<Vec<Coll>> {
 ///   order by the terms, as [`cmp_rows`] orders them (strictly, without
 ///   ties, when the order is by every source's key).
 ///
-/// Queries without ORDER BY are counted in [`Tally::inapplicable`].
+/// A query `Q` without ORDER BY is checked so as `Q ORDER BY o [LIMIT n
+/// OFFSET k]`, `o` every result column ([`added_order`], a total order),
+/// the variants named `order-all-multiset` (`Q` itself against `R`, one
+/// time in eight, or where the order is not checked), `order-all-limit`
+/// and `order-all-sorted`.
 pub fn order(case: &Case, queries: &[Query]) -> Result<Tally, String> {
     each(case, queries, |db, m, schema, q, tally| {
         let Some(exact) = q.total_order(schema) else {
-            tally.inapplicable += 1;
-            return Ok(());
+            // Without ORDER BY: the query ordered by every result column,
+            // a total order ([`added_order`]).
+            let h = fnv(&q.sql());
+            if thinned(h, tally) {
+                return Ok(());
+            }
+            let Some(o) = added_order(q, schema, h) else {
+                tally.inapplicable += 1;
+                return Ok(());
+            };
+            if ambiguous_groups(db, q, true) {
+                tally.group_skips += 1;
+                return Ok(());
+            }
+            // Its rows against the query's own one time in eight, or where
+            // their order is not checked.
+            let full = (h >> 44).is_multiple_of(8);
+            return order_on(db, m, schema, &o, false, ORDER_ADDED, full, tally);
         };
         if ambiguous_groups(db, q, true) {
             tally.group_skips += 1;
             return Ok(());
         }
-        let full = Query { limit: None, ..q.clone() };
-        let fsql = full.sql();
-        let Some(rows) = original(db, &fsql, tally)? else {
-            return Ok(());
-        };
-        let unordered = Query { order: Vec::new(), ..full.clone() };
-        let usql = unordered.sql();
-        agree(tally, "order-multiset", unordered_mode(q), &fsql, &rows, &usql, &run(db, &usql), &|_| false)?;
-        let mode = Mode::Ordered(exact);
-        if let Some(l) = q.limit {
-            let lsql = q.sql();
-            let expected = rows.as_ref().map(|r| l.slice(r)).map_err(|e| e.clone());
-            let what = format!("{fsql} (its rows {}.., {} of them)", l.offset.max(0), l.count);
-            agree(tally, "order-limit", mode, &what, &expected, &lsql, &run(db, &lsql), &|_| false)?;
-        }
-        if m.encoding != Encoding::Utf8 {
-            return Ok(());
-        }
-        // Under NOCASE or RTRIM, each term sorts under its own sequence.
-        let colls = if folding() { term_colls(q, schema) } else { Some(vec![Coll::Binary; q.order.len()]) };
-        let Some(colls) = colls else {
-            return Ok(());
-        };
-        let width = q.width(schema);
-        let mut extra = Vec::new();
-        let mut terms = Vec::new();
-        for o in &q.order {
-            match o.key {
-                OrderKey::Column(c) => terms.push((c, o)),
-                _ => {
-                    terms.push((width + extra.len(), o));
-                    extra.push(q.key_sql(&o.key));
-                },
-            }
-        }
-        let ssql = if extra.is_empty() {
-            fsql.clone()
-        } else {
-            let (w, s) = (q.with_sql(), q.select_sql(0));
-            format!("{w}{s}, {} FROM {}{}{}", extra.join(", "), q.from_sql(0, &[]), q.where_sql(0), full.tail_sql(0))
-        };
-        let sorted = run(db, &ssql);
-        let prefix = sorted.as_ref().map(|r| r.iter().map(|row| row[..width.min(row.len())].to_vec()).collect()).map_err(|e| e.clone());
-        agree(tally, "order-sorted", mode, &fsql, &rows, &ssql, &prefix, &|_| false)?;
-        if let Ok(r) = &sorted {
-            for (k, w) in r.windows(2).enumerate() {
-                let o = cmp_rows_coll(&w[0], &w[1], &terms, &colls);
-                if o == Ordering::Greater || (exact && o == Ordering::Equal) {
-                    return Err(format!(
-                        "rows {k} and {} out of order (order-sorted)\n  query: {ssql}\n    -> {:?}\n    -> {:?}",
-                        k + 1,
-                        w[0],
-                        w[1]
-                    ));
-                }
-            }
-        }
-        Ok(())
+        order_on(db, m, schema, q, exact, ORDER_WRITTEN, true, tally)
     })
+}
+
+/// The variant names of [`order`] for a query's own ORDER BY.
+const ORDER_WRITTEN: [&str; 3] = ["order-multiset", "order-limit", "order-sorted"];
+/// The variant names of [`order`] for the ORDER BY of [`added_order`].
+const ORDER_ADDED: [&str; 3] = ["order-all-multiset", "order-all-limit", "order-all-sorted"];
+
+/// A query without ORDER BY, `Q`, ordered by every result column (by its
+/// number, in an order rotated by a draw), each term ASC or DESC with
+/// NULLS FIRST, NULLS LAST or neither, one time in four with a LIMIT of up
+/// to 4 rows and an OFFSET of up to 2: a total order
+/// ([`Query::total_order`] is `Some(false)`: rows that tie are equal as
+/// SQLite compares them) of a form the generator writes, so that
+/// [`order`] checks it as it checks the query's own. Each draw is from
+/// `h`, [`fnv`] of `Q`'s text (deterministic). `None` for a query with an
+/// ORDER BY.
+fn added_order(q: &Query, schema: &Schema, h: u64) -> Option<Query> {
+    if !q.order.is_empty() {
+        return None;
+    }
+    let n = q.width(schema);
+    if n == 0 {
+        return None;
+    }
+    let start = (h % n as u64) as usize;
+    let order = (0..n)
+        .map(|i| {
+            let bits = h.rotate_right((3 * i % 61) as u32 + 3);
+            let nulls = match (bits >> 1) % 4 {
+                0 => Some(true),
+                1 => Some(false),
+                _ => None,
+            };
+            Order { key: OrderKey::Column((start + i) % n), desc: bits % 2 == 1, nulls, by: By::Number }
+        })
+        .collect();
+    let limit = (h >> 61).is_multiple_of(4).then_some(Limit { count: ((h >> 32) % 5) as i64, offset: ((h >> 40) % 3) as i64, comma: false });
+    let o = Query { order, limit, ..q.clone() };
+    (o.total_order(schema) == Some(false)).then_some(o)
+}
+
+/// [`order`] on `q`, whose ORDER BY is a total order (`exact` as
+/// [`Query::total_order`] says), its variants named `names`; the
+/// multiset only when `full` or where the order is not checked (a UTF-16
+/// database, terms whose collating sequences the model does not tell).
+#[allow(clippy::too_many_arguments)]
+fn order_on(
+    db: &Connection,
+    m: &Model,
+    schema: &Schema,
+    q: &Query,
+    exact: bool,
+    names: [&'static str; 3],
+    full_check: bool,
+    tally: &mut Tally,
+) -> Result<(), String> {
+    let [multiset, limited, sorted_name] = names;
+    let full = Query { limit: None, ..q.clone() };
+    let fsql = full.sql();
+    let Some(rows) = original(db, &fsql, tally)? else {
+        return Ok(());
+    };
+    let unordered = Query { order: Vec::new(), ..full.clone() };
+    let usql = unordered.sql();
+    // A compound SQLite computes in parts under sequences other than
+    // its own, which ORDER BY changes (`steps_share_colls`), gives other
+    // rows with it than without: known, as setops-def skips it.
+    let sorted_checked = m.encoding == Encoding::Utf8 && (!folding() || term_colls(q, schema).is_some());
+    if folding() && !q.compound.is_empty() && !(steps_share_colls(&full, schema) && steps_share_colls(&unordered, schema)) {
+        tally.coll_skips += 1;
+    } else if full_check || !sorted_checked {
+        agree(tally, multiset, unordered_mode(q), &fsql, &rows, &usql, &run(db, &usql), &|_| false)?;
+    }
+    let mode = Mode::Ordered(exact);
+    if let Some(l) = q.limit {
+        let lsql = q.sql();
+        let expected = rows.as_ref().map(|r| l.slice(r)).map_err(|e| e.clone());
+        let what = format!("{fsql} (its rows {}.., {} of them)", l.offset.max(0), l.count);
+        agree(tally, limited, mode, &what, &expected, &lsql, &run(db, &lsql), &|_| false)?;
+    }
+    if m.encoding != Encoding::Utf8 {
+        return Ok(());
+    }
+    // Under NOCASE or RTRIM, each term sorts under its own sequence.
+    let colls = if folding() { term_colls(q, schema) } else { Some(vec![Coll::Binary; q.order.len()]) };
+    let Some(colls) = colls else {
+        return Ok(());
+    };
+    let width = q.width(schema);
+    let mut extra = Vec::new();
+    let mut terms = Vec::new();
+    for o in &q.order {
+        match o.key {
+            OrderKey::Column(c) => terms.push((c, o)),
+            _ => {
+                terms.push((width + extra.len(), o));
+                extra.push(q.key_sql(&o.key));
+            },
+        }
+    }
+    let ssql = if extra.is_empty() {
+        fsql.clone()
+    } else {
+        let (w, s) = (q.with_sql(), q.select_sql(0));
+        format!("{w}{s}, {} FROM {}{}{}", extra.join(", "), q.from_sql(0, &[]), q.where_sql(0), full.tail_sql(0))
+    };
+    // Without keys appended, the query is the one already run.
+    let sorted = if extra.is_empty() { rows.clone() } else { run(db, &ssql) };
+    let prefix = sorted.as_ref().map(|r| r.iter().map(|row| row[..width.min(row.len())].to_vec()).collect()).map_err(|e| e.clone());
+    agree(tally, sorted_name, mode, &fsql, &rows, &ssql, &prefix, &|_| false)?;
+    if let Ok(r) = &sorted {
+        for (k, w) in r.windows(2).enumerate() {
+            let o = cmp_rows_coll(&w[0], &w[1], &terms, &colls);
+            if o == Ordering::Greater || (exact && o == Ordering::Equal) {
+                return Err(format!(
+                    "rows {k} and {} out of order ({sorted_name})\n  query: {ssql}\n    -> {:?}\n    -> {:?}",
+                    k + 1,
+                    w[0],
+                    w[1]
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `left op right` by the definition of `op`, on rows compared exactly
@@ -2240,12 +2687,11 @@ pub fn set_op(op: SetOp, left: Rows, right: Rows) -> Rows {
 /// - `setops-swap`: two SELECTs and a commutative operator (not EXCEPT):
 ///   `S1 op S0 [ORDER BY o [LIMIT ..]]` against `S0 op S1 ..`.
 ///
-/// Queries that are not compounds are counted in [`Tally::inapplicable`].
+/// A query that is not a compound is checked as [`setops_self`] says.
 pub fn setops(case: &Case, queries: &[Query]) -> Result<Tally, String> {
     each(case, queries, |db, m, schema, q, tally| {
         if q.compound.is_empty() {
-            tally.inapplicable += 1;
-            return Ok(());
+            return setops_self(db, schema, q, tally);
         }
         if ambiguous_groups(db, q, true) {
             tally.group_skips += 1;
@@ -2307,6 +2753,102 @@ pub fn setops(case: &Case, queries: &[Query]) -> Result<Tally, String> {
         let what = format!("{osql} (by definition, from its SELECTs' rows)");
         agree(tally, "setops-def", mode, &what, &Ok(rows), &osql, &orig, &|_| false)
     })
+}
+
+/// `setops-self`, for a query `Q` that is not a compound: its SELECT
+/// (without ORDER BY and LIMIT), `S`, as both members of a compound `S op
+/// S`, `op` drawn from [`fnv`] of `Q`'s text (deterministic), half of the
+/// time ordered by every result column (not under NOCASE or RTRIM, where
+/// ORDER BY changes how SQLite computes a compound, see [`order`]); seven
+/// times in eight its rows against themselves (`setops-self-own`,
+/// [`self_compound_rows`]), else against `S`'s rows `R`: `R` twice for UNION ALL (compared as a
+/// compound of `S` is, [`unordered_mode`]), `R` as a set for UNION and
+/// INTERSECT (each row of either member is in the other), none for
+/// EXCEPT (each is in the right member). `S` is deterministic as any
+/// query compared with itself (ambiguous groups skipped, counted in
+/// [`Tally::group_skips`]), so its two runs give the same rows. One
+/// aggregate `sum`, whose REAL sum may round apart by the order its rows
+/// are summed in, is counted in [`Tally::inapplicable`].
+fn setops_self(db: &Connection, schema: &Schema, q: &Query, tally: &mut Tally) -> Result<(), String> {
+    let h = fnv(&q.sql());
+    if thinned(h, tally) {
+        return Ok(());
+    }
+    let core = q.core();
+    if unordered_mode(&core) == Mode::Sum {
+        tally.inapplicable += 1;
+        return Ok(());
+    }
+    if ambiguous_groups(db, q, true) {
+        tally.group_skips += 1;
+        return Ok(());
+    }
+    let osql = core.sql();
+    let op = [SetOp::UnionAll, SetOp::Union, SetOp::Intersect, SetOp::Except][(h % 4) as usize];
+    let order = match (h >> 8).is_multiple_of(2) && !folding() {
+        true => {
+            let terms: Vec<String> = (0..q.width(schema)).map(|k| format!("{}{}", k + 1, if (h >> (16 + k % 40)) % 2 == 1 { " DESC" } else { "" })).collect();
+            format!(" ORDER BY {}", terms.join(", "))
+        },
+        false => String::new(),
+    };
+    // Written out: `Query::sql` puts a compound's WINDOW clause once, at
+    // its end, where it names the last member's windows; each member
+    // here has its own.
+    let with = core.with_sql();
+    let Some(s) = osql.strip_prefix(&with) else {
+        return Err(format!("the query does not start with its WITH clause: {osql}"));
+    };
+    let vsql = format!("{with}{s} {} {s}{order}", op.sql());
+    // Seven times in eight, the compound alone: its rows against
+    // themselves.
+    if !(h >> 44).is_multiple_of(8) {
+        let Some(Ok(rows)) = original(db, &vsql, tally)? else {
+            return Ok(());
+        };
+        return self_compound_rows(tally, op, &vsql, &rows);
+    }
+    let Some(orig) = original(db, &osql, tally)? else {
+        return Ok(());
+    };
+    let (mode, expected) = match (op, &orig) {
+        (SetOp::UnionAll, Ok(r)) => (unordered_mode(&Query { compound: vec![(op, core.clone())], ..core.clone() }), Ok([r.clone(), r.clone()].concat())),
+        (SetOp::Except, Ok(_)) => (Mode::Set, Ok(Vec::new())),
+        _ => (Mode::Set, orig.clone()),
+    };
+    let what = format!("{osql} (its rows, as {op:?} of it with itself has them)");
+    agree(tally, "setops-self", mode, &what, &expected, &vsql, &run(db, &vsql), &|_| false)
+}
+
+/// `setops-self-own`: the rows of `S op S` ([`setops_self`]) against
+/// themselves: under UNION ALL each row as often as an equal one in the
+/// other member, so every class of rows SQLite cannot tell apart (folded
+/// where the query is compared folded, then [`Cell::distinct_key`]) an
+/// even number of times; under UNION and INTERSECT no two rows SQLite
+/// tells apart under no collating sequence ([`Cell::distinct_key`], equal
+/// under every one); under EXCEPT none.
+fn self_compound_rows(tally: &mut Tally, op: SetOp, vsql: &str, rows: &Rows) -> Result<(), String> {
+    tally.comparisons += 1;
+    *tally.variants.entry("setops-self-own").or_insert(0) += 1;
+    if nul_text(rows) {
+        tally.nul_skips += 1;
+        return Ok(());
+    }
+    let fold = folding();
+    let key = |r: &[Cell]| -> Vec<Cell> { r.iter().map(|c| if fold { c.folded().distinct_key() } else { c.distinct_key() }).collect() };
+    let mut classes: BTreeMap<Vec<Cell>, usize> = BTreeMap::new();
+    for r in rows {
+        *classes.entry(if op == SetOp::UnionAll { key(r) } else { r.iter().map(Cell::distinct_key).collect() }).or_insert(0) += 1;
+    }
+    let odd = classes.iter().find(|(_, &n)| match op {
+        SetOp::UnionAll => n % 2 == 1,
+        SetOp::Union | SetOp::Intersect => n > 1,
+        SetOp::Except => true,
+    });
+    match odd {
+        Some((row, n)) => Err(format!("{op:?} of a query with itself gives {row:?} {n} times (setops-self-own)\n  query: {vsql}\n    -> {rows:?}")),
+        None => Ok(()),
+    }
 }
 
 /// [`set_op`] with each column's text told apart under its collating
@@ -2741,17 +3283,15 @@ pub fn window_values(w: &Window, rows: &[WindowRow]) -> Result<Vec<Cell>, String
 /// I', x1, .. FROM F WHERE p`, where `I'` is the items with each window
 /// NULL and `x1, ..` are each window's PARTITION BY terms, ORDER BY terms
 /// and argument: the windows' values by [`window_values`], as a multiset,
-/// exactly. Other queries, and queries in UTF-16 databases, are counted in
-/// [`Tally::inapplicable`].
+/// exactly. Other queries, and queries in UTF-16 databases or compared
+/// folded, are checked as [`window_wrap`] says.
 pub fn windows(case: &Case, queries: &[Query]) -> Result<Tally, String> {
-    each(case, queries, |db, m, _, q, tally| {
+    each(case, queries, |db, m, schema, q, tally| {
         let Items::Exprs(items) = &q.items else {
-            tally.inapplicable += 1;
-            return Ok(());
+            return window_wrap(db, m, schema, q, tally);
         };
         if !q.has_window() || m.encoding != Encoding::Utf8 || folding() {
-            tally.inapplicable += 1;
-            return Ok(());
+            return window_wrap(db, m, schema, q, tally);
         }
         let osql = q.core().sql();
         let Some(orig) = original(db, &osql, tally)? else {
@@ -2889,7 +3429,7 @@ mod tests {
         use crate::{expr::{RowKey, Schema, TableInfo}, model::Coll};
         let table = |coll: Vec<Option<Coll>>| TableInfo {
             columns: 2, rows: 1, samples: vec![], by_column: vec![vec![]; 2], shared: vec![], key: RowKey::Rowid,
-            exprs: vec![], partial: vec![], leading: vec![], coll, aff: Vec::new(),
+            exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll, aff: Vec::new(),
         };
         let schema = Schema { tables: vec![table(vec![Some(Coll::Rtrim), None]), table(vec![None, None]), table(vec![None, None])], ctes: vec![], catalog: Default::default() };
         let member = |t: usize| Query::simple(t, false, Items::Exprs(vec![Expr::col(0, 0), Expr::col(0, 1)]), None);
@@ -2916,7 +3456,7 @@ mod tests {
         };
         let table = |coll: Vec<Option<Coll>>| TableInfo {
             columns: coll.len(), rows: 2, samples: vec![], by_column: vec![vec![]; coll.len()], shared: vec![], key: RowKey::Rowid,
-            exprs: vec![], partial: vec![], leading: vec![], coll, aff: Vec::new(),
+            exprs: vec![], partial: vec![], leading: vec![], index_cols: vec![], coll, aff: Vec::new(),
         };
         let schema = Schema { tables: vec![table(vec![Some(Coll::Binary)]), table(vec![Some(Coll::Rtrim)]), table(vec![None, Some(Coll::Binary)])], ctes: vec![], catalog: Default::default() };
         let db = Connection::open_in_memory().unwrap();
@@ -2962,6 +3502,40 @@ mod tests {
         // With the UNION ALL first, every part's sequence is the compound's.
         let q = Query { compound: vec![(SetOp::UnionAll, nul), (SetOp::Union, x)], ..concat };
         assert!(super::steps_share_colls(&q, &schema));
+    }
+
+    /// `order-multiset` skips a compound that SQLite computes in parts under
+    /// other sequences than its own, ORDER BY or not (`steps_share_colls`):
+    /// `c0 || '' UNION 9 UNION ALL NULL COLLATE RTRIM` over '' and ' ' keeps
+    /// both without ORDER BY (the UNION under BINARY) and one with `ORDER BY
+    /// 1` on trunk 3769f60be38b (3.51.0 the other way round; the bundled
+    /// 3.55.0 both ways), the known item 2 of
+    /// bugs/sqlite/sqlite-balanced-merge-dedup-collation. Run 20261022-0005
+    /// order-multiset w4-16054. With the UNION ALL first it is compared.
+    #[test]
+    fn order_multiset_skips_a_compound_whose_parts_take_other_sequences() {
+        use crate::{
+            cases::Case,
+            model::{normalize, Coll, Encoding, Key, Layout, Model, Row, Session, Table, Value},
+            SqliteFile,
+        };
+        let mut t = Table::new(1, Key::Rowid);
+        t.rows = ["", " "].iter().enumerate().map(|(k, v)| Row { rowid: k as i64 + 1, values: vec![Value::Text(v.to_string())] }).collect();
+        let mut m = Model { encoding: Encoding::Utf8, tables: vec![t], views: Vec::new(), triggers: Vec::new(), savepoints: Vec::new(), foreign_keys: true, rules: Vec::new(), recursive_triggers: false, session: Session::default(), vtabs: Vec::new() };
+        let mut l = Layout::SIMPLE;
+        normalize(&mut m, &mut l);
+        let case = Case { file: SqliteFile(crate::writer::write(&m, &l)), statements: Vec::new() };
+        let item = |e: Expr| Query::simple(0, false, Items::Exprs(vec![e]), None);
+        let concat = item(Expr::bin(crate::expr::BinOp::Concat, Expr::col(0, 0), Expr::Lit(Value::Text(String::new()))));
+        let nul = item(Expr::Lit(Value::Int(9)));
+        let x = item(Expr::Collate(Box::new(Expr::Lit(Value::Null)), Coll::Rtrim));
+        let order = vec![Order { key: OrderKey::Column(0), desc: false, nulls: None, by: By::Number }];
+        let q = Query { compound: vec![(SetOp::Union, nul.clone()), (SetOp::UnionAll, x.clone())], order: order.clone(), ..concat.clone() };
+        let t = super::order(&case, std::slice::from_ref(&q)).unwrap();
+        assert_eq!((t.queries, t.coll_skips), (1, 1));
+        let q = Query { compound: vec![(SetOp::UnionAll, nul), (SetOp::Union, x)], order, ..concat };
+        let t = super::order(&case, std::slice::from_ref(&q)).unwrap();
+        assert_eq!((t.queries, t.coll_skips), (1, 0));
     }
 
     /// A DISTINCT subquery keeps one of the rows that compare equal
@@ -3281,6 +3855,50 @@ mod tests {
         assert!(!super::reads_layout(&with(Vtab::Pragma { k: 4, table: None })));
     }
 
+    /// `PRAGMA case_sensitive_like` registers `like` again on its
+    /// connection, and `pragma_function_list` lists it there (two rows of
+    /// `builtin` 0) and not on a new connection: a WAL file reopened after
+    /// the case's statements lists fewer functions than the memory
+    /// database. The storage oracle leaves such queries out when it
+    /// reopens a case that runs the pragma (run 20261022-0422 storage
+    /// w13-4647, replayed: it failed before), and compares them otherwise.
+    #[test]
+    fn function_list_is_left_out_of_a_reopened_storage() {
+        use crate::{
+            cases::Case,
+            expr::{set_spellings, Cte, CteBody, Vtab, PRAGMAS},
+            statements::Statement,
+            SqliteFile,
+        };
+        let likes = |pragma: &str| {
+            let db = Connection::open_in_memory().unwrap();
+            db.execute_batch(pragma).unwrap();
+            super::run(&db, "SELECT count(*) FROM pragma_function_list WHERE name = 'like' AND NOT builtin").unwrap()
+        };
+        assert_ne!(likes("PRAGMA case_sensitive_like = 0"), likes("PRAGMA synchronous = EXTRA"));
+        let k = PRAGMAS.iter().position(|p| p.0 == "function_list").unwrap();
+        let query = Query { with: vec![Cte { body: CteBody::Vtab(Vtab::Pragma { k, table: None }), hint: None, columns: false }], ..Query::simple(crate::expr::CTE, false, Items::Star, None) };
+        let dir = scratch("function-list");
+        set_spellings(true);
+        let case = Case { file: SqliteFile(Vec::new()), statements: vec![Statement::Synchronous(3)] };
+        assert!(case.statements[0].to_string().contains("PRAGMA case_sensitive_like = 0"), "{}", case.statements[0]);
+        assert!(super::wal_settings(&case).reopen);
+        super::set_storage(super::Storage::Wal { dir: dir.clone() });
+        let t = super::storage(&case, std::slice::from_ref(&query));
+        // Without the pragma the two connections list the same functions.
+        let plain = Case { file: SqliteFile(Vec::new()), statements: vec![Statement::CellSizeCheck(true)] };
+        assert!(super::wal_settings(&plain).reopen);
+        let u = super::storage(&plain, std::slice::from_ref(&query));
+        super::clear_storage();
+        super::set_storage(super::Storage::Memory);
+        set_spellings(false);
+        let _ = std::fs::remove_dir_all(&dir);
+        let t = t.unwrap();
+        assert_eq!((t.inapplicable, t.comparisons), (1, 0));
+        let u = u.unwrap();
+        assert_eq!((u.inapplicable, u.comparisons), (0, 1));
+    }
+
     /// A case whose expression index of a date function reads a value
     /// SQLite takes for the current time fails in its statements with
     /// "non-deterministic use of julianday() in an index" (deterministic.html;
@@ -3556,6 +4174,287 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// TLP of a window query partitions its result rows, not its WHERE
+    /// clause: `count(c1) OVER w` (`WINDOW w AS (PARTITION BY c0)`) over
+    /// the rows a partition of the WHERE clause keeps counts other rows
+    /// than over all of them, so the in-place identity fails; partitioned
+    /// on a result column outside the windows (`tlp_window`) it holds, on
+    /// the PARTITION BY column (which SQLite pushes down) or on the window.
+    #[test]
+    fn tlp_partitions_a_window_query_outside() {
+        use crate::expr::{BinOp, Named};
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE t0(c0, c1); INSERT INTO t0 VALUES (1, 1), (1, 5), (2, 3), (2, NULL), (3, 7);").unwrap();
+        let w = Window {
+            func: WinFunc::Count,
+            arg: Some(Expr::col(0, 1)),
+            default: None,
+            filter: None,
+            partition: vec![Expr::col(0, 0)],
+            order: Vec::new(),
+            frame: None,
+            named: Named::Partition,
+        };
+        let items = Items::Exprs(vec![Expr::col(0, 0), Expr::Window(Box::new(w))]);
+        let q = Query::simple(0, false, items, None);
+        let sorted = |mut r: Vec<Vec<Cell>>| {
+            r.sort();
+            r
+        };
+        let all = sorted(super::run(&db, &q.sql()).unwrap());
+        let in_place = q.sql().replace(" WINDOW", " WHERE {} WINDOW");
+        let parts: Vec<String> = super::partitions("", "c1 > 2").iter().map(|p| in_place.replace(" WHERE {}", &format!(" WHERE{p}"))).collect();
+        assert!(parts[0].starts_with("SELECT c0, count(c1) OVER (w") && parts[0].contains(" FROM t0 AS a0 WHERE  (c1 > 2) WINDOW w"), "{}", parts[0]);
+        let split = sorted(super::concat(&db, &parts).unwrap());
+        assert_eq!(all.len(), split.len());
+        assert_ne!(all, split, "the windows count the rows of each WHERE partition");
+        // The query partitioned outside: on every result column (`r0` is
+        // the PARTITION BY column, `r1` the window) and every shape.
+        for (x, materialized) in [("r0", false), ("r0 >= 2", true), ("r1 = 1", false), ("r1 < 2", true)] {
+            let base = format!("WITH tw(r0, r1) AS {}({}) ", if materialized { "MATERIALIZED " } else { "" }, q.sql());
+            let parts: Vec<String> = super::partitions("WHERE", x).iter().map(|p| format!("{base}SELECT * FROM tw{p}")).collect();
+            assert_eq!(sorted(super::concat(&db, &parts).unwrap()), all, "{x}");
+        }
+        let mut tally = super::Tally::default();
+        super::tlp_window(&db, &q, super::TLP_WINDOW, &mut tally).unwrap();
+        assert_eq!((tally.comparisons, tally.variants.get("tlp-window"), tally.variants.get("tlp-window-union")), (2, Some(&1), Some(&1)));
+        // The window alone: its PARTITION BY term `c0` an item of its own
+        // (`r1`), which SQLite pushes down into `Q`, when drawn so.
+        let alone = Query::simple(0, false, Items::Exprs(vec![q.items.exprs()[1].clone()]), None);
+        let base = format!("WITH tw(r0, r1) AS ({}) ", alone.sql().replace(" FROM", ", c0 FROM"));
+        let plan = super::run(&db, &format!("EXPLAIN QUERY PLAN {base}SELECT * FROM tw WHERE r1 = 2")).unwrap();
+        assert!(format!("{plan:?}").contains("subquery"), "{plan:?}");
+        let mut tally = super::Tally::default();
+        super::tlp_window(&db, &alone, super::TLP_WINDOW, &mut tally).unwrap();
+        assert_eq!(tally.comparisons, 2);
+        // A WHERE clause stays in the partitioned query.
+        let q = Query { filter: Some(Expr::bin(BinOp::Gt, Expr::col(0, 1), Expr::Lit(crate::model::Value::Int(2)))), ..q };
+        let mut tally = super::Tally::default();
+        super::tlp_window(&db, &q, super::TLP_WINDOW, &mut tally).unwrap();
+        assert_eq!(tally.comparisons, 2);
+    }
+
+    /// A model of one rowid table of `columns` columns in a UTF-8 database.
+    fn one_table(columns: usize) -> (crate::model::Model, crate::expr::Schema) {
+        use crate::model::{Encoding, Key, Model, Table};
+        let m = Model {
+            encoding: Encoding::Utf8,
+            tables: vec![Table::new(columns, Key::Rowid)],
+            views: Vec::new(),
+            triggers: Vec::new(),
+            savepoints: Vec::new(),
+            foreign_keys: true,
+            rules: Vec::new(),
+            recursive_triggers: false,
+            session: crate::model::Session::default(),
+            vtabs: Vec::new(),
+        };
+        let schema = crate::expr::Schema::of(&m);
+        (m, schema)
+    }
+
+    /// `order` checks a query without ORDER BY under one by every result
+    /// column (`added_order`), a total order: a LIMIT under an order by
+    /// some columns only cuts among rows that tie, which differ (the same
+    /// rows inserted in another order give another first row), so that is
+    /// not checked; by every column the rows that tie are equal.
+    #[test]
+    fn order_checks_a_query_without_one_under_every_column() {
+        let (m, schema) = one_table(2);
+        let first = |rows: &str| {
+            let db = Connection::open_in_memory().unwrap();
+            db.execute_batch(&format!("CREATE TABLE t0(c0, c1); INSERT INTO t0 VALUES {rows};")).unwrap();
+            super::run(&db, "SELECT c0, c1 FROM t0 ORDER BY c0 LIMIT 1").unwrap()
+        };
+        assert_ne!(first("(1, 'a'), (1, 'b')"), first("(1, 'b'), (1, 'a')"), "a partial order's LIMIT depends on the rows' order");
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE t0(c0, c1); INSERT INTO t0 VALUES (1, 'b'), (NULL, 'a'), (1, 'a'), (2, NULL), (1, 'b'), (0, 'z');").unwrap();
+        let q = Query::simple(0, false, Items::Exprs(vec![Expr::col(0, 0), Expr::col(0, 1)]), None);
+        let o = super::added_order(&q, &schema, super::fnv(&q.sql())).unwrap();
+        assert_eq!((o.order.len(), o.total_order(&schema)), (2, Some(false)));
+        assert!(super::added_order(&o, &schema, 0).is_none(), "a query with an ORDER BY keeps its own");
+        let mut tally = super::Tally::default();
+        super::order_on(&db, &m, &schema, &o, false, super::ORDER_ADDED, true, &mut tally).unwrap();
+        assert_eq!((tally.variants.get("order-all-multiset"), tally.variants.get("order-all-sorted")), (Some(&1), Some(&1)), "{}", o.sql());
+        // Every LIMIT and term direction, with and without NULLS.
+        for (desc, nulls, count, offset) in [(false, None, 2, 0), (true, Some(true), 3, 1), (true, None, 1, 2), (false, Some(false), 4, 0)] {
+            let order = (0..2).map(|k| Order { key: OrderKey::Column(1 - k), desc: desc ^ (k == 1), nulls, by: By::Number }).collect();
+            let o = Query { order, limit: Some(crate::expr::Limit { count, offset, comma: false }), ..q.clone() };
+            let mut tally = super::Tally::default();
+            super::order_on(&db, &m, &schema, &o, false, super::ORDER_ADDED, true, &mut tally).unwrap();
+            assert_eq!(tally.variants.get("order-all-limit"), Some(&1), "{}", o.sql());
+        }
+    }
+
+    /// TLP of an aggregate query with neither one aggregate nor HAVING nor
+    /// an aggregate-free GROUP BY (`tlp-outer`): `SELECT c0, count(c1) ..
+    /// GROUP BY c0` partitioned in place, on `c1 > 2` in each part's WHERE,
+    /// splits the groups and counts each part's rows (the in-place identity
+    /// fails); partitioned on its result rows outside (`tlp_window`) it
+    /// holds, on the GROUP BY term (which SQLite pushes down into the
+    /// HAVING, then the WHERE) or on the count. So for two aggregates
+    /// without GROUP BY, which `tlp_core` sends there too.
+    #[test]
+    fn tlp_partitions_an_aggregate_query_outside() {
+        use crate::expr::{Agg, BinOp};
+        use crate::model::Value;
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE t0(c0, c1); INSERT INTO t0 VALUES (1, 1), (1, 5), (2, 3), (2, NULL), (3, 7), (NULL, 4);").unwrap();
+        let count = Expr::Agg(Agg::Count, Some(Box::new(Expr::col(0, 1))));
+        let q = Query { group: vec![Expr::col(0, 0)], ..Query::simple(0, false, Items::Exprs(vec![Expr::col(0, 0), count.clone()]), None) };
+        let sorted = |mut r: Vec<Vec<Cell>>| {
+            r.sort();
+            r
+        };
+        let all = sorted(super::run(&db, &q.sql()).unwrap());
+        let parts: Vec<String> = super::partitions("WHERE", "c1 > 2").iter().map(|p| q.sql().replace(" GROUP BY", &format!("{p} GROUP BY"))).collect();
+        assert!(parts[1].contains("FROM t0 AS a0 WHERE NOT (c1 > 2) GROUP BY"), "{}", parts[1]);
+        assert_ne!(sorted(super::concat(&db, &parts).unwrap()), all, "a WHERE partition splits the groups");
+        for (x, materialized) in [("r0", false), ("r0 >= 2", true), ("r0 = 1", false), ("r1 < 2", true), ("r1", false)] {
+            let base = format!("WITH tw(r0, r1) AS {}({}) ", if materialized { "MATERIALIZED " } else { "" }, q.sql());
+            let parts: Vec<String> = super::partitions("WHERE", x).iter().map(|p| format!("{base}SELECT * FROM tw{p}")).collect();
+            assert_eq!(sorted(super::concat(&db, &parts).unwrap()), all, "{x}");
+        }
+        let plan = super::run(&db, &format!("EXPLAIN QUERY PLAN WITH tw(r0, r1) AS ({}) SELECT * FROM tw WHERE r0 = 1", q.sql())).unwrap();
+        assert!(!format!("{plan:?}").contains("MATERIALIZE"), "pushed down, not materialized: {plan:?}");
+        let mut tally = super::Tally::default();
+        super::tlp_window(&db, &q, super::TLP_OUTER, &mut tally).unwrap();
+        assert_eq!((tally.comparisons, tally.variants.get("tlp-outer"), tally.variants.get("tlp-outer-union")), (2, Some(&1), Some(&1)));
+        // Two aggregates without GROUP BY, through `tlp_core`, with a WHERE
+        // clause kept inside.
+        let (_, schema) = one_table(2);
+        let max = Expr::Agg(Agg::Max, Some(Box::new(Expr::Cast(Box::new(Expr::col(0, 0)), crate::expr::CastType::Integer))));
+        let filter = Some(Expr::bin(BinOp::Gt, Expr::col(0, 1), Expr::Lit(Value::Int(2))));
+        let two = Query::simple(0, false, Items::Exprs(vec![count, max]), filter);
+        let mut tally = super::Tally::default();
+        super::tlp_core(&db, &schema, &two, &mut tally).unwrap();
+        assert_eq!((tally.inapplicable, tally.variants.get("tlp-outer"), tally.variants.get("tlp-outer-union")), (0, Some(&1), Some(&1)));
+    }
+
+    /// A LIKE or GLOB pattern with a non-ASCII prefix written `('p' ||
+    /// '')` (`patterns_computed`) is matched against every row in every
+    /// plan, so an over-length UTF-8 value (the known SQLite behaviour of
+    /// `invalid_text_pattern`) matches alike with the index and without,
+    /// where the literal pattern's LIKE optimization skips it; a pattern
+    /// whose prefix is ASCII is left as written.
+    #[test]
+    fn computed_patterns_match_over_length_utf8_in_every_plan() {
+        use crate::expr::{Agg, BinOp};
+        use crate::model::Value;
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE t0(c0); CREATE INDEX t0_i0 ON t0(c0); INSERT INTO t0 VALUES (x'fba9'), (x'c3a9'), ('é!'), ('x');").unwrap();
+        let glob = |p: &str, op| Query::simple(0, false, Items::Agg(Agg::Count, None), Some(Expr::bin(op, Expr::col(0, 0), Expr::Lit(Value::Text(p.into())))));
+        let q = glob("é*", BinOp::Glob);
+        let count = |sql: &str| super::run(&db, sql).unwrap();
+        assert_ne!(count(&q.sql()), count(&q.sql_not_indexed()), "the literal's range scan skips x'fba9'");
+        let c = super::patterns_computed(&q);
+        assert!(c.sql().contains("('é*' || '')"), "{}", c.sql());
+        assert_eq!(count(&c.sql()), vec![vec![Cell::Int(3)]]);
+        assert_eq!(count(&c.sql()), count(&c.sql_not_indexed()));
+        assert_eq!(count(&c.sql()), count(&q.sql_not_indexed()));
+        let like = super::patterns_computed(&glob("é%", BinOp::Like));
+        assert_eq!(count(&like.sql()), count(&like.sql_not_indexed()));
+        for (p, op) in [("x*é", BinOp::Glob), ("_é%", BinOp::Like), ("x%", BinOp::NotLike)] {
+            assert!(super::patterns_computed(&glob(p, op)) == glob(p, op), "{p}");
+        }
+    }
+
+    /// `setops-self`: a query's SELECT as both members of a compound gives
+    /// its rows twice (UNION ALL), as a set (UNION, INTERSECT) or none
+    /// (EXCEPT), whatever the query: grouped, DISTINCT, with a named
+    /// window, which each member then defines in a WINDOW clause of its
+    /// own (`Query::sql` writes one, at the end, where it names the last
+    /// member's: "no such window" for the first's).
+    #[test]
+    fn setops_compounds_a_query_with_itself() {
+        use crate::expr::{Agg, Named, ROWID};
+        let (_, schema) = one_table(2);
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE t0(c0, c1); INSERT INTO t0 VALUES (1, 'b'), (NULL, 'a'), (1, 'b'), (1.0, 'b'), (2, NULL);").unwrap();
+        let plain = Query::simple(0, false, Items::Exprs(vec![Expr::col(0, 0), Expr::col(0, 1)]), None);
+        let distinct = Query { distinct: true, ..plain.clone() };
+        let count = Expr::Agg(Agg::Count, None);
+        let grouped = Query { group: vec![Expr::col(0, 1)], ..Query::simple(0, false, Items::Exprs(vec![Expr::col(0, 1), count]), None) };
+        let w = Window {
+            func: WinFunc::Count,
+            arg: Some(Expr::col(0, 1)),
+            default: None,
+            filter: None,
+            partition: vec![Expr::col(0, 0)],
+            order: Vec::new(),
+            frame: None,
+            named: Named::Partition,
+        };
+        let window = Query::simple(0, false, Items::Exprs(vec![Expr::col(0, 0), Expr::Window(Box::new(w))]), None);
+        assert!(window.sql().contains(" WINDOW "), "{}", window.sql());
+        let compound = Query { compound: vec![(SetOp::UnionAll, window.clone())], ..window.clone() };
+        assert!(super::run(&db, &compound.sql()).unwrap_err().contains("no such window"), "{}", compound.sql());
+        let mut seen = std::collections::BTreeSet::new();
+        for q in [plain, distinct, grouped, window] {
+            // Every operator, by the draw of a query of another text.
+            for k in 0..12 {
+                let q = Query { filter: (k > 0).then(|| Expr::bin(crate::expr::BinOp::Ne, Expr::col(0, ROWID), Expr::Lit(crate::model::Value::Int(-k)))), ..q.clone() };
+                let mut tally = super::Tally::default();
+                super::setops_self(&db, &schema, &q, &mut tally).unwrap();
+                let own = tally.variants.contains_key("setops-self-own");
+                assert_eq!(tally.comparisons + tally.thinned, 1, "{}", q.sql());
+                if tally.thinned == 0 {
+                    seen.insert((super::fnv(&q.sql()) % 4, own));
+                }
+            }
+        }
+        assert_eq!(seen.iter().map(|s| s.0).collect::<std::collections::BTreeSet<_>>().len(), 4, "every operator");
+        assert!(seen.iter().any(|s| s.1) && seen.iter().any(|s| !s.1), "against the query's rows and against themselves");
+        // Rows of a compound with itself as each operator may and may not
+        // give them.
+        let (one, real, a) = (Cell::Int(1), Cell::Real(1f64.to_bits()), Cell::Text(b"a".to_vec()));
+        let mut t = super::Tally::default();
+        let mut check = |op, r: &[&Cell]| super::self_compound_rows(&mut t, op, "", &r.iter().map(|&c| vec![c.clone()]).collect()).is_ok();
+        assert!(check(SetOp::UnionAll, &[&one, &real, &a, &a]), "1 and 1.0 alike");
+        assert!(!check(SetOp::UnionAll, &[&one, &a, &a]));
+        assert!(check(SetOp::Union, &[&one, &a, &Cell::Blob(b"a".to_vec())]), "text and blob apart");
+        assert!(!check(SetOp::Intersect, &[&one, &real]));
+        assert!(check(SetOp::Except, &[]) && !check(SetOp::Except, &[&one]));
+    }
+
+    /// `window-wrap` reads each SELECT of a query in a CTE with `count(*)`
+    /// windows over its rows, a compound's members one by one: the
+    /// compound in a CTE gives its columns its first member's affinity,
+    /// which converts the second's integer 0 under a REAL column to 0.0.
+    /// The counts are the variant's rows' and those of each partition,
+    /// whose values SQLite tells apart as a set does (1 and 1.0 alike,
+    /// the text 'a' and the blob x'61' apart, NULLs alike).
+    #[test]
+    fn window_wrap_counts_each_select_s_rows() {
+        let (m, schema) = one_table(2);
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE t0(c0 REAL, c1); INSERT INTO t0 VALUES (1, 'a'), (1.5, x'61'), (NULL, 'a'), (NULL, 1), (2, 1.0);").unwrap();
+        let plain = Query::simple(0, false, Items::Exprs(vec![Expr::col(0, 1), Expr::col(0, 0)]), None);
+        let zero = Query::simple(0, false, Items::Exprs(vec![Expr::col(0, 1), Expr::Lit(crate::model::Value::Int(0))]), None);
+        let compound = Query { compound: vec![(SetOp::UnionAll, zero.clone())], ..plain.clone() };
+        let whole = super::run(&db, &format!("WITH tw(r0, r1) AS ({}) SELECT r1 FROM tw WHERE typeof(r1) = 'real' AND r1 = 0", compound.sql())).unwrap();
+        assert_eq!(whole.len(), 5, "the second member's 0 read as 0.0 through the compound: {whole:?}");
+        for (q, cores) in [(plain, 1), (zero, 1), (compound, 2)] {
+            let mut tally = super::Tally::default();
+            super::window_wrap(&db, &m, &schema, &q, &mut tally).unwrap();
+            let checked = if tally.thinned == 1 { 0 } else { cores };
+            assert_eq!(*tally.variants.get("window-count").unwrap_or(&0), checked, "{}", q.sql());
+            let mut tally = super::Tally::default();
+            for c in q.cores() {
+                super::window_wrap_core(&db, &m, &schema, &c, &mut tally).unwrap();
+            }
+            assert_eq!(tally.variants.get("window-count"), Some(&cores), "{}", q.sql());
+            assert!(tally.variants.get("window-wrap").unwrap_or(&0) <= &cores, "{}", q.sql());
+        }
+        // The partitions on `c1` as the oracle counts them.
+        let rows = super::run(&db, "SELECT c1, count(*) OVER (PARTITION BY c1) FROM t0").unwrap();
+        for row in &rows {
+            let same = rows.iter().filter(|r| r[0].distinct_key() == row[0].distinct_key()).count() as i64;
+            assert_eq!(row[1], Cell::Int(same), "{rows:?}");
+        }
+        assert_eq!(rows.iter().filter(|r| r[1] == Cell::Int(2)).count(), 4, "'a' twice, 1 and 1.0: {rows:?}");
     }
 
     /// The optimizations' mask in force on `db` (`SQLITE_TESTCTRL_GETOPT`).

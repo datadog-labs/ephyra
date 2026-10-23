@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9852 (https://github.com/tursodatabase/turso/issues/9852) (line 1 corrected 2026-10-21).
 
 # Panic "a WITHOUT ROWID table has no secondary index to drive its loop" in a RIGHT/FULL JOIN on a SQLite-created file
 

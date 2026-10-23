@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9967 (https://github.com/tursodatabase/turso/issues/9967) (line 1 corrected 2026-10-21).
 Title: JSON functions return the integer for a whole-number REAL when the same integer was seen just before (JSON cache key compares 1 and 1.0 as equal)
 
 When a JSON function gets the REAL `1.0` right after it got the INTEGER `1` (for example on consecutive rows), Turso treats `1.0` as the integer `1`. Alone, `1.0` works.

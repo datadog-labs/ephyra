@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9849 (https://github.com/tursodatabase/turso/issues/9849) (line 1 corrected 2026-10-21).
 
 # Text-to-REAL conversion through column affinity and sum()/total()/avg() gives a different double than CAST or a literal
 

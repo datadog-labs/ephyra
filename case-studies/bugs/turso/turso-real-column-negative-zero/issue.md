@@ -1,4 +1,4 @@
-DRAFT, not filed (low priority)
+Filed as #9889 (https://github.com/tursodatabase/turso/issues/9889) (line 1 corrected 2026-10-21).
 
 # -0.0 stored in a REAL column keeps its sign; SQLite reads it back as +0.0
 

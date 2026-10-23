@@ -1,0 +1,84 @@
+diff --git a/src/uu/split/src/filenames.rs b/src/uu/split/src/filenames.rs
+index 21e0e7159..598c0b74b 100644
+--- a/src/uu/split/src/filenames.rs
++++ b/src/uu/split/src/filenames.rs
+@@ -129,9 +129,7 @@ impl Suffix {
+     ///
+     /// Edge case:
+     /// - If suffix length is specified as 0 in a command line,
+-    ///   first apply auto-width calculations and if still 0
+-    ///   set it to default value.
+-    ///   Do NOT change auto-widening value
++    ///   this is the same as if `-a` was not specified
+     ///
+     pub fn from(matches: &ArgMatches, strategy: &Strategy) -> Result<Self, SuffixError> {
+         let stype: SuffixType;
+@@ -185,15 +183,20 @@ impl Suffix {
+                 if parsed_length > MAX_SUFFIX_LENGTH {
+                     return Err(SuffixError::NotParsable(v.to_owned()));
+                 }
+-                (parsed_length, true)
++                if parsed_length == 0 {
++                    // a length of 0 is the same as if `-a` was not specified
++                    (default_length, false)
++                } else {
++                    (parsed_length, true)
++                }
+             } else {
+                 // no suffix length option was specified in command line
+                 // set to default value
+                 (default_length, false)
+             };
+ 
+-        // Disable dynamic auto-widening if suffix length was specified in command line with value > 0
+-        if is_length_cmd_opt && length > 0 {
++        // Disable dynamic auto-widening if suffix length was specified in command line
++        if is_length_cmd_opt {
+             auto_widening = false;
+         }
+ 
+@@ -204,7 +207,7 @@ impl Suffix {
+                 .log(stype.radix() as f64)
+                 .ceil() as usize;
+ 
+-            if (start as u64) < chunks && !(is_length_cmd_opt && length > 0) {
++            if (start as u64) < chunks && !is_length_cmd_opt {
+                 // with auto-width ON the auto-widening is OFF
+                 auto_widening = false;
+ 
+@@ -219,12 +222,6 @@ impl Suffix {
+             }
+         }
+ 
+-        // Check edge case when suffix length == 0 was specified in command line
+-        // Set it to default value
+-        if is_length_cmd_opt && length == 0 {
+-            length = default_length;
+-        }
+-
+         let additional = matches
+             .get_one::<OsString>(options::ADDITIONAL_SUFFIX)
+             .unwrap()
+diff --git a/tests/by-util/test_split.rs b/tests/by-util/test_split.rs
+index 29a6a7dad..d78cbfbcc 100644
+--- a/tests/by-util/test_split.rs
++++ b/tests/by-util/test_split.rs
+@@ -918,6 +918,18 @@ fn test_suffix_length_zero() {
+         .stderr_only("split: output file suffixes exhausted\n");
+ }
+ 
++/// `-a 0` is the same as if `-a` was not specified, also with `-n`
++#[test]
++fn test_suffix_length_zero_with_number() {
++    let (at, mut ucmd) = at_and_ucmd!();
++    ucmd.args(&["-n", "2", "-a", "0", "fivelines.txt"])
++        .succeeds()
++        .no_output();
++    assert!(at.file_exists("xaa"));
++    assert!(at.file_exists("xab"));
++    assert!(!at.file_exists("xa"));
++}
++
+ #[test]
+ fn test_suffixes_exhausted() {
+     new_ucmd!()

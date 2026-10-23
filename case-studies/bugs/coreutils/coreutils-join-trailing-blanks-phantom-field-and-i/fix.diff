@@ -1,0 +1,92 @@
+diff --git a/src/uu/join/src/join.rs b/src/uu/join/src/join.rs
+index 41d0de8a1..38133d9a4 100644
+--- a/src/uu/join/src/join.rs
++++ b/src/uu/join/src/join.rs
+@@ -145,7 +145,11 @@ impl Separator for WhitespaceSep {
+             }
+             last_end = i + 1;
+         }
+-        field_ranges.push((last_end, haystack.len()));
++        // Trailing blanks end the last field; they do not start an empty one,
++        // so a line holding only blanks has no fields at all.
++        if last_end < haystack.len() {
++            field_ranges.push((last_end, haystack.len()));
++        }
+         field_ranges
+     }
+ 
+@@ -511,9 +515,10 @@ impl<'a> State<'a> {
+         other: &State,
+         repr: &Repr<'a, Sep>,
+     ) -> io::Result<()> {
+-        let key = self.get_current_key();
+-
+         for line1 in &self.seq {
++            // With --ignore-case the keys in a group may differ in case;
++            // each output line uses the join field of its own file1 line.
++            let key = line1.get_field(self.key);
+             for line2 in &other.seq {
+                 if repr.uses_format() {
+                     repr.write_format(writer, |spec| match *spec {
+diff --git a/tests/by-util/test_join.rs b/tests/by-util/test_join.rs
+index c02970311..b2ab4fa92 100644
+--- a/tests/by-util/test_join.rs
++++ b/tests/by-util/test_join.rs
+@@ -68,7 +68,8 @@ fn only_whitespace_separators_merge() {
+         .arg("-")
+         .pipe_in(" a  ,c ")
+         .succeeds()
+-        .stdout_only("a ,,,b ,c \n");
++        // The trailing blank of " a  ,c " ends ",c"; it is not an empty field.
++        .stdout_only("a ,,,b ,c\n");
+ 
+     new_ucmd!()
+         .arg("contiguous_separators.txt")
+@@ -891,3 +892,47 @@ fn test_operand_count() {
+         .stderr_contains("join: extra operand 'fields_3.txt'\n")
+         .stderr_contains("--help");
+ }
++
++#[test]
++fn test_trailing_blanks_add_no_field() {
++    let scene = TestScenario::new(util_name!());
++    let at = &scene.fixtures;
++    at.write("a", "1 2 \t\n");
++    at.write("b", "1\n");
++    scene
++        .ucmd()
++        .args(&["a", "b"])
++        .succeeds()
++        .stdout_only("1 2\n");
++    scene
++        .ucmd()
++        .args(&["-o", "auto", "-e", "X", "a", "b"])
++        .succeeds()
++        .stdout_only("1 2\n");
++    // With -z, a newline is a blank too.
++    at.write("az", "1\n");
++    at.write("bz", "1");
++    scene
++        .ucmd()
++        .args(&["-z", "az", "bz"])
++        .succeeds()
++        .stdout_only("1\0");
++}
++
++#[test]
++fn test_ignore_case_uses_each_lines_own_key() {
++    let scene = TestScenario::new(util_name!());
++    let at = &scene.fixtures;
++    at.write("a", "B x\nb y\n");
++    at.write("b", "b z\n");
++    scene
++        .ucmd()
++        .args(&["-i", "a", "b"])
++        .succeeds()
++        .stdout_only("B x z\nb y z\n");
++    scene
++        .ucmd()
++        .args(&["-i", "-o", "0", "a", "b"])
++        .succeeds()
++        .stdout_only("B\nb\n");
++}

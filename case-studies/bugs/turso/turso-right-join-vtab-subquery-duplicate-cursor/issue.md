@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9847 (https://github.com/tursodatabase/turso/issues/9847) (line 1 corrected 2026-10-21).
 
 # Panic "duplicate cursor key" when a RIGHT/FULL JOIN query has a WHERE subquery over a table-valued function
 

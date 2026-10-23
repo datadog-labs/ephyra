@@ -1,0 +1,50 @@
+diff --git a/datafusion/physical-plan/src/windows/window_agg_exec.rs b/datafusion/physical-plan/src/windows/window_agg_exec.rs
+index 425af3a3c..192b40c85 100644
+--- a/datafusion/physical-plan/src/windows/window_agg_exec.rs
++++ b/datafusion/physical-plan/src/windows/window_agg_exec.rs
+@@ -277,7 +277,7 @@ impl ExecutionPlan for WindowAggExec {
+             ChildrenPropertiesMode::Recompute => Ok(Arc::new(WindowAggExec::try_new(
+                 self.window_expr.clone(),
+                 children.swap_remove(0),
+-                true,
++                self.can_repartition,
+             )?)),
+         }
+     }
+@@ -679,4 +679,36 @@ mod tests {
+         ));
+         Ok(())
+     }
++
++    #[test]
++    fn test_with_new_children_keeps_can_repartition() -> Result<()> {
++        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
++        let input: Arc<dyn ExecutionPlan> =
++            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
++        let args = vec![crate::expressions::col("a", &schema)?];
++        let window_expr = create_window_expr(
++            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
++            "count(a)".to_string(),
++            &args,
++            &[crate::expressions::col("a", &schema)?],
++            &[],
++            Arc::new(WindowFrame::new(None)),
++            Arc::clone(&schema),
++            false,
++            false,
++            None,
++        )?;
++
++        let window: Arc<dyn ExecutionPlan> = Arc::new(WindowAggExec::try_new(
++            vec![window_expr],
++            Arc::clone(&input),
++            false,
++        )?);
++        let window = window.with_new_children(vec![input])?;
++        assert!(matches!(
++            window.required_input_distribution()[0],
++            Distribution::SinglePartition
++        ));
++        Ok(())
++    }
+ }

@@ -103,4 +103,4 @@ The patch below makes the DROP NOT NULL search accept a NOT only when NULL follo
 
 **Versions:** in 3.53.2, 3.53.4, 3.54.0 and trunk. 3.50.4 and 3.51.0 have no ALTER COLUMN DROP NOT NULL.
 
-We found it while working on the separately posted report on dropping a foreign key with SET DEFAULT, NOT DEFERRABLE or MATCH, which came from extending a property-based test generator for SQLite databases and queries to ALTER TABLE ... DROP CONSTRAINT: we read the DROP NOT NULL path of `dropConstraintFunc()` and the stop tokens of `getConstraint()`. This patch and the one in that post change different lines of src/alter.c, and each applies with or without the other.
+We found it while working on the report on dropping a foreign key with SET DEFAULT, NOT DEFERRABLE or MATCH (https://sqlite.org/bugs/forumpost/5e80e94512), which came from extending a property-based test generator for SQLite databases and queries to ALTER TABLE ... DROP CONSTRAINT: we read the DROP NOT NULL path of `dropConstraintFunc()` and the stop tokens of `getConstraint()`. This patch and the one in that post change different lines of src/alter.c, and each applies with or without the other.

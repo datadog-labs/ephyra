@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9935 (https://github.com/tursodatabase/turso/issues/9935) (line 1 corrected 2026-10-21).
 Title: Date/time functions don't stop at an embedded NUL in their text arguments; SQLite reads up to the NUL
 
 SQLite's date and time functions read their arguments as C strings, so text (or a BLOB read as text) is cut at the first NUL. Turso parses the whole value, so a time value, a modifier or a format followed by a NUL and more bytes gives NULL (or keeps the bytes after the NUL). LIKE, GLOB, substr() and length() already stop at the NUL in Turso (#6305).

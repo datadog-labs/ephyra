@@ -1,0 +1,72 @@
+diff --git a/datafusion/optimizer/src/push_down_filter.rs b/datafusion/optimizer/src/push_down_filter.rs
+index 54f220a1f..84881056e 100644
+--- a/datafusion/optimizer/src/push_down_filter.rs
++++ b/datafusion/optimizer/src/push_down_filter.rs
+@@ -1129,9 +1129,17 @@ impl OptimizerRule for PushDownFilter {
+                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
+                 // After push, we need to replace `a+b` with Column(a)+Column(b)
+                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
++                //
++                // Names can be ambiguous: `CAST(t.a AS ...)` is named `t.a`, like
++                // the column `t.a`. The map can hold only one of them, so
++                // predicates that use such a name stay above the aggregate.
+                 let mut replace_map = HashMap::with_capacity(agg.group_expr.len());
++                let mut ambiguous = HashSet::new();
+                 for expr in &agg.group_expr {
+-                    replace_map.insert(expr.schema_name().to_string(), unalias(expr));
++                    let name = expr.schema_name().to_string();
++                    if replace_map.insert(name.clone(), unalias(expr)).is_some() {
++                        ambiguous.insert(name);
++                    }
+                 }
+ 
+                 let predicates = split_conjunction_owned(filter.predicate);
+@@ -1139,7 +1147,10 @@ impl OptimizerRule for PushDownFilter {
+                 let mut push_predicates = vec![];
+                 for expr in predicates {
+                     let cols = expr.column_refs();
+-                    if cols.iter().all(|c| group_expr_columns.contains(c)) {
++                    if cols.iter().all(|c| {
++                        group_expr_columns.contains(c)
++                            && !ambiguous.contains(&c.flat_name())
++                    }) {
+                         push_predicates.push(replace_cols_by_name(expr, &replace_map)?);
+                     } else {
+                         keep_predicates.push(expr);
+@@ -1742,7 +1753,8 @@ mod tests {
+         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
+         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Subquery, TableScan,
+         TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
+-        WindowFunctionDefinition, col, exists, in_list, in_subquery, lit, out_ref_col,
++        WindowFunctionDefinition, cast, col, exists, in_list, in_subquery, lit,
++        out_ref_col,
+     };
+ 
+     use crate::OptimizerContext;
+@@ -1941,6 +1953,26 @@ mod tests {
+         )
+     }
+ 
++    #[test]
++    fn filter_not_pushed_through_ambiguous_agg_group_name() -> Result<()> {
++        // `CAST(test.a AS Utf8)` is named `test.a`, like the column `test.a`
++        let plan = LogicalPlanBuilder::from(test_table_scan()?)
++            .aggregate(
++                vec![col("a"), cast(col("a"), DataType::Utf8)],
++                vec![sum(col("b"))],
++            )?
++            .filter(col("test.a").gt(lit(10u32)))?
++            .build()?;
++        assert_optimized_plan_equal!(
++            plan,
++            @r"
++        Filter: test.a > UInt32(10)
++          Aggregate: groupBy=[[test.a, CAST(test.a AS Utf8)]], aggr=[[sum(test.b)]]
++            TableScan: test
++        "
++        )
++    }
++
+     #[test]
+     fn filter_keep_agg() -> Result<()> {
+         let table_scan = test_table_scan()?;

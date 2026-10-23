@@ -1,0 +1,27 @@
+# name: test/sql/subquery/scalar/test_nlj_projection_map_left_join_in_subquery.test
+# group: [scalar]
+
+statement ok
+CREATE TABLE t0(c0 INTEGER);
+
+statement ok
+INSERT INTO t0 VALUES (1), (2);
+
+query II
+SELECT t0.c0, t2.c0 FROM t0 LEFT JOIN t0 t1 ON (1 IN (SELECT 1)) JOIN t0 t2 ON (t0.c0 <> t2.c0) ORDER BY ALL;
+----
+1	2
+1	2
+2	1
+2	1
+
+statement ok
+PRAGMA disable_optimizer;
+
+query I
+SELECT 1 FROM t0 LEFT JOIN t0 t1 ON (1 IN (SELECT 1)) JOIN t0 t2 ON (t0.c0 <> t2.c0);
+----
+1
+1
+1
+1

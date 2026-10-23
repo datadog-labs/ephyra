@@ -1,0 +1,20 @@
+--- a/ext/fts5/fts5_expr.c
++++ b/ext/fts5/fts5_expr.c
+@@ -929,7 +929,16 @@
+       ){
+         int bMatch = 0;
+         rc = fts5ExprPhraseIsMatch(pNode, pPhrase, &bMatch);
+-        if( bMatch==0 ) break;
++        if( bMatch==0 ){
++          /* The current row is not a match. Clear the position lists of
++          ** all phrases in the nearset, so that none of them report
++          ** entries for this row or retain entries from a previous row.  */
++          int j;
++          for(j=0; j<pNear->nPhrase; j++){
++            pNear->apPhrase[j]->poslist.n = 0;
++          }
++          break;
++        }
+       }else{
+         Fts5IndexIter *pIter = pPhrase->aTerm[0].pIter;
+         fts5BufferSet(&rc, &pPhrase->poslist, pIter->nData, pIter->pData);

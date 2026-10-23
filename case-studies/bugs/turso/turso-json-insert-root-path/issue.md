@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9924 (https://github.com/tursodatabase/turso/issues/9924) (line 1 corrected 2026-10-21).
 
 Title: json_insert / jsonb_insert with path '$' replace the whole document; SQLite leaves it unchanged
 

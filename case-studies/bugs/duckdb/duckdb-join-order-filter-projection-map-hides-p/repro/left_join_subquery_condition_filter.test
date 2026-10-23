@@ -1,0 +1,19 @@
+# name: test/optimizer/joins/left_join_subquery_condition_filter.test
+# group: [joins]
+
+statement ok
+CREATE TABLE t(a INT);
+
+statement ok
+INSERT INTO t VALUES (1), (2);
+
+statement ok
+CREATE TABLE e(a INT);
+
+query I
+SELECT (SELECT 1) FROM e CROSS JOIN t LEFT JOIN e x ON (SELECT true) WHERE x.a = t.a;
+----
+
+query I
+SELECT (SELECT 1) FROM e CROSS JOIN t LEFT JOIN t x ON (SELECT true) WHERE x.a = t.a;
+----

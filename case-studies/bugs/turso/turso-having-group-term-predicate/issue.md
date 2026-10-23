@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9887 (https://github.com/tursodatabase/turso/issues/9887) (line 1 corrected 2026-10-21).
 
 # HAVING with a predicate that is itself a GROUP BY term (`GROUP BY c, a IS NULL HAVING a IS NULL`) filters on the wrong value
 

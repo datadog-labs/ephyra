@@ -1,0 +1,7 @@
+--- expected (GNU coreutils 9.12)
+0000000  \n                               x  \n
+0000012
+--- actual
+0000000  \n                       1  \t   x  \n
+0000012
+BUG: nl restarted the body section at the second file

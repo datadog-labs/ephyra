@@ -1,0 +1,19 @@
+--- a/src/wherecode.c
++++ b/src/wherecode.c
+@@ -2146,9 +2146,14 @@
+       SWAP(u8, nBtm, nTop);
+     }
+ 
+-    if( iLevel>0 && (pLoop->wsFlags & WHERE_IN_SEEKSCAN)!=0 ){
++    if( (iLevel>0 || (pWInfo->wctrlFlags & WHERE_OR_SUBCLAUSE)!=0)
++     && (pLoop->wsFlags & WHERE_IN_SEEKSCAN)!=0
++    ){
+       /* In case OP_SeekScan is used, ensure that the index cursor does not
+-      ** point to a valid row for the first iteration of this loop. */
++      ** point to a valid row for the first iteration of this loop. This
++      ** is also required for the sub-loops of a multi-index OR, as the
++      ** index cursor may have been left pointing to a row by an earlier
++      ** OR-term or by an earlier iteration of an outer loop. */
+       sqlite3VdbeAddOp1(v, OP_NullRow, iIdxCur);
+     }
+ 

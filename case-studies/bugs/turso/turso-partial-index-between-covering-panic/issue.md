@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9926 (https://github.com/tursodatabase/turso/issues/9926) (line 1 corrected 2026-10-21).
 
 Title: Panic "column N of table tN is not stored in the index and the table cursor is not open" with a partial index and a BETWEEN that implies its WHERE
 

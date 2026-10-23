@@ -1,4 +1,4 @@
-DRAFT, not filed
+Filed as #9884 (https://github.com/tursodatabase/turso/issues/9884) (line 1 corrected 2026-10-21).
 
 # strftime() returns a value when the modifiers move the date out of range; date() and SQLite return NULL
 

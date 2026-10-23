@@ -138,7 +138,7 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
         "scores": {
           "tarantula": 1.0,
           "ochiai": 1.0,
-          "dstar": 1.7976931348623157e308,
+          "dstar": 1.7976931348623157e+308,
           "jaccard": 1.0,
           "op2": 36.0,
           "delta": 1.0
