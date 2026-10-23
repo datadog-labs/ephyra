@@ -24,7 +24,7 @@ use super::{
 
 /// What happened to one coverage target over the run.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
+#[derive(serde::Serialize)]
 pub struct TargetOutcome {
     /// The target as configured.
     pub target: CoverageTarget,

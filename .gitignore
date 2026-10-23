@@ -26,7 +26,7 @@ work/
 # Case studies: checkouts they build against, and what their runs write
 /turso/
 /cedar/
-/case-studies/vendor/*
-!/case-studies/vendor/fetch.sh
+/case-studies/sqlite/vendor/*
+!/case-studies/sqlite/vendor/fetch.sh
 .pg/
 runs/

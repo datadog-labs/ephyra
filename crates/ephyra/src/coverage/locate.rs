@@ -15,6 +15,7 @@ use std::{
         BTreeSet,
         HashMap,
     },
+    fmt,
     ops::Range,
 };
 
@@ -32,7 +33,7 @@ use super::{
 
 /// SBFL scores of one region or function.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
+#[derive(serde::Serialize)]
 pub struct Scores {
     /// Tarantula: share of failing runs among all runs that hit the region.
     pub tarantula: f64,
@@ -51,7 +52,7 @@ pub struct Scores {
 impl Scores {
     /// From the spectrum counts: `ef`/`ep` failing/passing runs that hit
     /// the region, `nf`/`np` those that did not.
-    pub fn compute(ef: u64, ep: u64, nf: u64, np: u64, delta: f64) -> Scores {
+    pub(crate) fn compute(ef: u64, ep: u64, nf: u64, np: u64, delta: f64) -> Scores {
         let (ef, ep, nf, np) = (ef as f64, ep as f64, nf as f64, np as f64);
         let f = ef + nf;
         let p = ep + np;
@@ -86,7 +87,7 @@ impl Scores {
 
 /// How much to trust a suspect's rank.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
+#[derive(serde::Serialize)]
 pub enum Confidence {
     /// The only function containing the panic site, or both Ochiai and the
     /// count difference rank it first.
@@ -116,7 +117,7 @@ impl std::fmt::Display for Confidence {
 /// One ranked function: the regions of a function merged, with the widest
 /// line range and the strongest scores among them.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
+#[derive(serde::Serialize)]
 pub struct Suspect {
     /// 1-based rank.
     pub rank: usize,
@@ -148,7 +149,7 @@ pub struct Suspect {
 
 /// The localization result attached to a failing report.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
+#[derive(serde::Serialize)]
 pub struct Locate {
     /// Passing runs in the spectrum.
     pub passing: u64,
@@ -158,6 +159,34 @@ pub struct Locate {
     pub regions: usize,
     /// The top suspects, most suspicious first.
     pub suspects: Vec<Suspect>,
+}
+
+impl Locate {
+    /// The suspects lines of the text report.
+    pub(crate) fn write_report(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "  suspects ({} passing and {} failing runs over {} regions):",
+            self.passing, self.failing, self.regions
+        )?;
+        for s in &self.suspects {
+            writeln!(
+                f,
+                "    {}. {}:{}-{} in `{}`  ochiai={:.2} delta={:.2}  {}{} ({})",
+                s.rank,
+                display_path(&s.file),
+                s.start_line,
+                s.end_line,
+                s.function,
+                s.scores.ochiai,
+                s.scores.delta,
+                s.confidence,
+                if s.panic_overlap { " panic-site" } else { "" },
+                s.rule
+            )?;
+        }
+        Ok(())
+    }
 }
 
 struct Entry {

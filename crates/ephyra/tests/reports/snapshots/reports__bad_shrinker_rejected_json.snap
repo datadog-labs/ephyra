@@ -41,7 +41,7 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
   "samples": [],
   "failure": {
     "kind": "Error",
-    "message": "shrink candidate not smaller: size 10 >= 9: 10",
+    "message": "shrink candidate 10: not smaller (size 10 >= 9)",
     "location": null,
     "original": {
       "debug": "10",

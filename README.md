@@ -22,25 +22,28 @@ library's own README and the [changelog](crates/ephyra/CHANGELOG.md).
 ## Case studies
 
 [`case-studies/`](case-studies) holds projects that test real systems with
-ephyra. They are not workspace members: each one builds on its own, against
-the library here through `path = "../../crates/ephyra"`, and has a README
-with what it tests, how to run it and what it found.
+ephyra, one directory per target system: a crate per component, and `bugs/`
+with what they found (the reports as filed upstream, repros and fixes, and a
+`README.md` index with each bug's status). The crates are not workspace
+members: each one builds on its own, against the library here through
+`path = "../../../crates/ephyra"`, and has a README with what it tests, how to
+run it and what it found.
 
-| Directory | What it tests |
-|---|---|
-| [`ephyra-sqlite`](case-studies/ephyra-sqlite), [`sqlite-coverage`](case-studies/sqlite-coverage), [`diversity-probe`](case-studies/diversity-probe) | SQLite: a typed SQL generator, a model and metamorphic oracles (TLP, NoREC, ...), and a coverage-guided runner over SQLite's C source |
-| [`ephyra-sql`](case-studies/ephyra-sql), [`turso-diff`](case-studies/turso-diff), [`ephyra-sqlite-pinned`](case-studies/ephyra-sqlite-pinned) | Turso against SQLite (differential); `-pinned` is the SQLite generator as `turso-diff` uses it |
-| [`ephyra-postgresql`](case-studies/ephyra-postgresql), [`postgresql-coverage`](case-studies/postgresql-coverage) | PostgreSQL: a generator, a model and oracles, and a coverage-guided runner |
-| [`ephyra-sqleq`](case-studies/ephyra-sqleq) | [sqleq](https://github.com/datadog-labs/sqleq), on equivalent PostgreSQL queries from an e-graph over `ephyra-postgresql`'s seeds |
-| [`ephyra-ada`](case-studies/ephyra-ada), [`ada-coverage`](case-studies/ada-coverage), [`ada-asan`](case-studies/ada-asan) | [ada](https://github.com/ada-url/ada), the WHATWG URL parser |
-| [`ephyra-cedar`](case-studies/ephyra-cedar) | [Cedar](https://github.com/cedar-policy/cedar) policies and entities |
-| [`egg-demo`](case-studies/egg-demo) | equivalent SQL queries sampled from an e-graph, checked on SQLite |
-| [`bugs`](case-studies/bugs) | the bugs these found, by project, with the reports as filed, repros and fixes |
+| Target | Components | What they test |
+|---|---|---|
+| [`sqlite`](case-studies/sqlite) | [`generator`](case-studies/sqlite/generator), [`coverage`](case-studies/sqlite/coverage), [`diversity`](case-studies/sqlite/diversity) | SQLite: a typed SQL generator, a model and metamorphic oracles (TLP, NoREC, ...), and a coverage-guided runner over SQLite's C source |
+| [`turso`](case-studies/turso) | [`explore`](case-studies/turso/explore), [`differential`](case-studies/turso/differential) | Turso against SQLite (differential), on the SQLite generator's inputs |
+| [`postgresql`](case-studies/postgresql) | [`generator`](case-studies/postgresql/generator), [`coverage`](case-studies/postgresql/coverage) | PostgreSQL: a generator, a model and oracles, and a coverage-guided runner |
+| [`sqleq`](case-studies/sqleq) | [`checker`](case-studies/sqleq/checker) | [sqleq](https://github.com/datadog-labs/sqleq), on equivalent PostgreSQL queries from an e-graph over `postgresql/generator`'s seeds |
+| [`ada`](case-studies/ada) | [`generator`](case-studies/ada/generator), [`coverage`](case-studies/ada/coverage), [`asan`](case-studies/ada/asan) | [ada](https://github.com/ada-url/ada), the WHATWG URL parser |
+| [`cedar`](case-studies/cedar) | [`generator`](case-studies/cedar/generator) | [Cedar](https://github.com/cedar-policy/cedar) policies and entities |
+| [`egg`](case-studies/egg) | [`demo`](case-studies/egg/demo) | equivalent SQL queries sampled from an e-graph, checked on SQLite |
+| [`coreutils`](case-studies/coreutils/bugs), [`duckdb`](case-studies/duckdb/bugs), [`datafusion`](case-studies/datafusion/bugs) | | bugs found in uutils coreutils, DuckDB and DataFusion |
 
 Some case studies build against code that is not in this repository:
-`case-studies/vendor/fetch.sh` creates the `libsqlite3-sys` crates with
-SQLite trunk that the SQLite ones patch in, and `turso-diff` and
-`ephyra-cedar` need a checkout of Turso or Cedar at the repository root
+`case-studies/sqlite/vendor/fetch.sh` creates the `libsqlite3-sys` crates with
+SQLite trunk that the SQLite and Turso ones patch in, and `turso/differential`
+and `cedar/generator` need a checkout of Turso or Cedar at the repository root
 (their READMEs give the revision).
 
 ## Developing

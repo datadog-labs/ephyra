@@ -1,0 +1,17 @@
+[package]
+name = "postgresql-coverage"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "PostgreSQL code coverage of ephyra-postgresql's inputs, read from an instrumented server's raw profiles"
+
+[dependencies]
+ephyra = { path = "../../../crates/ephyra" }
+ephyra-postgresql = { path = "../generator" }
+libc = "0.2"
+md5 = "0.7"
+
+[workspace]
+
+[profile.dev]
+opt-level = 2

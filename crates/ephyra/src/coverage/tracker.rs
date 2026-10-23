@@ -6,11 +6,15 @@
 
 use std::{
     collections::BTreeSet,
+    fmt,
     ops::Range,
     path::Path,
 };
 
-use crate::report::Series;
+use crate::report::{
+    Series,
+    joined,
+};
 
 use super::counters::{
     Delta,
@@ -213,7 +217,7 @@ impl Tracker {
 
 /// Coverage of one run, as reported.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
+#[derive(serde::Serialize)]
 pub struct Summary {
     /// The function-name prefix that was tracked (empty: everything but ephyra).
     pub filter: String,
@@ -242,6 +246,48 @@ pub struct Summary {
     pub growth: Series,
     /// The coverage targets and what happened to them.
     pub targets: Vec<super::targets::TargetOutcome>,
+}
+
+impl Summary {
+    /// The coverage lines of the text report.
+    pub(crate) fn write_report(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "  coverage: {} of {} functions{} reached, {} of {} counters",
+            self.functions_reached,
+            self.functions_total,
+            if self.filter.is_empty() { String::new() } else { format!(" in `{}`", self.filter) },
+            self.counters_hit,
+            self.counters_total
+        )?;
+        if !self.unreached.is_empty() {
+            writeln!(f, "  never reached: {}", joined(self.unreached.iter().cloned(), 5))?;
+        }
+        for outcome in &self.targets {
+            let what = if outcome.functions.is_empty() {
+                "matches no instrumented code".to_string()
+            } else if outcome.hits == 0 {
+                format!(
+                    "never reached; `{}` entered by {} inputs",
+                    outcome.functions.join(", "),
+                    outcome.function_inputs
+                )
+            } else {
+                format!(
+                    "hit by {} inputs (first at input {})",
+                    outcome.hits,
+                    outcome.first_hit_at.unwrap_or(0)
+                )
+            };
+            writeln!(f, "  target {}: {what}", outcome.target)?;
+        }
+        if !self.partial.is_empty() {
+            let partial =
+                self.partial.iter().map(|(name, hit, total)| format!("{name} {hit}/{total}"));
+            writeln!(f, "  partly covered: {}", joined(partial, 5))?;
+        }
+        Ok(())
+    }
 }
 
 fn is_own(name: &str) -> bool {

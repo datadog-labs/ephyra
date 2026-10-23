@@ -1,0 +1,16 @@
+[package]
+name = "trunk-oracle"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Runs a replay script on SQLite trunk and prints the last statement's rows, for turso-diff"
+
+[dependencies]
+rusqlite = { version = "0.37", features = ["bundled", "serialize", "hooks"] }
+
+[workspace]
+
+# SQLite trunk bfe473ab (2026-10-13), the check-in ephyra-sqlite vendors, with
+# libsqlite3-sys's build options; made by ../../vendor/fetch.sh.
+[patch.crates-io]
+libsqlite3-sys = { path = "../../../sqlite/vendor/libsqlite3-sys-trunk-bfe473ab" }

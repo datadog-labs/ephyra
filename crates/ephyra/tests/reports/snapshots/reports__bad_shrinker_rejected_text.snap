@@ -2,7 +2,7 @@
 source: crates/ephyra/tests/reports/main.rs
 expression: report.to_string()
 ---
-ephyra: FAILED, property failed: shrink candidate not smaller: size 10 >= 9: 10
+ephyra: FAILED, property failed: shrink candidate 10: not smaller (size 10 >= 9)
   counterexample: 9
   original:       10 (size 0, iteration 0)
   shrinking: 99 of 99 candidates accepted in [time]

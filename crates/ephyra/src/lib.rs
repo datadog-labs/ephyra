@@ -106,7 +106,6 @@ mod health;
 mod hooks;
 pub mod loops;
 mod pool;
-mod primitives;
 #[cfg(feature = "json")]
 pub mod regressions;
 pub mod report;
@@ -173,7 +172,7 @@ pub use {
 };
 
 #[doc(hidden)]
-pub use runner::{
+pub use verify::{
     __check_generator,
     __check_strategy,
 };
@@ -199,7 +198,7 @@ pub use ephyra_macros::generator;
 
 /// A file-name-safe stem for a property name, shared by the regressions,
 /// observation, profraw and coverage page files.
-#[cfg(any(feature = "json", feature = "coverage"))]
+#[cfg(feature = "json")]
 pub(crate) fn file_stem(name: &str) -> String {
     let mut out: String = name
         .chars()

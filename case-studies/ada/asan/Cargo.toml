@@ -1,0 +1,21 @@
+[package]
+name = "ada-asan"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "ephyra-ada's properties on ada built with AddressSanitizer, UBSan and libc++ hardening"
+
+[dependencies]
+# The ada build under test, compiled by ephyra-ada with this crate's CXXFLAGS.
+ephyra-ada = { path = "../generator" }
+ephyra = { path = "../../../crates/ephyra" }
+
+[dev-dependencies]
+unicode-bidi = "0.3"
+idna = "1"
+percent-encoding = "2"
+
+[workspace]
+
+[profile.dev]
+opt-level = 2

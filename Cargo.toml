@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 # Standalone example crate: needs coverage rustflags, built on its own.
 # Case studies are crates (and workspaces) of their own.
-# turso/ and cedar/ are the checkouts turso-diff and ephyra-cedar build against.
+# turso/ and cedar/ are the checkouts turso/differential and cedar/generator build against.
 exclude = ["examples/locate-demo", "case-studies", "turso", "cedar"]
 
 [workspace.package]
