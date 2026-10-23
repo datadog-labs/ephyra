@@ -1,0 +1,86 @@
+diff --git a/gix/src/revision/spec/parse/delegate/revision.rs b/gix/src/revision/spec/parse/delegate/revision.rs
+index 8dce95427..407793f13 100644
+--- a/gix/src/revision/spec/parse/delegate/revision.rs
++++ b/gix/src/revision/spec/parse/delegate/revision.rs
+@@ -119,6 +119,14 @@ impl delegate::Revision for Delegate<'_> {
+             r.follow_to_object()
+                 .map_err(|err| error::with_missing_reference(err.into_exn()))?;
+         }
++        // Like Git, the most recent entry refers to the current value of the reference, which may differ from what
++        // the log recorded last, e.g. if the target of a symbolic reference with its own log moved.
++        let current_id = || {
++            r.clone()
++                .follow_to_object()
++                .map(crate::Id::detach)
++                .map_err(|err| error::with_missing_reference(err.into_exn()))
++        };
+         let mut platform = r.log_iter();
+         match platform.rev().ok().flatten() {
+             Some(mut it) => match query {
+@@ -133,9 +141,11 @@ impl delegate::Revision for Delegate<'_> {
+                                 d.previous_oid
+                             });
+                         })
+-                        .find(|l| l.signature.time.seconds <= date.seconds)
++                        .enumerate()
++                        .find(|(_, l)| l.signature.time.seconds <= date.seconds)
+                     {
+-                        Some(closest_line) => closest_line.new_oid,
++                        Some((0, closest_line)) if closest_line.signature.time.seconds != date.seconds => current_id()?,
++                        Some((_, closest_line)) => closest_line.new_oid,
+                         None => match last {
+                             None => bail!("Reflog does not contain any entries"),
+                             Some(id) => id,
+@@ -149,9 +159,10 @@ impl delegate::Revision for Delegate<'_> {
+                 }
+                 ReflogLookup::Entry(no) => match it.nth(no).and_then(std::result::Result::ok) {
+                     Some(line) => {
++                        let id = if no == 0 { current_id()? } else { line.new_oid };
+                         let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
+-                        if !objs.contains(&line.new_oid) {
+-                            objs.push(line.new_oid);
++                        if !objs.contains(&id) {
++                            objs.push(id);
+                         }
+                         Ok(())
+                     }
+diff --git a/gix/tests/fixtures/make_symbolic_ref_reflogs.sh b/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
+index 109d566a0..9b1ac85f3 100755
+--- a/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
++++ b/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
+@@ -15,6 +15,10 @@ git commit -q --allow-empty -m third
+ git symbolic-ref refs/symref refs/heads/main
+ git symbolic-ref refs/symref-chain refs/symref
+ git symbolic-ref refs/heads/symref refs/heads/main
++# A symbolic branch whose target moved later has a log that is out of date, but `@{0}` is still its current value.
++git branch side HEAD~1
++git symbolic-ref refs/heads/stale refs/heads/side
++git update-ref refs/heads/side HEAD
+ 
+ # Bake Git's object IDs or failure exit codes into the shared revspec baseline format.
+ function baseline() {
+@@ -28,3 +32,5 @@ for name in main refs/symref refs/symref-chain; do
+   done
+ done
+ baseline 'refs/heads/symref@{1}'
++baseline 'refs/heads/stale@{0}'
++baseline 'refs/heads/stale@{2030-01-01 00:00:00 +0000}'
+diff --git a/gix/tests/gix/revision/spec/from_bytes/reflog.rs b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+index 289bc083f..8780b7718 100644
+--- a/gix/tests/gix/revision/spec/from_bytes/reflog.rs
++++ b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+@@ -32,6 +32,14 @@ fn symbolic_references_use_their_own_log_or_the_final_targets() -> gix_testtools
+         parse_spec("refs/heads/symref@{1}", &repo).is_err(),
+         "an existing reflog takes precedence over the target's longer log"
+     );
++    let side = repo.find_reference("refs/heads/side")?.id().detach();
++    for revspec in ["refs/heads/stale@{0}", "refs/heads/stale@{2030-01-01 00:00:00 +0000}"] {
++        assert_eq!(
++            parse_spec(revspec, &repo)?.single().map(|id| id.detach()),
++            Some(side),
++            "{revspec}: like Git, the newest entry of an out-of-date log refers to the current value"
++        );
++    }
+     Ok(())
+ }
+ 

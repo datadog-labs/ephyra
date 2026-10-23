@@ -1,0 +1,147 @@
+From 385a8dd4f6bc14a06d71f80ad21d0aa6194ecf5b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 19:17:22 -0400
+Subject: [PATCH] Check the load kind before substituting a known block field
+
+When a match is on a block whose constructor is statically known, an
+unreachable arm for another constructor can load a [float#] field from
+it. Closure_conversion.simplify_block_load substituted the known field
+(a boxed float symbol, or a constant) for that load regardless of the
+load's kind, binding a naked float variable to a value. At -Oclassic,
+where Simplify does not remove the arm, emission then failed with
+"Illegal move between registers of differing types", e.g. on
+
+  type v = Q of float# | S of float
+  let f (p : float#) =
+    let _ = match S 0.0 with Q f -> Float_u.floor f | _ -> p in ()
+
+Substitute a known field only when its kind matches the kind of the
+load, and otherwise keep the load.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../from_lambda/closure_conversion.ml         | 26 +++++++++---
+ .../block_load_kind_in_dead_match_arm.ml      | 42 +++++++++++++++++++
+ ...lock_load_kind_in_dead_match_arm.reference |  2 +
+ 3 files changed, 64 insertions(+), 6 deletions(-)
+ create mode 100644 testsuite/tests/flambda2/block_load_kind_in_dead_match_arm.ml
+ create mode 100644 testsuite/tests/flambda2/block_load_kind_in_dead_match_arm.reference
+
+diff --git a/middle_end/flambda2/from_lambda/closure_conversion.ml b/middle_end/flambda2/from_lambda/closure_conversion.ml
+index 73bbd4d2..792569c0 100644
+--- a/middle_end/flambda2/from_lambda/closure_conversion.ml
++++ b/middle_end/flambda2/from_lambda/closure_conversion.ml
+@@ -1418,7 +1418,8 @@ type simplified_block_load =
+   | Block_but_cannot_simplify of Code_or_metadata.t Value_approximation.t
+   | Field_contents of Simple.t
+ 
+-let simplify_block_load acc body_env ~block ~field : simplified_block_load =
++let simplify_block_load acc body_env ~block ~field ~load_kind :
++    simplified_block_load =
+   match find_value_approximation_through_symbol acc body_env block with
+   | Unknown _ -> Unknown
+   | Closure_approximation _ | Value_symbol _ | Value_const _ -> Not_a_block
+@@ -1427,9 +1428,19 @@ let simplify_block_load acc body_env ~block ~field : simplified_block_load =
+       let i = Target_ocaml_int.to_int field in
+       if i >= Array.length approx then None else Some approx.(i)
+     in
++    (* The load can be of a different kind from the field of the known block,
++       e.g. in an unreachable match case for another constructor, where a
++       [float#] field is read from a block whose field is a boxed float. The
++       field contents must then not be substituted for the result. *)
+     match approx with
+-    | Some (Value_symbol sym) -> Field_contents (Simple.symbol sym)
+-    | Some (Value_const c) -> Field_contents (Simple.const c)
++    | Some (Value_symbol sym) ->
++      if Flambda_kind.equal load_kind Flambda_kind.value
++      then Field_contents (Simple.symbol sym)
++      else Unknown
++    | Some (Value_const c) ->
++      if Flambda_kind.equal load_kind (Reg_width_const.kind c)
++      then Field_contents (Simple.const c)
++      else Unknown
+     | Some approx -> Block_but_cannot_simplify approx
+     | None -> Not_a_block)
+ 
+@@ -1707,8 +1718,10 @@ let close_let acc env let_bound_ids_with_kinds user_visible defining_expr
+             (Bound_pattern.static
+                (Bound_static.create [Bound_static.Pattern.block_like symbol]))
+             defining_expr ~body
+-        | Prim (Unary (Block_load { field; _ }, block), _) -> (
+-          match simplify_block_load acc body_env ~block ~field with
++        | Prim (Unary (Block_load { field; kind = load_kind; _ }, block), _)
++          -> (
++          let load_kind = P.Block_access_kind.element_kind_for_load load_kind in
++          match simplify_block_load acc body_env ~block ~field ~load_kind with
+           | Unknown -> bind acc body_env
+           | Not_a_block ->
+             if Flambda_features.kind_checks ()
+@@ -4173,7 +4186,8 @@ let wrap_final_module_block acc env ~program ~prog_return_cont
+           let pos_str = string_of_int pos in
+           let field = Target_ocaml_int.of_int (Acc.machine_width acc) pos in
+           let block = module_block_simple in
+-          match simplify_block_load acc env ~block ~field with
++          let load_kind = kind_of_field pos in
++          match simplify_block_load acc env ~block ~field ~load_kind with
+           | Unknown | Not_a_block | Block_but_cannot_simplify _ ->
+             Let_bound
+               ( Variable.create ("field_" ^ pos_str) (kind_of_field pos),
+diff --git a/testsuite/tests/flambda2/block_load_kind_in_dead_match_arm.ml b/testsuite/tests/flambda2/block_load_kind_in_dead_match_arm.ml
+new file mode 100644
+index 00000000..0435557f
+--- /dev/null
++++ b/testsuite/tests/flambda2/block_load_kind_in_dead_match_arm.ml
+@@ -0,0 +1,42 @@
++(* TEST
++ reference = "${test_source_directory}/block_load_kind_in_dead_match_arm.reference";
++ include stdlib_upstream_compatible;
++ flambda2;
++ {
++   native;
++ } {
++   flags = "-Oclassic";
++   native;
++ } {
++   flags = "-O3";
++   native;
++ } {
++   bytecode;
++ }
++*)
++
++(* When matching on a block whose constructor is statically known, an
++   unreachable arm for another constructor can read a [float#] field from it.
++   Closure conversion used to substitute the known field (a boxed float, or a
++   constant) for that unboxed load, which made [-Oclassic] fail with "Illegal
++   move between registers of differing types". *)
++
++module F = Stdlib_upstream_compatible.Float_u
++
++type boxed = Q of float# | S of float
++
++type const = Q' of float# | S' of int
++
++let boxed_field (p : float#) =
++  match S 0.0 with
++  | Q f -> F.to_float (F.floor f)
++  | S _ -> F.to_float p
++
++let const_field (p : float#) =
++  match S' 0 with
++  | Q' f -> F.to_float (F.floor f)
++  | S' _ -> F.to_float p
++
++let () =
++  Printf.printf "boxed: %g\n" (boxed_field (F.of_float 1.5));
++  Printf.printf "const: %g\n" (const_field (F.of_float 2.5))
+diff --git a/testsuite/tests/flambda2/block_load_kind_in_dead_match_arm.reference b/testsuite/tests/flambda2/block_load_kind_in_dead_match_arm.reference
+new file mode 100644
+index 00000000..d741d0e8
+--- /dev/null
++++ b/testsuite/tests/flambda2/block_load_kind_in_dead_match_arm.reference
+@@ -0,0 +1,2 @@
++boxed: 1.5
++const: 2.5
+-- 
+2.56.0
+

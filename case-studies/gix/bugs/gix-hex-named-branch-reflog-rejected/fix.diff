@@ -1,0 +1,145 @@
+diff --git a/gix-revision/src/spec/parse/function.rs b/gix-revision/src/spec/parse/function.rs
+index 3ca9fbd1f..fde297cf0 100644
+--- a/gix-revision/src/spec/parse/function.rs
++++ b/gix-revision/src/spec/parse/function.rs
+@@ -469,9 +469,22 @@ where
+         };
+     } else {
+         let mut errors = Vec::new();
+-        (consecutive_hex_chars.unwrap_or(0) >= gix_hash::Prefix::MIN_HEX_LEN)
+-            .then(|| try_set_prefix(delegate, name, None, &mut errors))
++        // Only references have reflogs and sibling branches, so like git, try `<name>@{…}` as reference first,
++        // even if `name` also looks like an object prefix.
++        let ref_first =
++            !name.is_empty() && sep == Some(b'@') && sep_pos.and_then(|pos| input.get(pos + 1)) == Some(&b'{');
++        ref_first
++            .then(|| {
++                delegate.find_ref(name).or_else_none(|err| errors.push(err))?;
++                has_ref_or_implied_name = true;
++                Some(())
++            })
+             .flatten()
++            .or_else(|| {
++                (consecutive_hex_chars.unwrap_or(0) >= gix_hash::Prefix::MIN_HEX_LEN)
++                    .then(|| try_set_prefix(delegate, name, None, &mut errors))
++                    .flatten()
++            })
+             .or_else(|| {
+                 let (prefix, hint) = long_describe_prefix(name)
+                     .map(|(c, h)| (c, Some(h)))
+@@ -480,6 +493,8 @@ where
+             })
+             .or_else(|| {
+                 name.is_empty().then_some(()).or_else(|| {
++                    // The reference was already tried.
++                    (!ref_first).then_some(())?;
+                     #[expect(
+                         clippy::let_unit_value,
+                         reason = "the binding keeps generated async and blocking code structurally consistent"
+diff --git a/gix-revision/tests/revision/spec/parse/anchor/at_symbol.rs b/gix-revision/tests/revision/spec/parse/anchor/at_symbol.rs
+index 6717da4fd..f110dcf7c 100644
+--- a/gix-revision/tests/revision/spec/parse/anchor/at_symbol.rs
++++ b/gix-revision/tests/revision/spec/parse/anchor/at_symbol.rs
+@@ -1,4 +1,4 @@
+-use crate::spec::parse::{parse, try_parse};
++use crate::spec::parse::{Options, parse, try_parse, try_parse_opts};
+ 
+ #[test]
+ fn braces_must_be_closed() {
+@@ -90,7 +90,14 @@ fn reflog_by_date_for_hash_is_invalid() {
+         ("abcd-dirty@{42 +0030}", "abcd-dirty"),
+         ("v1.2.3-0-g1234@{42 +0030}", "v1.2.3-0-g1234"),
+     ] {
+-        let err = try_parse(spec).unwrap_err();
++        let err = try_parse_opts(
++            spec,
++            Options {
++                reject_find_ref: true,
++                ..Default::default()
++            },
++        )
++        .unwrap_err();
+         assert_eq!(
+             err.metadata()
+                 .next()
+@@ -143,6 +150,26 @@ fn reflog_by_entry_for_given_ref_name() {
+     }
+ }
+ 
++#[test]
++fn reflog_and_sibling_branch_of_hash_like_ref_name() {
++    for (spec, ref_name) in [
++        ("1234@{0}", "1234"),
++        ("1234@{42 +0030}", "1234"),
++        ("1234@{u}", "1234"),
++        ("abcd-dirty@{1}", "abcd-dirty"),
++        ("v1.2.3-0-g1234@{2}", "v1.2.3-0-g1234"),
++    ] {
++        let rec = parse(spec);
++        assert_eq!(
++            rec.get_ref(0),
++            ref_name,
++            "like git, names followed by `@{{…}}` are tried as references first as only these have reflogs and siblings"
++        );
++        assert_eq!(rec.prefix[0], None, "the name wasn't also tried as object prefix");
++        assert_eq!(rec.calls, 2, "first the ref, then the reflog entry or sibling branch");
++    }
++}
++
+ #[test]
+ fn reflog_by_entry_for_hash_is_invalid() {
+     let mut message_diagnostics = Vec::new();
+@@ -151,7 +178,14 @@ fn reflog_by_entry_for_hash_is_invalid() {
+         ("abcd-dirty@{1}", "abcd-dirty"),
+         ("v1.2.3-0-g1234@{2}", "v1.2.3-0-g1234"),
+     ] {
+-        let err = try_parse(spec).unwrap_err();
++        let err = try_parse_opts(
++            spec,
++            Options {
++                reject_find_ref: true,
++                ..Default::default()
++            },
++        )
++        .unwrap_err();
+         assert_eq!(
+             err.metadata()
+                 .next()
+@@ -231,7 +265,14 @@ fn sibling_branch_for_hash_is_invalid() {
+         ("abcd-dirty@{push}", "abcd-dirty"),
+         ("v1.2.3-0-g1234@{upstream}", "v1.2.3-0-g1234"),
+     ] {
+-        let err = try_parse(spec).unwrap_err();
++        let err = try_parse_opts(
++            spec,
++            Options {
++                reject_find_ref: true,
++                ..Default::default()
++            },
++        )
++        .unwrap_err();
+         assert_eq!(
+             err.metadata()
+                 .next()
+diff --git a/gix-revision/tests/revision/spec/parse/mod.rs b/gix-revision/tests/revision/spec/parse/mod.rs
+index 820e653b3..f22fb8449 100644
+--- a/gix-revision/tests/revision/spec/parse/mod.rs
++++ b/gix-revision/tests/revision/spec/parse/mod.rs
+@@ -9,6 +9,7 @@ use gix_revision::{
+ struct Options {
+     reject_kind: bool,
+     reject_prefix: bool,
++    reject_find_ref: bool,
+     no_internal_assertions: bool,
+ }
+ 
+@@ -96,6 +97,9 @@ fn set_val<T: std::fmt::Debug>(fn_name: &str, store: &mut [Option<T>; 2], val: T
+ impl delegate::Revision for Recorder {
+     fn find_ref(&mut self, input: &BStr) -> Result {
+         self.called(Call::FindRef);
++        if self.opts.reject_find_ref {
++            bail!("find_ref rejected");
++        }
+         set_val("find_ref", &mut self.find_ref, input.into())
+     }
+ 

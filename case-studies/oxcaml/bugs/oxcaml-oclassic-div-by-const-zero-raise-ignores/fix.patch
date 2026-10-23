@@ -1,0 +1,177 @@
+From bff89caba634527aa6654dd7ea39d3224ab19233 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 18:27:29 -0400
+Subject: [PATCH] Translate integer division by constant zero to invalid in
+ to_cmm
+
+A division or modulo enters Flambda 2 as a test on the divisor that
+raises Division_by_zero, followed by an unsafe division that is dead
+when the divisor is zero. Simplify removes the dead division, but at
+-Oclassic it does not run, so the division reached to_cmm, where
+Cmm_helpers turned the constant zero divisor into a raise carrying only
+the exception bucket. Inside a try whose handler has extra arguments,
+Cfg_selectgen.emit_expr_raise then failed with Invalid_argument
+"Array.iter2: arrays must have the same length", e.g. on
+
+  let f y = let r = ref 0 in r := y; try y mod 0 with Not_found -> !r
+
+Translate an integer Div/Mod whose divisor is the constant zero to an
+invalid expression, as Simplify does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../flambda2/to_cmm/to_cmm_primitive.ml       | 32 +++++++++-
+ .../flambda2/div_by_const_zero_in_try.ml      | 63 +++++++++++++++++++
+ .../div_by_const_zero_in_try.reference        |  6 ++
+ 3 files changed, 98 insertions(+), 3 deletions(-)
+ create mode 100644 testsuite/tests/flambda2/div_by_const_zero_in_try.ml
+ create mode 100644 testsuite/tests/flambda2/div_by_const_zero_in_try.reference
+
+diff --git a/middle_end/flambda2/to_cmm/to_cmm_primitive.ml b/middle_end/flambda2/to_cmm/to_cmm_primitive.ml
+index 78cc4b3f..41362720 100644
+--- a/middle_end/flambda2/to_cmm/to_cmm_primitive.ml
++++ b/middle_end/flambda2/to_cmm/to_cmm_primitive.ml
+@@ -1324,6 +1324,22 @@ let unary_primitive env res dbg f (_arg_simple : Simple.t option)
+     let tag = Tag.to_int (P.Lazy_block_tag.to_tag lazy_tag) in
+     None, res, C.make_alloc ~mode:Heap dbg ~tag [arg]
+ 
++(* Division is translated to a conditional on the denominator followed by an
++   unsafe division on the way into Flambda 2 (see [Simplify_binary_primitive]),
++   so a division by a constant zero is unreachable. It must not be translated
++   using [Cmm_helpers], which would raise [Division_by_zero] without the extra
++   arguments of the current exception handler. *)
++let is_int_division_by_zero (f : P.binary_primitive) (y : Cmm.expression) =
++  match[@ocaml.warning "-4"] f, y with
++  | Int_arith (Tagged_immediate, (Div _ | Mod _)), Cconst_int (1, _) -> true
++  | ( Int_arith
++        ( ( Naked_int8 | Naked_int16 | Naked_int32 | Naked_int64
++          | Naked_nativeint | Naked_immediate ),
++          (Div _ | Mod _) ),
++      (Cconst_int (0, _) | Cconst_natint (0n, _)) ) ->
++    true
++  | _ -> false
++
+ let binary_primitive env dbg f (_x_simple : Simple.t option)
+     (_y_simple : Simple.t option) (x : Cmm.expression) (y : Cmm.expression) =
+   match (f : P.binary_primitive) with
+@@ -1365,6 +1381,13 @@ let binary_primitive env dbg f (_x_simple : Simple.t option)
+     let memory_chunk = C.memory_chunk_of_kind kind in
+     C.load ~dbg memory_chunk mut ~addr
+ 
++let binary_primitive_or_invalid env res dbg f x_simple y_simple x y =
++  if is_int_division_by_zero f y
++  then
++    let expr, res = C.invalid res ~message:"Integer division by zero" in
++    res, expr
++  else res, binary_primitive env dbg f x_simple y_simple x y
++
+ let ternary_primitive _env dbg f (_x_simple : Simple.t option)
+     (_y_simple : Simple.t option) (_z_simple : Simple.t option)
+     (x : Cmm.expression) (y : Cmm.expression) (z : Cmm.expression) =
+@@ -1505,7 +1528,9 @@ let trans_prim : To_cmm_env.t To_cmm_env.trans_prim =
+     unary = (fun env res dbg prim x -> unary_primitive env res dbg prim None x);
+     binary =
+       (fun env res dbg prim x y ->
+-        let cmm = binary_primitive env dbg prim None None x y in
++        let res, cmm =
++          binary_primitive_or_invalid env res dbg prim None None x y
++        in
+         None, res, cmm);
+     ternary =
+       (fun env res dbg prim x y z ->
+@@ -1579,8 +1604,9 @@ let prim_simple env res dbg p =
+     let To_cmm_env.{ env; res; expr = y' } = arg env res y in
+     let free_vars = Backend_var.Set.union x'.free_vars y'.free_vars in
+     let effs = Ece.join x'.effs y'.effs in
+-    let expr =
+-      binary_primitive env dbg binary (Some x) (Some y) x'.cmm y'.cmm
++    let res, expr =
++      binary_primitive_or_invalid env res dbg binary (Some x) (Some y) x'.cmm
++        y'.cmm
+     in
+     Env.simple expr free_vars, None, env, res, effs
+   | Ternary (ternary, x, y, z) ->
+diff --git a/testsuite/tests/flambda2/div_by_const_zero_in_try.ml b/testsuite/tests/flambda2/div_by_const_zero_in_try.ml
+new file mode 100644
+index 00000000..d6852e47
+--- /dev/null
++++ b/testsuite/tests/flambda2/div_by_const_zero_in_try.ml
+@@ -0,0 +1,63 @@
++(* TEST
++ reference = "${test_source_directory}/div_by_const_zero_in_try.reference";
++ flambda2;
++ {
++   native;
++ } {
++   flags = "-Oclassic";
++   native;
++ } {
++   flags = "-O3";
++   native;
++ } {
++   bytecode;
++ }
++*)
++
++(* A division by a constant zero inside a [try] whose handler has extra
++   arguments (here the mutated [r]) used to make [-Oclassic] fail in
++   [Cfg_selectgen.emit_expr_raise] with
++   [Invalid_argument "Array.iter2: arrays must have the same length"]. *)
++
++let f_mod y =
++  let r = ref 0 in
++  r := y;
++  try y mod 0 with Not_found -> !r
++
++let f_div y =
++  let r = ref 0 in
++  r := y;
++  try y / 0 with Not_found -> !r
++
++let f_int32 y =
++  let r = ref 0l in
++  r := y;
++  try Int32.rem y 0l with Not_found -> !r
++
++let f_int64 y =
++  let r = ref 0L in
++  r := y;
++  try Int64.div y 0L with Not_found -> !r
++
++let f_nativeint y =
++  let r = ref 0n in
++  r := y;
++  try Nativeint.rem y 0n with Not_found -> !r
++
++let f_caught y =
++  let r = ref 0 in
++  r := y;
++  try y mod 0 with Division_by_zero -> !r + 100
++
++let test name f =
++  match f () with
++  | () -> Printf.printf "%s: no exception\n" name
++  | exception Division_by_zero -> Printf.printf "%s: Division_by_zero\n" name
++
++let () =
++  test "mod" (fun () -> ignore (f_mod 3));
++  test "div" (fun () -> ignore (f_div 3));
++  test "int32" (fun () -> ignore (f_int32 3l));
++  test "int64" (fun () -> ignore (f_int64 3L));
++  test "nativeint" (fun () -> ignore (f_nativeint 3n));
++  Printf.printf "caught: %d\n" (f_caught 3)
+diff --git a/testsuite/tests/flambda2/div_by_const_zero_in_try.reference b/testsuite/tests/flambda2/div_by_const_zero_in_try.reference
+new file mode 100644
+index 00000000..3fda0eda
+--- /dev/null
++++ b/testsuite/tests/flambda2/div_by_const_zero_in_try.reference
+@@ -0,0 +1,6 @@
++mod: Division_by_zero
++div: Division_by_zero
++int32: Division_by_zero
++int64: Division_by_zero
++nativeint: Division_by_zero
++caught: 103
+-- 
+2.56.0
+

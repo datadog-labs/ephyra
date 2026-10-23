@@ -38,7 +38,7 @@ run it and what it found.
 | [`ada`](case-studies/ada) | [`generator`](case-studies/ada/generator), [`coverage`](case-studies/ada/coverage), [`asan`](case-studies/ada/asan) | [ada](https://github.com/ada-url/ada), the WHATWG URL parser |
 | [`cedar`](case-studies/cedar) | [`generator`](case-studies/cedar/generator) | [Cedar](https://github.com/cedar-policy/cedar) policies and entities |
 | [`egg`](case-studies/egg) | [`demo`](case-studies/egg/demo) | equivalent SQL queries sampled from an e-graph, checked on SQLite |
-| [`coreutils`](case-studies/coreutils/bugs), [`duckdb`](case-studies/duckdb/bugs), [`datafusion`](case-studies/datafusion/bugs) | | bugs found in uutils coreutils, DuckDB and DataFusion |
+| [`coreutils`](case-studies/coreutils), [`duckdb`](case-studies/duckdb), [`datafusion`](case-studies/datafusion), [`brush`](case-studies/brush), [`gix`](case-studies/gix), [`binaryen`](case-studies/binaryen), [`ocaml`](case-studies/ocaml), [`oxcaml`](case-studies/oxcaml), [`rustc`](case-studies/rustc) | `harness` | targets of ephyra's autonomous agent: the harness it wrote for each (uutils coreutils, DuckDB, DataFusion, brush, gitoxide, Binaryen, OCaml, OxCaml, rustc) and the bugs it found |
 
 Some case studies build against code that is not in this repository:
 `case-studies/sqlite/vendor/fetch.sh` creates the `libsqlite3-sys` crates with

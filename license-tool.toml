@@ -2,3 +2,6 @@
 [overrides]
 # Declares its license only as a file (Apache License 2.0, Copyright 2022 Trevor Gross).
 "cfg_block-0.1.1" = { license = "Apache-2.0" }
+# Part of the wasmtime repository; the crates declare no repository.
+"cranelift-assembler-x64-0.137.0" = { origin = "https://github.com/bytecodealliance/wasmtime" }
+"wasmtime-internal-core-50.0.0" = { origin = "https://github.com/bytecodealliance/wasmtime" }

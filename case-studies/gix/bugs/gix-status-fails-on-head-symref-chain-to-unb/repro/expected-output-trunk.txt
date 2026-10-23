@@ -1,0 +1,11 @@
+--- git status
+On branch topic
+
+No commits yet
+
+nothing to commit (create/copy files and use "git add" to track)
+--- gix
+head().is_unborn(): false
+head_tree_id_or_empty(): error: The ref partially named "refs/heads/topic" could not be found: NotFound
+is_dirty(): error: The ref partially named "refs/heads/topic" could not be found: NotFound
+status(): error: The ref partially named "refs/heads/topic" could not be found: NotFound

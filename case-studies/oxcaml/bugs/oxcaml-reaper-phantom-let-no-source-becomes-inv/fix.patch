@@ -1,0 +1,101 @@
+From 5eadedfe2c33e53a20595f3260ac5f1cf229c34b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Thu, 22 Oct 2026 00:51:54 -0400
+Subject: [PATCH] reaper: drop phantom lets without a source instead of
+ emitting Invalid
+
+With -g -flambda2-expert-phantom-lets, an unused user variable that
+reads a value captured by a closure is kept as a phantom let, e.g. [_z]
+in
+
+  let f a = fun y -> let _z = a + 1 in y + 1
+
+The reaper finds no source for these phantom variables, and
+Rebuild.rebuild_let_expr_holed replaced the whole closure body with
+Invalid ("Dead variable in bound pattern"), so the program aborted at
+run time under -flambda2-reaper or -O4.
+
+A phantom variable without a source does not mean that the code is
+unreachable, so drop the phantom binding instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ middle_end/flambda2/reaper/rebuild.ml         | 23 +++++++++-----
+ .../tests/reaper/phantom_let_no_source.ml     | 31 +++++++++++++++++++
+ 2 files changed, 46 insertions(+), 8 deletions(-)
+ create mode 100644 testsuite/tests/reaper/phantom_let_no_source.ml
+
+diff --git a/middle_end/flambda2/reaper/rebuild.ml b/middle_end/flambda2/reaper/rebuild.ml
+index cf68ffcad1..06cc7add50 100644
+--- a/middle_end/flambda2/reaper/rebuild.ml
++++ b/middle_end/flambda2/reaper/rebuild.ml
+@@ -1949,14 +1949,21 @@ and rebuild_let_expr_holed env res ~(bound_pattern : Bound_pattern.t)
+       ~f:(fun b v -> b || is_dead_var env (Bound_var.var v))
+       ~init:false
+   then
+-    ( RE.from_expr
+-        ~expr:
+-          (Expr.create_invalid
+-             (Message
+-                (Format.asprintf "Dead variable in bound pattern: %a"
+-                   Bound_pattern.print bound_pattern)))
+-        ~free_names:Name_occurrences.empty ~code_size:Code_size.invalid,
+-      res )
++    (* Phantom variables have no uses, and the analysis does not always give
++       them a source (e.g. for the projection of a value slot), so a phantom
++       variable without a source does not mean that this point is unreachable.
++       Drop the binding instead. *)
++    if Name_mode.is_phantom (Bound_pattern.name_mode bound_pattern)
++    then rebuild_holed env res parent hole
++    else
++      ( RE.from_expr
++          ~expr:
++            (Expr.create_invalid
++               (Message
++                  (Format.asprintf "Dead variable in bound pattern: %a"
++                     Bound_pattern.print bound_pattern)))
++          ~free_names:Name_occurrences.empty ~code_size:Code_size.invalid,
++        res )
+   else
+     let subexpr, res =
+       match bound_pattern, defining_expr with
+diff --git a/testsuite/tests/reaper/phantom_let_no_source.ml b/testsuite/tests/reaper/phantom_let_no_source.ml
+new file mode 100644
+index 0000000000..2356c7ef27
+--- /dev/null
++++ b/testsuite/tests/reaper/phantom_let_no_source.ml
+@@ -0,0 +1,31 @@
++(* TEST
++   flambda2;
++   flags += "-flambda2-reaper -g -flambda2-expert-phantom-lets";
++   { native; }
++ *)
++
++(* Each [_z] is unused, so with phantom lets it is kept as a phantom let
++   reading the captured value [a] (a projection from the closure followed by
++   an addition, an unboxing or a field load). The reaper finds no source for
++   these phantom variables, which must not turn the body of the closure into
++   [Invalid]. *)
++
++let add (a : int) y =
++  let _z = a + 1 in
++  y + 1
++
++let unbox (a : int32) y =
++  let _z = Int32.to_int a in
++  y + 1
++
++let field (a : int * int) y =
++  let _z = fst a in
++  y + 1
++
++let curried a = fun y -> add a y
++
++let () =
++  assert ((fun a -> fun y -> let _z = a + 1 in y + 1) 7 3 = 4);
++  assert (curried 7 3 = 4);
++  assert ((fun a -> fun y -> unbox a y) 7l 3 = 4);
++  assert ((fun a -> fun y -> field a y) (7, 8) 3 = 4)
+-- 
+2.56.0
+

@@ -1,0 +1,10 @@
+[package]
+name = "merge"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gix = { path = "GIX_PATH", default-features = false, features = ["merge", "revision", "sha1"] }
+
+[workspace]

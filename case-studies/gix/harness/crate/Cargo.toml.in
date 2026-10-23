@@ -1,0 +1,19 @@
+[package]
+name = "gixfuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gix = { path = "@SRC@/gix", default-features = false, features = ["sha1", "sha256", "revision", "revparse-regex", "index", "blob-diff", "merge", "status"] }
+ephyra = { path = "@EPHYRA@/crates/ephyra" }
+serde_json = "1"
+
+[workspace]
+
+[profile.release]
+opt-level = 2
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true
+incremental = true

@@ -1,0 +1,41 @@
+diff --git a/brush-core/src/variables.rs b/brush-core/src/variables.rs
+index 40504e1..058c2f8 100644
+--- a/brush-core/src/variables.rs
++++ b/brush-core/src/variables.rs
+@@ -1041,10 +1041,15 @@ fn get_key_for_indexed_array(
+ ) -> Result<u64, error::Error> {
+     let mut index_value = index_str.parse::<i64>().unwrap_or(0);
+ 
+-    // Handle negative indices, but check for out-of-range values.
++    // Handle negative indices, but check for out-of-range values. A negative index is
++    // relative to one greater than the maximum index (not the element count, which
++    // differs for sparse arrays).
+     #[expect(clippy::cast_possible_wrap)]
+     if index_value < 0 {
+-        index_value += values.len() as i64;
++        let end = values
++            .last_key_value()
++            .map_or(0, |(k, _)| (*k as i64).saturating_add(1));
++        index_value += end;
+         if index_value < 0 {
+             return Err(error::ErrorKind::ArrayIndexOutOfRange(index_str.to_owned()).into());
+         }
+diff --git a/brush-shell/tests/cases/compat/arrays.yaml b/brush-shell/tests/cases/compat/arrays.yaml
+index 64da78a..c639eb9 100644
+--- a/brush-shell/tests/cases/compat/arrays.yaml
++++ b/brush-shell/tests/cases/compat/arrays.yaml
+@@ -422,3 +422,14 @@ cases:
+       i=1
+       declare -a b=([i+1]=y [i*5]=z)
+       declare -p b
++
++  - name: "Negative index into sparse indexed array"
++    stdin: |
++      b=(a b c d)
++      b[5]=q
++      echo "<${b[-2]}> <${b[-1]}>"
++      b[-2]=Z
++      b[-1]+=r
++      declare -p b
++      unset 'b[-3]'
++      declare -p b

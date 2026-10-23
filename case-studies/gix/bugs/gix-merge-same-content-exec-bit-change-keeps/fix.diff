@@ -1,0 +1,94 @@
+diff --git a/gix-merge/src/tree/function/resolve.rs b/gix-merge/src/tree/function/resolve.rs
+index 9d111336f..eb03f84df 100644
+--- a/gix-merge/src/tree/function/resolve.rs
++++ b/gix-merge/src/tree/function/resolve.rs
+@@ -501,6 +501,33 @@ pub fn tree<'objects>(
+                                     }
+                                 }
+                             }
++                            // Both sides produce the same blob from a compatible ancestor, but only one changed its
++                            // executable bit. The content agrees, so the one-sided mode change wins without a conflict.
++                            // For example, both rewrite `script` identically and theirs also makes it executable.
++                            (
++                                Change::Modification {
++                                    location,
++                                    previous_entry_mode,
++                                    entry_mode: our_mode,
++                                    id: our_id,
++                                    ..
++                                },
++                                Change::Modification {
++                                    entry_mode: their_mode,
++                                    id: their_id,
++                                    ..
++                                },
++                            ) if our_id == their_id
++                                && !involves_submodule(our_mode, their_mode)
++                                && merge_modes(*our_mode, *previous_entry_mode).is_some()
++                                && merge_modes(*their_mode, *previous_entry_mode).is_some() =>
++                            {
++                                let merged_mode = merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
++                                    .expect("the match guard assures compatible modes");
++                                editor.upsert(toc(location), merged_mode.kind(), *our_id)?;
++                                ours_disposition = ChangeDisposition::Applied;
++                                theirs_disposition = ChangeDisposition::Applied;
++                            }
+                             // Modify/modify for compatible, non-submodule entries: merge their content and executable
+                             // modes. For example, both sides produce different contents for ancestor blob `script`,
+                             // possibly changing its executable bit as well. If the ancestor had another type, such as a
+diff --git a/gix-merge/tests/fixtures/tree-baseline.sh b/gix-merge/tests/fixtures/tree-baseline.sh
+index 4c2c27891..55b49cf33 100755
+--- a/gix-merge/tests/fixtures/tree-baseline.sh
++++ b/gix-merge/tests/fixtures/tree-baseline.sh
+@@ -1256,6 +1256,25 @@ git init remove-executable-mode
+   git commit -am "unrelated change to w"
+ )
+ 
++git init same-content-one-sided-exec-bit
++(cd same-content-one-sided-exec-bit
++  echo 1 >f
++  git add . && git commit -m "original"
++
++  git branch A
++  git branch B
++
++  git checkout A
++  echo 2 >f
++  git commit -am "change f"
++
++  git checkout B
++  echo 2 >f
++  chmod +x f
++  git update-index --chmod=+x f
++  git commit -am "change f the same way and make it executable"
++)
++
+ git init renamed-symlink-with-conflict
+ (cd renamed-symlink-with-conflict
+   mkdir a && write_lines original 1 2 3 4 5 >a/x.f
+@@ -2210,6 +2229,7 @@ baseline non-tree-to-tree-with-rename A-B A B
+ baseline rename-add-same-symlink A-B A B
+ baseline rename-add-exe-bit-conflict A-B A B
+ baseline remove-executable-mode A-B A B
++baseline same-content-one-sided-exec-bit A-B A B
+ baseline simple side-1-3-without-conflict side1 side3
+ baseline simple fast-forward side1 main
+ baseline simple no-change main main
+diff --git a/gix-merge/tests/merge/tree/mod.rs b/gix-merge/tests/merge/tree/mod.rs
+index 290864782..c725eddd2 100644
+--- a/gix-merge/tests/merge/tree/mod.rs
++++ b/gix-merge/tests/merge/tree/mod.rs
+@@ -223,11 +223,11 @@ fn run_baseline() -> TestResult {
+     }
+ 
+     assert_eq!(
+-        actual_cases, 177,
++        actual_cases, 179,
+         "BUG: update this number, and don't forget to remove a filter in the end"
+     );
+     assert_eq!(
+-        skipped_tree_resolve_cases, 154,
++        skipped_tree_resolve_cases, 158,
+         "this is done when no case is skipped, and we don't want to accidentally skip them.\
+         Some don't actually have conflicts.\
+         The ones we skipped don't have irreconcilable conflicts"

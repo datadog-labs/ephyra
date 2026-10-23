@@ -1,0 +1,38 @@
+From e91359928238cf36a714abe7ea1d23b270ad7ee7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 09:16:17 -0400
+Subject: [PATCH] fix(core): wrap on overflow in += to an integer variable
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`declare -i n=1; n+=9223372036854775807` wraps in bash, like brush's
+arithmetic evaluator (#1017). The append branch of `ShellVariable::assign`
+added the two values with a plain `+`, which panics with "attempt to add
+with overflow" in builds with overflow checks.
+
+Use wrapping addition there.
+
+Signed-off-by: Alperen Keleş <alpkeles99@gmail.com>
+Assisted-by: Claude Code:claude-opus-5-5
+---
+ brush-core/src/variables.rs | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/brush-core/src/variables.rs b/brush-core/src/variables.rs
+index 8f3819c6..c99dbc01 100644
+--- a/brush-core/src/variables.rs
++++ b/brush-core/src/variables.rs
+@@ -273,8 +273,10 @@ impl ShellVariable {
+                 ShellValue::String(base) => match value {
+                     ShellValueLiteral::Scalar(suffix) => {
+                         if treat_as_int {
+-                            let int_value = base.parse::<i64>().unwrap_or(0)
+-                                + suffix.parse::<i64>().unwrap_or(0);
++                            let int_value = base
++                                .parse::<i64>()
++                                .unwrap_or(0)
++                                .wrapping_add(suffix.parse::<i64>().unwrap_or(0));
+                             base.clear();
+                             base.push_str(int_value.to_string().as_str());
+                         } else {

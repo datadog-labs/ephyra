@@ -1,0 +1,7 @@
+git version 2.56.0
+== git merge-tree main side
+100755 blob 0cfbf08886fca9a91cb753ec8734c84fcbe52c9f	f
+git exit status: 0 (0 = clean)
+== gix merge_commits(main, side)
+100644 blob d00491fd7e5bb6fa28c517a0bb32b8b506539d4d	f
+gix unresolved_conflicts: true

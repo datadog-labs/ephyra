@@ -1,0 +1,117 @@
+diff --git a/brush-core/src/commands.rs b/brush-core/src/commands.rs
+index b234cd3..46a332b 100644
+--- a/brush-core/src/commands.rs
++++ b/brush-core/src/commands.rs
+@@ -763,7 +763,14 @@ pub(crate) async fn invoke_shell_function(
+     // so the parameters are passed through by shared reference rather than cloned. This prevents
+     // direct mutation of the caller's `ExecutionParameters` open-file table, though the function
+     // may still change the shell's persistent open files via builtins (e.g. `exec`).
+-    let result = body.execute(&mut shell, &context.params).await;
++    //
++    // An error that escapes the body (e.g. a variable assignment or expansion error) abandons
++    // the command that invoked the function too, as it would in that command itself; it's
++    // not just a failure of the function call (e.g. `f; echo $?` doesn't go on to `echo`).
++    let result = body
++        .execute(&mut shell, &context.params)
++        .await
++        .map_err(error::Error::into_from_function_body);
+ 
+     // Leave the function: pop its frame and its local variables.
+     drop(shell);
+diff --git a/brush-core/src/error.rs b/brush-core/src/error.rs
+index 9f3ed3d..d953047 100644
+--- a/brush-core/src/error.rs
++++ b/brush-core/src/error.rs
+@@ -16,6 +16,10 @@ pub struct Error {
+     /// Whether or not the error should be considered a "fatal" error that would
+     /// result in abnormal exit of a non-interactive shell.
+     fatal: bool,
++
++    /// Whether or not the error escaped the body of a function, so it must also abort the
++    /// command that invoked the function.
++    from_function_body: bool,
+ }
+ 
+ /// Monolithic error type for the shell
+@@ -407,6 +411,7 @@ where
+         Self {
+             kind: Box::new(convertible_to_kind.into()),
+             fatal: false,
++            from_function_body: false,
+         }
+     }
+ }
+@@ -424,6 +429,18 @@ impl Error {
+         self.fatal
+     }
+ 
++    /// Marks this error as having escaped the body of a function.
++    #[must_use]
++    pub(crate) const fn into_from_function_body(mut self) -> Self {
++        self.from_function_body = true;
++        self
++    }
++
++    /// Returns whether or not this error escaped the body of a function.
++    pub(crate) const fn is_from_function_body(&self) -> bool {
++        self.from_function_body
++    }
++
+     /// Returns a reference to the error kind.
+     pub fn kind(&self) -> &ErrorKind {
+         &self.kind
+diff --git a/brush-core/src/interp.rs b/brush-core/src/interp.rs
+index 617e36e..0e2f3c4 100644
+--- a/brush-core/src/interp.rs
++++ b/brush-core/src/interp.rs
+@@ -1302,6 +1302,7 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::SimpleComma
+ 
+             match execute_command(context, params, cmd_name, &assignments, args).await {
+                 Ok(result) => Ok(result),
++                Err(err) if err.is_from_function_body() => Err(err),
+                 Err(err) => {
+                     let _ = parent_shell.display_error(&mut stderr, &err);
+ 
+diff --git a/brush-shell/tests/cases/compat/errors.yaml b/brush-shell/tests/cases/compat/errors.yaml
+index 2038003..26ce8bd 100644
+--- a/brush-shell/tests/cases/compat/errors.yaml
++++ b/brush-shell/tests/cases/compat/errors.yaml
+@@ -275,6 +275,26 @@ cases:
+       value_guard=2
+       echo "after readonly assignment"
+ 
++  - name: "Variable assignment error (function)"
++    ignore_stderr: true
++    stdin: |
++      readonly value_guard=1
++      arr=(x)
++      f() { value_guard=2; echo "in f"; }
++      g() { arr[-2]=y; }
++      h() { g; echo "in h"; }
++      f; echo "after f: $?"
++      echo "next: $?"
++      h || echo "h failed"
++      echo "next: $?"
++      (f; echo "after f in subshell: $?"); echo "subshell: $?"
++      v=$(f; echo "after f in substitution"); echo "v=<$v> status=$?"
++      f | cat; echo "pipeline: $?"
++      echo "${UNSET_REQUIRED:?x}" | cat
++      k() { echo "${UNSET_REQUIRED:?missing}"; echo "in k"; }
++      k; echo "after k: $?"
++      echo "done"
++
+   - name: "Expansion error (command line)"
+     known_failure: true # Needs investigation
+     ignore_stderr: true
+diff --git a/brush-shell/tests/cases/compat/interactive.yaml b/brush-shell/tests/cases/compat/interactive.yaml
+index e0c1940..b8a25b8 100644
+--- a/brush-shell/tests/cases/compat/interactive.yaml
++++ b/brush-shell/tests/cases/compat/interactive.yaml
+@@ -210,7 +210,6 @@ cases:
+       #expect:done
+ 
+   - name: "A fatal error in a function drops the rest of the interactive line"
+-    known_failure: true # TODO(interactive): runs the rest of the line
+     pty: true
+     ignore_stdout: true # Prompts don't line up
+     stdin: |

@@ -1,0 +1,15 @@
+[package]
+name = "uudiff"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ephyra = { path = "../../../../crates/ephyra" }
+libc = "0.2"
+serde_json = "1"
+
+[workspace]
+
+[profile.release]
+debug = "line-tables-only"

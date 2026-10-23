@@ -1,0 +1,127 @@
+diff --git a/gix/src/revision/spec/parse/delegate/revision.rs b/gix/src/revision/spec/parse/delegate/revision.rs
+index 8dce95427..e1b29d639 100644
+--- a/gix/src/revision/spec/parse/delegate/revision.rs
++++ b/gix/src/revision/spec/parse/delegate/revision.rs
+@@ -15,6 +15,40 @@ use crate::{
+     revision::spec::parse::{Delegate, RefsHint},
+ };
+ 
++impl Delegate<'_> {
++    fn is_dangling_symref(&self, r: &gix_ref::Reference) -> bool {
++        matches!(r.target, gix_ref::Target::Symbolic(_)) && r.clone().attach(self.repo).follow_to_object().is_err()
++    }
++
++    /// Like `git`, skip a dangling (or looping) symbolic ref matched by `name` and continue with the
++    /// remaining lookup rules after `matched`, returning the first one that resolves.
++    fn find_ref_after_dangling(&self, name: &BStr, matched: &BStr) -> Option<gix_ref::Reference> {
++        if name.starts_with(b"refs/") {
++            return None;
++        }
++        let candidates = ["refs/", "refs/tags/", "refs/heads/", "refs/remotes/"]
++            .iter()
++            .map(|prefix| {
++                let mut full = BString::from(*prefix);
++                full.extend_from_slice(name);
++                full
++            })
++            .chain(Some({
++                let mut full = BString::from("refs/remotes/");
++                full.extend_from_slice(name);
++                full.extend_from_slice(b"/HEAD");
++                full
++            }));
++        candidates
++            .skip_while(|full| full.as_bstr() != matched)
++            .skip(1)
++            .find_map(|full| {
++                let r = self.repo.refs.try_find(full.as_bstr()).ok()??;
++                (r.name.as_bstr() == full.as_bstr() && !self.is_dangling_symref(&r)).then_some(r)
++            })
++    }
++}
++
+ impl delegate::Revision for Delegate<'_> {
+     fn find_ref(&mut self, name: &BStr) -> Result<()> {
+         self.unset_disambiguate_call();
+@@ -22,11 +56,16 @@ impl delegate::Revision for Delegate<'_> {
+             // A rejected ref/object collision must not succeed via the parser's reference-only fallback.
+             bail!("A reference was already matched by the object prefix");
+         }
+-        let r = self
++        let mut r = self
+             .repo
+             .refs
+             .find(name)
+             .map_err(|err| error::with_missing_reference(err.into_exn()))?;
++        if self.is_dangling_symref(&r)
++            && let Some(next) = self.find_ref_after_dangling(name, r.name.as_bstr())
++        {
++            r = next;
++        }
+         assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
+         self.refs[self.idx] = Some(r);
+         Ok(())
+diff --git a/gix/tests/fixtures/generated-archives/.gitignore b/gix/tests/fixtures/generated-archives/.gitignore
+index e0cec4f40..8d972906e 100644
+--- a/gix/tests/fixtures/generated-archives/.gitignore
++++ b/gix/tests/fixtures/generated-archives/.gitignore
+@@ -60,6 +60,7 @@
+ # Generate this small tracking-selector fixture, including its Git baseline.
+ /make_tracking_branch_revspecs.tar
+ /make_tracking_branch_revspecs_sha256.tar
++/make_dangling_symref_revspecs.tar
+ # Generate this small uninitialized-submodule fixture instead of storing its archives.
+ /make_uninitialized_submodule.tar
+ /make_uninitialized_submodule_sha256.tar
+diff --git a/gix/tests/fixtures/make_dangling_symref_revspecs.sh b/gix/tests/fixtures/make_dangling_symref_revspecs.sh
+new file mode 100755
+index 000000000..818233191
+--- /dev/null
++++ b/gix/tests/fixtures/make_dangling_symref_revspecs.sh
+@@ -0,0 +1,17 @@
++#!/usr/bin/env bash
++set -eu -o pipefail
++
++# A dangling or looping symbolic ref matched early by a short name is skipped by Git's lookup rules.
++git init -q
++git commit -q --allow-empty -m initial
++git commit -q --allow-empty -m second
++git update-ref refs/remotes/origin/main HEAD~1
++git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
++git symbolic-ref refs/heads/origin refs/heads/missing
++git symbolic-ref refs/tags/loop refs/tags/loop
++git update-ref refs/heads/loop HEAD
++
++for revspec in origin origin~0 loop; do
++  printf '%s\n' "$revspec" >>baseline.git
++  git rev-parse --verify "$revspec" >>baseline.git 2>/dev/null
++done
+diff --git a/gix/tests/gix/revision/spec/from_bytes/mod.rs b/gix/tests/gix/revision/spec/from_bytes/mod.rs
+index f7f9163a2..b43d61b8a 100644
+--- a/gix/tests/gix/revision/spec/from_bytes/mod.rs
++++ b/gix/tests/gix/revision/spec/from_bytes/mod.rs
+@@ -32,6 +32,24 @@ fn missing_reference_names(err: &gix::Error) -> Vec<&gix::bstr::BStr> {
+         .collect()
+ }
+ 
++#[test]
++fn dangling_symbolic_refs_are_skipped_during_lookup() -> TestResult {
++    let fixture = gix_testtools::scripted_fixture_read_only("make_dangling_symref_revspecs.sh")?;
++    let repo = gix::open_opts(fixture.clone(), crate::restricted())?;
++    let baseline = std::fs::read(fixture.join("baseline.git"))?;
++    let mut lines = baseline.lines();
++    while let (Some(revspec), Some(id)) = (lines.next(), lines.next()) {
++        let expected = gix::ObjectId::from_hex(id)?;
++        assert_eq!(
++            parse_spec(revspec.to_str()?, &repo)?.single().map(gix::Id::detach),
++            Some(expected),
++            "{} skips the dangling symbolic ref like Git does",
++            revspec.as_bstr()
++        );
++    }
++    Ok(())
++}
++
+ mod sibling_branch {
+     use crate::{
+         revision::spec::from_bytes::{missing_reference_names, parse_spec, repo},

@@ -1,0 +1,21 @@
+== src
+git:
+refs/remotes/up/main
+@{push}: 8f3b8b089feb23067c46113f8f61265a67eb0eb8
+gix:
+@{push}: 0b41f1b13dc8502a28fb2912ae9f085eb69fc7e7
+exit 1
+== standalone
+git:
+refs/remotes/up/main
+@{push}: 8f3b8b089feb23067c46113f8f61265a67eb0eb8
+gix:
+@{push}: 8f3b8b089feb23067c46113f8f61265a67eb0eb8
+exit 0
+== only014
+git:
+refs/remotes/up/main
+@{push}: 8f3b8b089feb23067c46113f8f61265a67eb0eb8
+gix:
+@{push}: 8f3b8b089feb23067c46113f8f61265a67eb0eb8
+exit 0

@@ -1,0 +1,78 @@
+diff --git a/gix/src/revision/spec/parse/delegate/revision.rs b/gix/src/revision/spec/parse/delegate/revision.rs
+index 8dce95427..b91078dc5 100644
+--- a/gix/src/revision/spec/parse/delegate/revision.rs
++++ b/gix/src/revision/spec/parse/delegate/revision.rs
+@@ -155,6 +155,31 @@ impl delegate::Revision for Delegate<'_> {
+                         }
+                         Ok(())
+                     }
++                    // Like Git, `@{N}` with exactly N entries is the value the oldest entry records before it, if any.
++                    None if platform.rev().ok().flatten().map_or(0, Iterator::count) == no => {
++                        let oldest = platform
++                            .rev()
++                            .ok()
++                            .flatten()
++                            .and_then(|it| it.last())
++                            .and_then(std::result::Result::ok)
++                            .map(|line| line.previous_oid)
++                            .filter(|id| !id.is_null());
++                        match oldest {
++                            Some(id) => {
++                                let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
++                                if !objs.contains(&id) {
++                                    objs.push(id);
++                                }
++                                Ok(())
++                            }
++                            None => Err(message!(
++                                "Reference '{name}' has {no} ref-log entries and entry number {no} is out of range",
++                                name = r.name(),
++                            )
++                            .raise()),
++                        }
++                    }
+                     None => Err(message!(
+                         "Reference '{name}' has {available} ref-log entries and entry number {no} is out of range",
+                         name = r.name(),
+diff --git a/gix/tests/fixtures/make_symbolic_ref_reflogs.sh b/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
+index 109d566a0..0d54cd39f 100755
+--- a/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
++++ b/gix/tests/fixtures/make_symbolic_ref_reflogs.sh
+@@ -15,6 +15,10 @@ git commit -q --allow-empty -m third
+ git symbolic-ref refs/symref refs/heads/main
+ git symbolic-ref refs/symref-chain refs/symref
+ git symbolic-ref refs/heads/symref refs/heads/main
++# A log whose only entry has a previous value: like Git, `@{1}` is that value, and `@{2}` is out of range.
++git branch short HEAD~2
++git update-ref refs/heads/short HEAD
++git reflog delete 'refs/heads/short@{1}'
+ 
+ # Bake Git's object IDs or failure exit codes into the shared revspec baseline format.
+ function baseline() {
+@@ -28,3 +32,6 @@ for name in main refs/symref refs/symref-chain; do
+   done
+ done
+ baseline 'refs/heads/symref@{1}'
++baseline 'main~2'
++baseline 'refs/heads/short@{1}'
++baseline 'refs/heads/short@{2}'
+diff --git a/gix/tests/gix/revision/spec/from_bytes/reflog.rs b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+index 289bc083f..4c0d02fda 100644
+--- a/gix/tests/gix/revision/spec/from_bytes/reflog.rs
++++ b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+@@ -32,6 +32,15 @@ fn symbolic_references_use_their_own_log_or_the_final_targets() -> gix_testtools
+         parse_spec("refs/heads/symref@{1}", &repo).is_err(),
+         "an existing reflog takes precedence over the target's longer log"
+     );
++    assert_eq!(
++        parse_spec("refs/heads/short@{1}", &repo)?.single(),
++        parse_spec("main~2", &repo)?.single(),
++        "like Git, `@{{N}}` with exactly N entries is the previous value of the oldest entry"
++    );
++    assert!(
++        parse_spec("refs/heads/short@{2}", &repo).is_err(),
++        "entries past the previous value of the oldest entry are out of range"
++    );
+     Ok(())
+ }
+ 

@@ -1,0 +1,174 @@
+diff --git a/gix-traverse/src/commit/simple.rs b/gix-traverse/src/commit/simple.rs
+index e67f1e116..e2ca1d72d 100644
+--- a/gix-traverse/src/commit/simple.rs
++++ b/gix-traverse/src/commit/simple.rs
+@@ -152,6 +152,34 @@ fn to_queue_key(i: i64, order: CommitTimeOrder) -> QueueKey<i64> {
+     }
+ }
+ 
++struct Paint {
++    /// The amount of commits painted `VISIBLE` but not `HIDDEN`.
++    visible_only: usize,
++    /// `true` if all painted commits have a generation number, so they are processed in topological order.
++    generation_ordered: bool,
++}
++
++impl Paint {
++    /// Add `flags` to `commit` and return `true` if that changed its flags.
++    fn add(&mut self, commit: &mut gix_revwalk::graph::Commit<PaintFlags>, flags: PaintFlags) -> bool {
++        if (commit.data & flags) == flags {
++            return false;
++        }
++        let is_visible_only = |f: PaintFlags| f & (PaintFlags::VISIBLE | PaintFlags::HIDDEN) == PaintFlags::VISIBLE;
++        let was_visible_only = is_visible_only(commit.data);
++        commit.data |= flags;
++        match (was_visible_only, is_visible_only(commit.data)) {
++            (false, true) => self.visible_only += 1,
++            (true, false) => self.visible_only -= 1,
++            _ => {}
++        }
++        if commit.generation.is_none() {
++            self.generation_ordered = false;
++        }
++        true
++    }
++}
++
+ /// Compute the boundary at which the visible walk must stop because commits become reachable from
+ /// both the visible tips and the hidden tips.
+ ///
+@@ -172,17 +200,25 @@ fn compute_hidden_frontier(
+ ) -> Result<gix_revwalk::graph::IdMap<()>> {
+     let mut graph = gix_revwalk::Graph::<gix_revwalk::graph::Commit<PaintFlags>>::new(objects, cache);
+     let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
++    // Without generation numbers the queue is ordered by commit time, which isn't topological if commit times
++    // are skewed, so commits that are only visible so far may still turn out to be reachable from hidden ones.
++    let mut paint = Paint {
++        visible_only: 0,
++        generation_ordered: true,
++    };
+ 
+     for &visible in visible_tips {
+         graph.get_or_insert_full_commit(visible, |commit| {
+-            commit.data |= PaintFlags::VISIBLE;
+-            queue.insert(GenThenTime::from(&*commit), visible);
++            if paint.add(commit, PaintFlags::VISIBLE) {
++                queue.insert(GenThenTime::from(&*commit), visible);
++            }
+         })?;
+     }
+     for &hidden in hidden_tips {
+         graph.get_or_insert_full_commit(hidden, |commit| {
+-            commit.data |= PaintFlags::HIDDEN;
+-            queue.insert(GenThenTime::from(&*commit), hidden);
++            if paint.add(commit, PaintFlags::HIDDEN) {
++                queue.insert(GenThenTime::from(&*commit), hidden);
++            }
+         })?;
+     }
+ 
+@@ -190,7 +226,8 @@ fn compute_hidden_frontier(
+         graph
+             .get(id)
+             .is_some_and(|commit| !commit.data.contains(PaintFlags::STALE))
+-    }) {
++    }) || (!paint.generation_ordered && paint.visible_only != 0)
++    {
+         let (_info, commit_id) = match queue.pop() {
+             Some(v) => v,
+             None => break,
+@@ -203,8 +240,7 @@ fn compute_hidden_frontier(
+ 
+         for parent_id in commit.parents.clone() {
+             graph.get_or_insert_full_commit(parent_id, |parent| {
+-                if (parent.data & flags) != flags {
+-                    parent.data |= flags;
++                if paint.add(parent, flags) {
+                     queue.insert(GenThenTime::from(&*parent), parent_id);
+                 }
+             })?;
+diff --git a/gix-traverse/tests/fixtures/make_repo_with_skewed_dates.sh b/gix-traverse/tests/fixtures/make_repo_with_skewed_dates.sh
+new file mode 100755
+index 000000000..0da83cca9
+--- /dev/null
++++ b/gix-traverse/tests/fixtures/make_repo_with_skewed_dates.sh
+@@ -0,0 +1,37 @@
++#!/usr/bin/env bash
++set -eu -o pipefail
++
++function commit_at() {
++  local message=${1:?first argument is the commit message}
++  local timestamp=${2:?second argument is the timestamp}
++  GIT_COMMITTER_DATE="$timestamp -0700"
++  GIT_AUTHOR_DATE="$timestamp -0700"
++  export GIT_COMMITTER_DATE GIT_AUTHOR_DATE
++  git commit -q --allow-empty -m "$message"
++  git tag "$message"
++}
++
++# Linear history whose commit times aren't monotonic:
++#   root(2) <- skewed(0) <- visible(3) <- hidden(4)
++# Both `root` and `visible` are reachable from `hidden`.
++(git init -q linear && cd linear
++  commit_at root 1112911992
++  commit_at skewed 1112911990
++  commit_at visible 1112911993
++  commit_at hidden 1112911994
++  git commit-graph write --no-progress --reachable
++)
++
++# The visible-only commits `root` and `tip-a` are reachable from `hidden` only through commits
++# that are older than all visible commits:
++#   root(10) <- tip-a(11) <- b(12) <- skewed(0) <- hidden(1) <- x(2) <- tip-b(3)
++(git init -q unseen && cd unseen
++  commit_at root 1112912010
++  commit_at tip-a 1112912011
++  commit_at b 1112912012
++  commit_at skewed 1112912000
++  commit_at hidden 1112912001
++  commit_at x 1112912002
++  commit_at tip-b 1112912003
++  git commit-graph write --no-progress --reachable
++)
+diff --git a/gix-traverse/tests/traverse/commit/simple/hide.rs b/gix-traverse/tests/traverse/commit/simple/hide.rs
+index 40622102e..78d73130b 100644
+--- a/gix-traverse/tests/traverse/commit/simple/hide.rs
++++ b/gix-traverse/tests/traverse/commit/simple/hide.rs
+@@ -323,3 +323,37 @@ impl gix_object::Find for CountingFind<'_> {
+         gix_object::Find::try_find(self.inner, id, buffer)
+     }
+ }
++
++#[test]
++fn skewed_commit_times_do_not_leak_ancestors_of_hidden_tips() -> gix_testtools::TestResult {
++    for (repo_name, tips, hidden) in [
++        ("linear", ["visible", "root"], "hidden"),
++        ("unseen", ["tip-b", "tip-a"], "hidden"),
++    ] {
++        let (repo_dir, odb) = named_fixture("make_repo_with_skewed_dates.sh", repo_name)?;
++        let id = |name: &str| -> Result<ObjectId> { Ok(git_rev_list(&repo_dir, &["-1", name])?[0]) };
++        let tip_ids = [id(tips[0])?, id(tips[1])?];
++        let hidden_id = id(hidden)?;
++        let mut expected = git_rev_list(&repo_dir, &[tips[0], tips[1], "--not", hidden])?;
++        expected.sort();
++
++        for use_graph in [false, true] {
++            for sorting in all_sortings() {
++                let graph = use_graph.then(|| commit_graph(odb.store_ref())).flatten();
++                let mut result: Vec<_> = Simple::new(tip_ids, &odb)
++                    .sorting(sorting)?
++                    .parents(Parents::All)
++                    .commit_graph(graph)
++                    .hide([hidden_id])?
++                    .map(|res| res.map(|info| info.id))
++                    .collect::<std::result::Result<Vec<_>, _>>()?;
++                result.sort();
++                assert_eq!(
++                    result, expected,
++                    "repo = {repo_name}, sorting = {sorting:?}, commit-graph = {use_graph}"
++                );
++            }
++        }
++    }
++    Ok(())
++}

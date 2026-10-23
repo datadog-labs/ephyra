@@ -1,0 +1,80 @@
+diff --git a/gix/src/revision/spec/parse/delegate/revision.rs b/gix/src/revision/spec/parse/delegate/revision.rs
+index 8dce95427..3b1c67341 100644
+--- a/gix/src/revision/spec/parse/delegate/revision.rs
++++ b/gix/src/revision/spec/parse/delegate/revision.rs
+@@ -203,7 +203,8 @@ impl delegate::Revision for Delegate<'_> {
+             Some((ref_name, id)) => {
+                 let id = match self.repo.find_reference(ref_name.as_bstr()) {
+                     Ok(mut r) => {
+-                        let id = r.peel_to_id().map_or(id, crate::Id::detach);
++                        // Like `git rev-parse <branch>`, resolve the name to the object it points to without peeling tags.
++                        let id = r.follow_to_object().map_or(id, crate::Id::detach);
+                         self.refs[self.idx] = Some(r.detach());
+                         id
+                     }
+diff --git a/gix/tests/fixtures/generated-archives/.gitignore b/gix/tests/fixtures/generated-archives/.gitignore
+index e0cec4f40..00aff28b3 100644
+--- a/gix/tests/fixtures/generated-archives/.gitignore
++++ b/gix/tests/fixtures/generated-archives/.gitignore
+@@ -60,6 +60,7 @@
+ # Generate this small tracking-selector fixture, including its Git baseline.
+ /make_tracking_branch_revspecs.tar
+ /make_tracking_branch_revspecs_sha256.tar
++/make_prior_checkout_annotated_tag.tar
+ # Generate this small uninitialized-submodule fixture instead of storing its archives.
+ /make_uninitialized_submodule.tar
+ /make_uninitialized_submodule_sha256.tar
+diff --git a/gix/tests/fixtures/make_prior_checkout_annotated_tag.sh b/gix/tests/fixtures/make_prior_checkout_annotated_tag.sh
+new file mode 100755
+index 000000000..74622c7af
+--- /dev/null
++++ b/gix/tests/fixtures/make_prior_checkout_annotated_tag.sh
+@@ -0,0 +1,14 @@
++#!/usr/bin/env bash
++set -eu -o pipefail
++
++# A previous checkout name that now names an annotated tag resolves to the tag object, like `git rev-parse main`.
++git init -q -b main
++git commit -q --allow-empty -m initial
++git checkout -q -b topic
++git branch -q -D main
++git tag -a -m tag main HEAD
++
++for revspec in @{-1} @{-1}^{} main; do
++  printf '%s\n' "$revspec" >>baseline.git
++  git rev-parse --verify "$revspec" >>baseline.git
++done
+diff --git a/gix/tests/gix/revision/spec/from_bytes/reflog.rs b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+index 289bc083f..43f22094a 100644
+--- a/gix/tests/gix/revision/spec/from_bytes/reflog.rs
++++ b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+@@ -1,4 +1,4 @@
+-use gix::{prelude::ObjectIdExt, revision::Spec};
++use gix::{bstr::ByteSlice, prelude::ObjectIdExt, revision::Spec};
+ use gix_testtools::TestResult;
+ 
+ use crate::{
+@@ -58,6 +58,23 @@ fn nth_prior_checkout() {
+     "#);
+ }
+ 
++#[test]
++fn nth_prior_checkout_to_annotated_tag_is_not_peeled() -> TestResult {
++    let fixture = gix_testtools::scripted_fixture_read_only("make_prior_checkout_annotated_tag.sh")?;
++    let repo = gix::open_opts(fixture.clone(), crate::restricted())?;
++    let baseline = std::fs::read(fixture.join("baseline.git"))?;
++    let mut lines = baseline.lines();
++    while let (Some(revspec), Some(id)) = (lines.next(), lines.next()) {
++        assert_eq!(
++            parse_spec(revspec.to_str()?, &repo)?.single().map(gix::Id::detach),
++            Some(gix::ObjectId::from_hex(id)?),
++            "{} resolves like Git does",
++            revspec.as_bstr()
++        );
++    }
++    Ok(())
++}
++
+ #[test]
+ fn nth_prior_checkout_to_deleted_branch_fails_like_git() -> TestResult {
+     let repo = repo("deleted_prior_checkout")?;

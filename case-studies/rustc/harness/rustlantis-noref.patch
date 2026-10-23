@@ -1,0 +1,32 @@
+diff --git a/generate/src/generation/mod.rs b/generate/src/generation/mod.rs
+index 801b237..b0d7229 100644
+--- a/generate/src/generation/mod.rs
++++ b/generate/src/generation/mod.rs
+@@ -339,7 +339,11 @@ impl GenerationCtx {
+             TyKind::RawPtr(ty, mutability) => (ty, mutability),
+             _ => return Err(SelectionError::Exhausted),
+         };
+-        let (candidates, weights) = PlaceSelector::for_pointee(self.tcx.clone(), true)
++        // ephyra harness: only take the address of initialized places. Under the RFC 3943
++        // local-lifetime semantics (-Zmir-move-elimination) a local is unallocated until it is
++        // written directly, and "Any use of the local that doesn't initialize it, even taking
++        // its address, is UB if the local is unallocated."
++        let (candidates, weights) = PlaceSelector::for_pointee(self.tcx.clone(), false)
+             .of_ty(*source_ty)
+             .except(lhs)
+             .into_weighted(&self.pt)
+diff --git a/generate/src/ty.rs b/generate/src/ty.rs
+index 71d6df0..a6a8fd0 100644
+--- a/generate/src/ty.rs
++++ b/generate/src/ty.rs
+@@ -120,7 +120,9 @@ fn new_composite(tcx: &mut TyCtxt, rng: &mut impl Rng) {
+                 Mutability::Not
+             },
+         ),
+-        2 => TyKind::Ref(
++        // ephyra harness: no references, only raw pointers (the generator's reference aliasing
++        // tracking produces Stacked/Tree Borrows UB; raw pointers carry no aliasing assumptions)
++        2 => TyKind::RawPtr(
+             tcx.indices()
+                 .filter(|ty| *ty != TyCtxt::UNIT)
+                 .choose(rng)

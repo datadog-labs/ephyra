@@ -1,0 +1,43 @@
+diff --git a/gix-dir/src/walk/classify.rs b/gix-dir/src/walk/classify.rs
+index 2184faf62..c6d08cc07 100644
+--- a/gix-dir/src/walk/classify.rs
++++ b/gix-dir/src/walk/classify.rs
+@@ -212,7 +212,10 @@ pub fn path(
+     }
+ 
+     let maybe_status = if property.is_none() {
+-        (index_kind.map(|k| k.is_dir()) == kind.map(|k| k.is_dir())).then_some(entry::Status::Tracked)
++        // A gitlink in the index keeps its path tracked even if a file or symlink replaced its checkout.
++        (index_kind.map(|k| k.is_dir()) == kind.map(|k| k.is_dir())
++            || (index_kind == Some(entry::Kind::Repository) && kind.is_some_and(|k| !k.is_dir())))
++        .then_some(entry::Status::Tracked)
+     } else {
+         out.property = property;
+         Some(entry::Status::Pruned)
+diff --git a/gix-dir/tests/dir/walk.rs b/gix-dir/tests/dir/walk.rs
+index a71253fdf..b0f7b0d22 100644
+--- a/gix-dir/tests/dir/walk.rs
++++ b/gix-dir/tests/dir/walk.rs
+@@ -317,7 +317,7 @@ fn assume_unchanged_submodule_replaced_with_symlink_is_hidden() -> TestResult {
+ 
+ #[test]
+ #[cfg(unix)]
+-fn submodule_replaced_with_symlink_without_assume_unchanged_is_untracked() -> TestResult {
++fn submodule_replaced_with_symlink_without_assume_unchanged_stays_tracked() -> TestResult {
+     let root = fixture_in("many-symlinks", "submodule-symlink");
+     let ((out, _root), entries) = try_collect_filtered_opts_collect(
+         &root,
+@@ -338,10 +338,9 @@ fn submodule_replaced_with_symlink_without_assume_unchanged_is_untracked() -> Te
+             seen_entries: 3,
+         }
+     );
+-    assert_eq!(
+-        entries,
+-        [entry("sub", Untracked, Symlink).with_index_kind(Repository)],
+-        "without assume-unchanged, the replaced submodule appears as an untracked symlink"
++    assert!(
++        entries.is_empty(),
++        "the gitlink in the index keeps the path tracked, like `git ls-files -o`, even though a symlink replaced it"
+     );
+     Ok(())
+ }

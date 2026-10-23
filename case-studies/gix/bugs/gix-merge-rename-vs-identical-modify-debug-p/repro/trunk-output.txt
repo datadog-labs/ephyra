@@ -1,0 +1,14 @@
+git version 2.56.0
+== git merge-tree main side
+100644 blob b414108e81e5091fe0974a1858b4d0d22b107f70	c
+git exit status: 0 (0 = clean)
+== gix merge_commits(main, side)
+
+thread 'main' (254) panicked at gitoxide/gix-merge/src/tree/utils.rs:138:9:
+assertion `left != right` failed: BUG: we must think anything has to be merged if the modes and the ids are the same
+  left: EntryMode(0o100644)
+ right: EntryMode(0o100644)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+gix exit status: 101
+exit 1

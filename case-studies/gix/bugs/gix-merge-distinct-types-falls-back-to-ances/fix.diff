@@ -1,0 +1,347 @@
+diff --git a/gix-merge/src/tree/function/resolve.rs b/gix-merge/src/tree/function/resolve.rs
+index 9d111336f..a0cf570f8 100644
+--- a/gix-merge/src/tree/function/resolve.rs
++++ b/gix-merge/src/tree/function/resolve.rs
+@@ -1985,6 +1985,174 @@ pub fn tree<'objects>(
+                                     }
+                                 }
+                             }
++                            // Both sides changed one path to distinct non-tree types that the arms above don't handle.
++                            // Like merge-ort, keep a non-regular entry in place and move a regular file to a unique
++                            // path, or move both if neither is a regular file. For example, ours turns the file `a`
++                            // into a gitlink while theirs edits it, or both add `a`, once as gitlink and once as symlink.
++                            (
++                                Change::Addition {
++                                    location,
++                                    entry_mode: our_mode,
++                                    id: our_id,
++                                    ..
++                                }
++                                | Change::Modification {
++                                    location,
++                                    entry_mode: our_mode,
++                                    id: our_id,
++                                    ..
++                                },
++                                Change::Addition {
++                                    entry_mode: their_mode,
++                                    id: their_id,
++                                    ..
++                                }
++                                | Change::Modification {
++                                    entry_mode: their_mode,
++                                    id: their_id,
++                                    ..
++                                },
++                            ) if std::mem::discriminant(ours) == std::mem::discriminant(theirs)
++                                && location == theirs.location()
++                                && !our_mode.is_tree()
++                                && !their_mode.is_tree()
++                                && merge_modes(*our_mode, *their_mode).is_none() =>
++                            {
++                                let location = location.clone();
++                                let (our_entry, their_entry) = ((*our_mode, *our_id), (*their_mode, *their_id));
++                                let base_entry = match ours {
++                                    Change::Modification {
++                                        previous_entry_mode,
++                                        previous_id,
++                                        ..
++                                    } => Some((*previous_entry_mode, *previous_id)),
++                                    _ => None,
++                                };
++                                // Each moved entry is `(entry, its side, its unique location)`.
++                                let (staying, moved, conflict) = if our_entry.0.is_blob() || their_entry.0.is_blob() {
++                                    // Keep the non-regular entry at `location` and move the regular file, along with the
++                                    // base entry it derives from.
++                                    let (logical_side, label_of_side_to_be_moved, staying, moving) =
++                                        if our_entry.0.is_blob() {
++                                            (Swapped, labels.current.unwrap_or_default(), their_entry, our_entry)
++                                        } else {
++                                            (Original, labels.other.unwrap_or_default(), our_entry, their_entry)
++                                        };
++                                    let renamed_location = unique_path_in_tree(
++                                        location.as_bstr(),
++                                        &editor,
++                                        pick(logical_side, their_tree, our_tree),
++                                        label_of_side_to_be_moved,
++                                    )?;
++                                    let conflict = Conflict::without_resolution(
++                                        ResolutionFailure::OursAddedTheirsAddedTypeMismatch {
++                                            their_unique_location: renamed_location.clone(),
++                                        },
++                                        (ours, theirs, logical_side, outer_side),
++                                        [
++                                            base_entry.and_then(|(mode, id)| {
++                                                index_entry_at_path(
++                                                    &mode,
++                                                    &id,
++                                                    ConflictIndexEntryPathHint::RenamedOrTheirs,
++                                                )
++                                            }),
++                                            index_entry_at_path(
++                                                &staying.0,
++                                                &staying.1,
++                                                ConflictIndexEntryPathHint::Current,
++                                            ),
++                                            index_entry_at_path(
++                                                &moving.0,
++                                                &moving.1,
++                                                ConflictIndexEntryPathHint::RenamedOrTheirs,
++                                            ),
++                                        ],
++                                    );
++                                    let moved_side = logical_side.swapped();
++                                    (Some(staying), vec![(moving, moved_side, renamed_location)], conflict)
++                                } else {
++                                    // Neither is a regular file, e.g. a symlink and a gitlink: move both.
++                                    let our_unique_location = unique_path_in_tree(
++                                        location.as_bstr(),
++                                        &editor,
++                                        our_tree,
++                                        labels.current.unwrap_or_default(),
++                                    )?;
++                                    let their_unique_location = unique_path_in_tree(
++                                        location.as_bstr(),
++                                        &editor,
++                                        their_tree,
++                                        labels.other.unwrap_or_default(),
++                                    )?;
++                                    let conflict = Conflict::without_resolution(
++                                        ResolutionFailure::OursTheirsTypeMismatchBothRenamed {
++                                            our_unique_location: our_unique_location.clone(),
++                                            their_unique_location: their_unique_location.clone(),
++                                        },
++                                        (ours, theirs, Original, outer_side),
++                                        [
++                                            None,
++                                            index_entry_at_path(
++                                                &our_entry.0,
++                                                &our_entry.1,
++                                                ConflictIndexEntryPathHint::Current,
++                                            ),
++                                            index_entry_at_path(
++                                                &their_entry.0,
++                                                &their_entry.1,
++                                                ConflictIndexEntryPathHint::RenamedOrTheirs,
++                                            ),
++                                        ],
++                                    );
++                                    (
++                                        None,
++                                        vec![
++                                            (our_entry, Original, our_unique_location),
++                                            (their_entry, Swapped, their_unique_location),
++                                        ],
++                                        conflict,
++                                    )
++                                };
++                                let mut conflict = conflict;
++                                match resolve_tree_conflicts {
++                                    None => {
++                                        match staying {
++                                            Some((mode, id)) => editor.upsert(toc(&location), mode.kind(), id)?,
++                                            None => editor.remove_if_leaf(toc(&location))?,
++                                        };
++                                        for ((mode, id), side, unique_location) in moved {
++                                            pick_mut(side, our_tree, their_tree).remove_change(location.as_bstr());
++                                            push_deferred(
++                                                (
++                                                    Change::Addition {
++                                                        location: unique_location,
++                                                        relation: None,
++                                                        entry_mode: mode,
++                                                        id,
++                                                    },
++                                                    None,
++                                                ),
++                                                pick_mut(side, our_changes, their_changes),
++                                            );
++                                        }
++                                    }
++                                    Some(ResolveWith::Ours) => {
++                                        conflict.entries = Default::default();
++                                        let (mode, id) = match outer_side {
++                                            Original => our_entry,
++                                            Swapped => their_entry,
++                                        };
++                                        editor.upsert(toc(&location), mode.kind(), id)?;
++                                    }
++                                    Some(ResolveWith::Ancestor) => {
++                                        conflict.entries = Default::default();
++                                    }
++                                }
++                                if should_fail_on_conflict(conflict) {
++                                    break 'outer;
++                                }
++                            }
+                             // Defensive, best-effort fallback for a concrete pair without a specialized resolution.
+                             // Leave the ancestor in place by default, or apply ours if explicitly requested, and record
+                             // `Unknown` instead of aborting the merge. Log it so a tested combination can gain an explicit
+diff --git a/gix-merge/src/tree/mod.rs b/gix-merge/src/tree/mod.rs
+index 6cc6306d3..2051af61b 100644
+--- a/gix-merge/src/tree/mod.rs
++++ b/gix-merge/src/tree/mod.rs
+@@ -309,6 +309,7 @@ impl Conflict {
+                     renamed_unique_path_to_modified_blob: _,
+                 }
+                 | ResolutionFailure::OursAddedTheirsAddedTypeMismatch { .. }
++                | ResolutionFailure::OursTheirsTypeMismatchBothRenamed { .. }
+                 | ResolutionFailure::OursDeletedTheirsRenamed => None,
+             }
+         }
+@@ -394,13 +395,22 @@ pub enum ResolutionFailure {
+         /// The non-conflicting path of *their* non-tree entry.
+         renamed_unique_path_of_theirs: BString,
+     },
+-    /// *ours* was added (or renamed into place) with a different mode than theirs, e.g. blob and symlink, and we kept
+-    /// the symlink in its original location, renaming the other side to `their_unique_location`.
++
++    /// *ours* was added (or renamed into place, or modified) with a different type than theirs, e.g. blob and symlink,
++    /// and we kept the non-blob in its original location, renaming the other side to `their_unique_location`.
+     OursAddedTheirsAddedTypeMismatch {
+         /// The location at which *their* state was placed to resolve the name and type clash, named to indicate
+         /// where the entry is coming from.
+         their_unique_location: BString,
+     },
++    /// *ours* and *theirs* changed the same path to distinct types that are both not regular files, e.g. a symlink and a
++    /// submodule, so like Git, both were moved to `our_unique_location` and `their_unique_location` respectively.
++    OursTheirsTypeMismatchBothRenamed {
++        /// The location at which *our* state was placed, named to indicate where the entry is coming from.
++        our_unique_location: BString,
++        /// The location at which *their* state was placed, named to indicate where the entry is coming from.
++        their_unique_location: BString,
++    },
+     /// *ours* was modified, and they renamed the same file, but there is also a non-mergable type-change.
+     /// Here we keep both versions of the file.
+     OursModifiedTheirsRenamedTypeMismatch,
+@@ -564,6 +574,10 @@ pub mod apply_index_entries {
+                         ResolutionFailure::OursAddedTheirsAddedTypeMismatch { their_unique_location } => {
+                             (Some(their_unique_location.as_bstr()), conflict.ours.location())
+                         }
++                        ResolutionFailure::OursTheirsTypeMismatchBothRenamed {
++                            our_unique_location,
++                            their_unique_location,
++                        } => (Some(their_unique_location.as_bstr()), our_unique_location.as_bstr()),
+                     },
+                 };
+                 let source_path = conflict.ours.source_location();
+diff --git a/gix-merge/tests/fixtures/tree-baseline.sh b/gix-merge/tests/fixtures/tree-baseline.sh
+index 4c2c27891..6022f9b61 100755
+--- a/gix-merge/tests/fixtures/tree-baseline.sh
++++ b/gix-merge/tests/fixtures/tree-baseline.sh
+@@ -1398,6 +1398,86 @@ EOF
+   make_conflict_index submodule-both-modify-A-B-reversed
+ )
+ 
++git init modify-vs-type-change-to-gitlink
++(cd modify-vs-type-change-to-gitlink
++  write_lines 1 >a
++  git add . && git commit -m "original file"
++  gitlink="$(git rev-parse HEAD)"
++
++  git branch A
++  git branch B
++
++  # A turns the file into a gitlink while B edits it: Git keeps the gitlink at `a` and moves the
++  # edited file to `a~B` ("distinct types").
++  git checkout A
++  git rm -q --cached a && rm a
++  git update-index --add --cacheinfo "160000,$gitlink,a"
++  git commit -m "file to gitlink"
++
++  git checkout B
++  write_lines 2 >a
++  git commit -am "edit file"
++)
++
++git init modify-vs-type-change-to-symlink
++(cd modify-vs-type-change-to-symlink
++  write_lines 1 >a
++  git add . && git commit -m "original file"
++
++  git branch A
++  git branch B
++
++  # A turns the file into a symlink while B edits it: Git keeps the symlink at `a` and moves the
++  # edited file to `a~B`.
++  git checkout A
++  rm a && ln -s target a
++  git add a && git commit -m "file to symlink"
++
++  git checkout B
++  write_lines 2 >a
++  git commit -am "edit file"
++)
++
++git init type-change-to-symlink-vs-gitlink
++(cd type-change-to-symlink-vs-gitlink
++  write_lines 1 >a
++  git add . && git commit -m "original file"
++  gitlink="$(git rev-parse HEAD)"
++
++  git branch A
++  git branch B
++
++  # Neither side keeps a regular file, so Git moves both to `a~A` and `a~B`.
++  git checkout A
++  rm a && ln -s target a
++  git add a && git commit -m "file to symlink"
++
++  git checkout B
++  git rm -q --cached a && rm a
++  git update-index --add --cacheinfo "160000,$gitlink,a"
++  git commit -m "file to gitlink"
++)
++
++git init added-file-vs-added-gitlink
++(cd added-file-vs-added-gitlink
++  write_lines base >base
++  git add . && git commit -m "base"
++  gitlink="$(git rev-parse HEAD)"
++
++  git branch A
++  git branch B
++
++  # A adds a file and B adds a gitlink at the same path: Git keeps the gitlink at `d/f` and moves the
++  # file to `d/f~A`.
++  git checkout A
++  mkdir d && write_lines A >d/f
++  git add . && git commit -m "add file"
++
++  git checkout B
++  git update-index --add --cacheinfo "160000,$gitlink,d/f"
++  git commit -m "add gitlink"
++)
++
+ git init gitlink-replaced-by-files
+ (cd gitlink-replaced-by-files
+   git commit --allow-empty -m "seed commit"
+@@ -2296,6 +2376,10 @@ baseline identical-additions-with-different-relations A-B A B
+ baseline identical-deletions-with-different-relations A-B A B
+ baseline identical-rewrites-with-different-relations A-B A B
+ baseline type-change-to-symlink A-B A B
++baseline modify-vs-type-change-to-gitlink A-B A B
++baseline modify-vs-type-change-to-symlink A-B A B
++baseline type-change-to-symlink-vs-gitlink A-B A B
++baseline added-file-vs-added-gitlink A-B A B
+ 
+ ##
+ ## Only once the tree-merges were performed can we refer to their objects
+diff --git a/gix-merge/tests/merge/tree/mod.rs b/gix-merge/tests/merge/tree/mod.rs
+index 290864782..ae1b77a43 100644
+--- a/gix-merge/tests/merge/tree/mod.rs
++++ b/gix-merge/tests/merge/tree/mod.rs
+@@ -223,11 +223,11 @@ fn run_baseline() -> TestResult {
+     }
+ 
+     assert_eq!(
+-        actual_cases, 177,
++        actual_cases, 185,
+         "BUG: update this number, and don't forget to remove a filter in the end"
+     );
+     assert_eq!(
+-        skipped_tree_resolve_cases, 154,
++        skipped_tree_resolve_cases, 170,
+         "this is done when no case is skipped, and we don't want to accidentally skip them.\
+         Some don't actually have conflicts.\
+         The ones we skipped don't have irreconcilable conflicts"

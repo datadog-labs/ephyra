@@ -1,0 +1,122 @@
+diff --git a/gix/src/revision/spec/parse/delegate/revision.rs b/gix/src/revision/spec/parse/delegate/revision.rs
+index 8dce95427..577131eb4 100644
+--- a/gix/src/revision/spec/parse/delegate/revision.rs
++++ b/gix/src/revision/spec/parse/delegate/revision.rs
+@@ -15,6 +15,40 @@ use crate::{
+     revision::spec::parse::{Delegate, RefsHint},
+ };
+ 
++impl Delegate<'_> {
++    fn is_dangling_symref(&self, r: &gix_ref::Reference) -> bool {
++        matches!(r.target, gix_ref::Target::Symbolic(_)) && r.clone().attach(self.repo).follow_to_object().is_err()
++    }
++
++    /// Like `git`, skip a dangling (or looping) symbolic ref matched by `name` and continue with the
++    /// remaining lookup rules after `matched`, returning the first one that resolves.
++    fn find_ref_after_dangling(&self, name: &BStr, matched: &BStr) -> Option<gix_ref::Reference> {
++        if name.starts_with(b"refs/") {
++            return None;
++        }
++        let candidates = ["refs/", "refs/tags/", "refs/heads/", "refs/remotes/"]
++            .iter()
++            .map(|prefix| {
++                let mut full = BString::from(*prefix);
++                full.extend_from_slice(name);
++                full
++            })
++            .chain(Some({
++                let mut full = BString::from("refs/remotes/");
++                full.extend_from_slice(name);
++                full.extend_from_slice(b"/HEAD");
++                full
++            }));
++        candidates
++            .skip_while(|full| full.as_bstr() != matched)
++            .skip(1)
++            .find_map(|full| {
++                let r = self.repo.refs.try_find(full.as_bstr()).ok()??;
++                (r.name.as_bstr() == full.as_bstr() && !self.is_dangling_symref(&r)).then_some(r)
++            })
++    }
++}
++
+ impl delegate::Revision for Delegate<'_> {
+     fn find_ref(&mut self, name: &BStr) -> Result<()> {
+         self.unset_disambiguate_call();
+@@ -201,8 +235,24 @@ impl delegate::Revision for Delegate<'_> {
+         let ok = prior_checkouts_iter(&mut head.log_iter()).map(|mut it| it.nth(branch_no.saturating_sub(1)))?;
+         match ok {
+             Some((ref_name, id)) => {
+-                let id = match self.repo.find_reference(ref_name.as_bstr()) {
+-                    Ok(mut r) => {
++                let found = self.repo.find_reference(ref_name.as_bstr()).map(|r| {
++                    if self.is_dangling_symref(&r.inner) {
++                        // Like `git`, skip a dangling symbolic ref matched by the name; nothing resolving is an error,
++                        // not the object the reflog recorded at checkout time.
++                        self.find_ref_after_dangling(ref_name.as_bstr(), r.name().as_bstr())
++                            .map(|next| next.attach(self.repo))
++                    } else {
++                        Some(r)
++                    }
++                });
++                let id = match found {
++                    Ok(None) => {
++                        bail!(
++                            "Previous checkout '{name}' does not resolve to an existing revision",
++                            name = ref_name.as_bstr()
++                        );
++                    }
++                    Ok(Some(mut r)) => {
+                         let id = r.peel_to_id().map_or(id, crate::Id::detach);
+                         self.refs[self.idx] = Some(r.detach());
+                         id
+diff --git a/gix/tests/fixtures/make_rev_spec_parse_repos.sh b/gix/tests/fixtures/make_rev_spec_parse_repos.sh
+index 7f9547c34..3a179290b 100755
+--- a/gix/tests/fixtures/make_rev_spec_parse_repos.sh
++++ b/gix/tests/fixtures/make_rev_spec_parse_repos.sh
+@@ -489,6 +489,22 @@ git init deleted_prior_checkout_named_like_object
+   baseline "@{-1}"
+ )
+ 
++git init deleted_prior_checkout_dangling_symref
++(
++  cd deleted_prior_checkout_dangling_symref
++  tick
++
++  git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
++  git commit --allow-empty -m c1
++  git checkout -b origin
++  git checkout main
++  git branch -D origin
++
++  # The previous checkout name now only matches the dangling symbolic ref
++  # `refs/remotes/origin/HEAD`, which Git skips, so it rejects `@{-1}`.
++  baseline "@{-1}"
++)
++
+ git init new
+ (cd new
+   baseline '@{1}'
+diff --git a/gix/tests/gix/revision/spec/from_bytes/reflog.rs b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+index 289bc083f..0183de27f 100644
+--- a/gix/tests/gix/revision/spec/from_bytes/reflog.rs
++++ b/gix/tests/gix/revision/spec/from_bytes/reflog.rs
+@@ -81,6 +81,18 @@ fn nth_prior_checkout_to_deleted_branch_named_like_object_matches_git() -> TestR
+     Ok(())
+ }
+ 
++#[test]
++fn nth_prior_checkout_to_dangling_symref_fails_like_git() -> TestResult {
++    let repo = repo("deleted_prior_checkout_dangling_symref")?;
++    let err = parse_spec("@{-1}", &repo).expect_err("a dangling symref must not resolve to the reflog's object id");
++    insta::assert_debug_snapshot!(err.probable_cause(), "error should explain that the reflog name no longer resolves", @r#"
++    Message {
++        message: "Previous checkout 'origin' does not resolve to an existing revision",
++    }
++    "#);
++    Ok(())
++}
++
+ #[test]
+ fn by_index_unborn_head() {
+     let repo = &repo("new").unwrap();

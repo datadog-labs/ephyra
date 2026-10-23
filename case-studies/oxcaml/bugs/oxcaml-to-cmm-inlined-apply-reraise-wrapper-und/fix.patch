@@ -1,0 +1,96 @@
+From 5a11eb299d6daeadfb7518d31f4073cbb07cd9ad Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Thu, 22 Oct 2026 12:46:46 -0400
+Subject: [PATCH] to_cmm: do not inline calls wrapped to reraise with extra
+ args
+
+When the exception continuation of an Apply takes extra arguments,
+translate_apply wraps the call in a trap whose handler reraises the
+exception with these arguments, relying on the call staying under the
+trap of that continuation. With -Oclassic
+-flambda2-expert-inline-effects-in-cmm, the result of such a call could
+be substituted into the argument of another call that is itself
+wrapped, e.g. [h x] in
+
+  let f g h x = let r = ref x in try g (h x) with _ -> !r
+
+The reraise then targeted the wrapper of [g], which takes no extra
+arguments, and ocamlopt failed with Invalid_argument("Array.iter2")
+in Cfg_selectgen.emit_expr_raise.
+
+Bind the result of such calls with Do_not_inline, as without the flag.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ middle_end/flambda2/to_cmm/to_cmm_expr.ml     | 20 +++++++++++---
+ .../inline_effects_in_cmm_reraise_wrapper.ml  | 27 +++++++++++++++++++
+ 2 files changed, 43 insertions(+), 4 deletions(-)
+ create mode 100644 testsuite/tests/flambda2/inline_effects_in_cmm_reraise_wrapper.ml
+
+diff --git a/middle_end/flambda2/to_cmm/to_cmm_expr.ml b/middle_end/flambda2/to_cmm/to_cmm_expr.ml
+index 9071493277..1988fcd6de 100644
+--- a/middle_end/flambda2/to_cmm/to_cmm_expr.ml
++++ b/middle_end/flambda2/to_cmm/to_cmm_expr.ml
+@@ -1128,10 +1128,22 @@ and apply_expr env res apply =
+         let param_var, param_uid = Bound_parameter.var_and_uid param in
+         let var = Bound_var.create param_var param_uid Name_mode.normal in
+         let env, res =
+-          Env.bind_variable env res var
+-            ~effects_and_coeffects_of_defining_expr:effs ~defining_expr:call
+-            ~free_vars_of_defining_expr:free_vars
+-            ~num_normal_occurrences_of_bound_vars:handler_params_occurrences
++          if
++            Misc.Stdlib.List.is_empty
++              (Exn_continuation.extra_args (Apply.exn_continuation apply))
++          then
++            Env.bind_variable env res var
++              ~effects_and_coeffects_of_defining_expr:effs ~defining_expr:call
++              ~free_vars_of_defining_expr:free_vars
++              ~num_normal_occurrences_of_bound_vars:handler_params_occurrences
++          else
++            (* [translate_apply] wrapped the call in a trap whose handler
++               reraises to the current exception handler with the extra args.
++               Substituting it under another trap would make that reraise go to
++               the wrong handler, so it must not be inlined. *)
++            Env.bind_variable_to_primitive env res var ~inline:Env.Do_not_inline
++              ~effects_and_coeffects_of_defining_expr:effs
++              ~defining_expr:(Env.simple call free_vars)
+         in
+         let env =
+           Env.set_inlined_debuginfo env handler_body_inlined_debuginfo
+diff --git a/testsuite/tests/flambda2/inline_effects_in_cmm_reraise_wrapper.ml b/testsuite/tests/flambda2/inline_effects_in_cmm_reraise_wrapper.ml
+new file mode 100644
+index 0000000000..35bff9a26a
+--- /dev/null
++++ b/testsuite/tests/flambda2/inline_effects_in_cmm_reraise_wrapper.ml
+@@ -0,0 +1,27 @@
++(* TEST
++   flambda2;
++   ocamlopt_flags += "-Oclassic -flambda2-expert-inline-effects-in-cmm";
++   native;
++*)
++
++(* In classic mode, the handlers below read a mutable variable, so their
++   exception continuations take an extra argument, and each call in the [try]
++   is wrapped in a trap whose handler reraises with that argument. The result
++   of the inner call must not be substituted into the argument of the outer
++   call, inside the trap of the outer call. *)
++
++let[@inline never] f g h x =
++  let r = ref x in
++  try g (h x) with _ -> !r
++
++let[@inline never] f_float g x =
++  let r = ref 0 in
++  r := 1;
++  try g (sin x) with Not_found -> !r
++
++let () =
++  assert (f (fun _ -> raise Exit) succ 41 = 41);
++  assert (f (fun y -> y) (fun _ -> raise Exit) 41 = 41);
++  assert (f (fun y -> y) succ 41 = 42);
++  assert (f_float (fun _ -> raise Not_found) 0.0 = 1);
++  assert (f_float (fun y -> int_of_float (y +. 2.)) 0.0 = 2)
+-- 
+2.56.0
+

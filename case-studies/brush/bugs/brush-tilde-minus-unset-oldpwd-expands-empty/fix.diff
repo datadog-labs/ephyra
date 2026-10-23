@@ -1,0 +1,36 @@
+diff --git a/brush-core/src/expansion.rs b/brush-core/src/expansion.rs
+index 6dff5079..1dac9bf7 100644
+--- a/brush-core/src/expansion.rs
++++ b/brush-core/src/expansion.rs
+@@ -1172,7 +1172,11 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
+                 Ok(self.shell.working_dir().to_string_lossy())
+             }
+             brush_parser::word::TildeExpr::OldWorkingDir => {
+-                if let Some(old_pwd) = self.shell.env_str("OLDPWD") {
++                // Per bash, `~-` is only replaced if OLDPWD is set; a declared-but-unset
++                // OLDPWD (as at startup) leaves the tilde-prefix unchanged.
++                if self.shell.env().is_set("OLDPWD")
++                    && let Some(old_pwd) = self.shell.env_str("OLDPWD")
++                {
+                     Ok(old_pwd)
+                 } else {
+                     Ok(Cow::Borrowed("~-"))
+diff --git a/brush-shell/tests/cases/compat/word_expansion/tilde.yaml b/brush-shell/tests/cases/compat/word_expansion/tilde.yaml
+index be85043e..ca7f40c0 100644
+--- a/brush-shell/tests/cases/compat/word_expansion/tilde.yaml
++++ b/brush-shell/tests/cases/compat/word_expansion/tilde.yaml
+@@ -41,6 +41,14 @@ cases:
+       D=~-
+       echo "~- (without OLDPWD): ${D//${test_root}/TEST_ROOT}"
+ 
++  - name: "Tilde expansion: ~- with declared but unset OLDPWD"
++    stdin: |
++      unset OLDPWD
++      declare -x OLDPWD
++      echo ~- ~-/x
++      OLDPWD=
++      echo "[~-]" "[$(echo ~-)]"
++
+   - name: "Tilde expansion: dir stack"
+     stdin: |
+       test_root=$(pwd)

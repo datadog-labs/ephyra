@@ -1,0 +1,170 @@
+From 83274eda359e6477cd8fb0405e198aa9785e2576 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 21 Oct 2026 09:16:15 -0400
+Subject: [PATCH] fix(core): show an error in a redirected compound command
+ under its redirects
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An expansion error inside a compound command with a redirection, such as
+`{ echo ${x?msg}; } 2>/dev/null`, is written by bash to the group's
+redirected stderr. brush displayed the error in `Program::execute` after
+leaving the compound command, when its redirections no longer applied.
+
+Display the error where the compound command's redirections are in effect,
+and remove the `known_failure` markers from the compat cases that now pass
+("Expansion error in a redirected group" and "A compound command's
+redirection applies to errors in it").
+
+Signed-off-by: Alperen Keleş <alpkeles99@gmail.com>
+Assisted-by: Claude Code:claude-opus-5-5
+---
+ brush-core/src/error.rs                       | 16 ++++++++++++
+ brush-core/src/interp.rs                      | 26 ++++++++++++++++++-
+ brush-core/src/shell/io.rs                    |  3 +++
+ brush-shell/tests/cases/compat/errors.yaml    |  7 ++++-
+ brush-shell/tests/cases/compat/functions.yaml |  1 -
+ 5 files changed, 50 insertions(+), 3 deletions(-)
+
+diff --git a/brush-core/src/error.rs b/brush-core/src/error.rs
+index 6a8c883e..3190db6a 100644
+--- a/brush-core/src/error.rs
++++ b/brush-core/src/error.rs
+@@ -16,6 +16,9 @@ pub struct Error {
+     /// Whether or not the error should be considered a "fatal" error that would
+     /// result in abnormal exit of a non-interactive shell.
+     fatal: bool,
++
++    /// Whether or not the error has already been displayed to the user.
++    reported: bool,
+ }
+ 
+ /// Monolithic error type for the shell
+@@ -401,6 +404,7 @@ where
+         Self {
+             kind: Box::new(convertible_to_kind.into()),
+             fatal: false,
++            reported: false,
+         }
+     }
+ }
+@@ -413,6 +417,18 @@ impl Error {
+         self
+     }
+ 
++    /// Marks this error as already displayed to the user.
++    #[must_use]
++    pub(crate) const fn into_reported(mut self) -> Self {
++        self.reported = true;
++        self
++    }
++
++    /// Returns whether or not this error has already been displayed to the user.
++    pub(crate) const fn is_reported(&self) -> bool {
++        self.reported
++    }
++
+     /// Returns whether or not this error is fatal.
+     pub const fn is_fatal(&self) -> bool {
+         self.fatal
+diff --git a/brush-core/src/interp.rs b/brush-core/src/interp.rs
+index 22ab6d3c..bbbedd07 100644
+--- a/brush-core/src/interp.rs
++++ b/brush-core/src/interp.rs
+@@ -667,6 +667,11 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
+                     }
+                 }
+ 
++                // An error from the body must be reported while this command's redirections are
++                // still in effect (e.g. `{ ...; } 2>/dev/null`), not later by an enclosing
++                // command with the outer stderr.
++                let redirected = redirects.is_some();
++
+                 match pipeline_context.shell {
+                     // An owned shell is a discarded clone, so this stage can run asynchronously.
+                     // That lets the pipeline start readers before writers fill the pipe.
+@@ -681,7 +686,8 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
+                         ))
+                     }
+                     commands::ShellForCommand::ParentShell(shell) => {
+-                        Ok(compound.execute(shell, &params).await?.into())
++                        let result = compound.execute(shell, &params).await;
++                        Ok(report_redirected_error(shell, &params, redirected, result)?.into())
+                     }
+                 }
+             }
+@@ -693,6 +699,24 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::Command {
+     }
+ }
+ 
++/// If `redirected`, displays an error from a compound command using the command's own
++/// (redirected) stderr, and marks it as reported so it is not displayed again as it
++/// propagates.
++fn report_redirected_error(
++    shell: &Shell<impl extensions::ShellExtensions>,
++    params: &ExecutionParameters,
++    redirected: bool,
++    result: Result<ExecutionResult, error::Error>,
++) -> Result<ExecutionResult, error::Error> {
++    match result {
++        Err(err) if redirected => {
++            let _ = shell.display_error(&mut params.stderr(shell), &err);
++            Err(err.into_reported())
++        }
++        other => other,
++    }
++}
++
+ enum WhileOrUntil {
+     While,
+     Until,
+diff --git a/brush-core/src/shell/io.rs b/brush-core/src/shell/io.rs
+index 9e2b9bfa..2a713dc9 100644
+--- a/brush-core/src/shell/io.rs
++++ b/brush-core/src/shell/io.rs
+@@ -81,6 +81,9 @@ impl<SE: extensions::ShellExtensions> crate::Shell<SE> {
+         err: &error::Error,
+     ) -> Result<(), error::Error> {
+         use crate::extensions::ErrorFormatter as _;
++        if err.is_reported() {
++            return Ok(());
++        }
+         let str = self.error_formatter.format_error(err, self);
+         write!(file, "{str}")?;
+ 
+diff --git a/brush-shell/tests/cases/compat/errors.yaml b/brush-shell/tests/cases/compat/errors.yaml
+index 8b6491d8..6afe8e0e 100644
+--- a/brush-shell/tests/cases/compat/errors.yaml
++++ b/brush-shell/tests/cases/compat/errors.yaml
+@@ -453,12 +453,17 @@ cases:
+       [[ $out == *$'\e'* ]] && echo "builtin error: colored" || echo "builtin error: plain"
+ 
+   - name: "Expansion error in a redirected group"
+-    known_failure: true # TODO(errors): the error leaves the group before it's shown, so it's shown on the shell's stderr despite the group's redirect, and the shell exits with status 1 rather than 127
+     stdin: |
+       unset zz
+       { echo "${zz?unset}"; } 2>/dev/null
+       echo "not reached"
+ 
++  - name: "Array subscript error in a redirected group"
++    stdin: |
++      a=(x)
++      { a[-2]=y; } 2>/dev/null
++      echo "status: $?"
++
+   - name: "Builtin diagnostics carry the script location"
+     known_failure: true # TODO(errors): brush prints no "file: line N:" location
+     stdin: |
+diff --git a/brush-shell/tests/cases/compat/functions.yaml b/brush-shell/tests/cases/compat/functions.yaml
+index bf84c57c..cbf061b3 100644
+--- a/brush-shell/tests/cases/compat/functions.yaml
++++ b/brush-shell/tests/cases/compat/functions.yaml
+@@ -239,7 +239,6 @@ cases:
+       echo "after g: $?"
+ 
+   - name: "A compound command's redirection applies to errors in it"
+-    known_failure: true # TODO(errors): an error is reported after the redirections around it are undone
+     stdin: |
+       readonly r=1
+       { r=2; } 2>/dev/null
