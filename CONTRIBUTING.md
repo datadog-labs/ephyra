@@ -44,7 +44,7 @@ feature.
 
 The library is the Cargo workspace at the root (`crates/`). The case studies in
 `case-studies/` are separate crates with their own READMEs and prerequisites;
-some need `case-studies/vendor/fetch.sh` first, or a Turso or Cedar checkout at
+some need `case-studies/sqlite/vendor/fetch.sh` first, or a Turso or Cedar checkout at
 the repository root.
 
 ### Testing and linting your changes
@@ -93,7 +93,7 @@ security vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening a
 public issue.
 
 The bugs that ephyra's case studies found in other projects are under
-`case-studies/bugs/`, each with a link to the report filed upstream; report
+`case-studies/<target>/bugs/`, each with a link to the report filed upstream; report
 problems with those projects to them.
 
 ### Triaging issues

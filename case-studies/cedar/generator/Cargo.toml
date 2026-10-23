@@ -1,0 +1,24 @@
+[package]
+name = "ephyra-cedar"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "A testing engine for Cedar (the Rust implementation), built on ephyra"
+
+[dependencies]
+ephyra = { path = "../../../crates/ephyra" }
+# Cedar, by path (../../cedar, cloned by hand at the revision README.md
+# gives): this crate tests whatever is checked out there.
+cedar-policy = { path = "../../../cedar/cedar-policy" }
+cedar-policy-core = { path = "../../../cedar/cedar-policy-core" }
+
+[features]
+# In-process coverage of Cedar; build with RUSTFLAGS="-C instrument-coverage".
+coverage = ["ephyra/coverage"]
+
+[workspace]
+
+# Generation, shrinking and Cedar are compute-bound, and `ephyra check` builds
+# the debug profile: optimize it.
+[profile.dev]
+opt-level = 2

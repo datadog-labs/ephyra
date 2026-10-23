@@ -1,0 +1,17 @@
+[package]
+name = "ephyra-sql"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "A SQL testing engine for Turso, built as an ephyra loop"
+
+[dependencies]
+# The ephyra checkout, two directories up.
+ephyra = { path = "../../../crates/ephyra" }
+turso_core = "0.8.1"
+# 0.37 bundles SQLite 3.50.2, near the 3.50.4 Turso tracks; see README.md.
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+[features]
+# In-process coverage of turso_core; build with RUSTFLAGS="-C instrument-coverage".
+coverage = ["ephyra/coverage"]

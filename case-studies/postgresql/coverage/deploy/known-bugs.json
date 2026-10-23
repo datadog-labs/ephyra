@@ -1,0 +1,481 @@
+{
+  "schema": "ephyra.postgresql.known-bugs.v1",
+  "about": "Known, unreported or unfixed PostgreSQL bugs the fuzz runner can hit: the one list build-patched.sh and pretriage.py read. Paths are relative to the repository root. fix: how to build PostgreSQL master with the bug fixed. kind core (a full build of the patched tree) or contrib (only contrib/<dir> rebuilt via PGXS against a copy of the master install); sources: the patch, first available wins: {path, strip} a file applied as `patch -p<strip> -d <tree>`, or {git: {base, head}} the diff of two commits of the PostgreSQL clone; obtain: how to get a source that is not saved locally; optional: built only with build-patched.sh --with-optional (the patch is not saved in this repository). signatures: how the bug shows in a run (sqlstate, errors: regular expressions over the finding's message, runner_signatures: regular expressions over the signature directory, finding_kinds: failure, crash, memory, hangs, timeouts). reproduce: single-session (a finding's replay shows it) or needs-concurrency (a single-session replay cannot: such a finding is not-reproduced, and says so). check: SQL run by `psql -X -q -At -v ON_ERROR_STOP=0 -v VERBOSITY=sqlstate -f -` (stdout and stderr together) in a fresh database of a throwaway cluster, PATH, PGHOST, PGPORT and PGUSER set for \\! lines; expected: its exact output on a fixed build; limits: seconds and rss_mb the check must stay within as well (a backend over rss_mb is killed). excluded_by: what keeps the generator or the runner from reporting it. status: open, or fixed once master has the fix (then fixed_in records it and the entry stays as the record).",
+  "bugs": [
+    {
+      "id": "unrecognized-node-10",
+      "folder": "case-studies/postgresql/bugs/will-not-post/pg-unrecognized-node-10",
+      "summary": "Planner use-after-free: add_partial_path() frees a partial Path that a Gather built in apply_scanjoin_target_to_paths() still points to (the Path is shared by the scan/join rel and final_rel); create_plan then reads freed memory: ERROR XX000 unrecognized node type: <n> (n varies by build). Reachable since 8300d3ad4aa.",
+      "status": "open",
+      "upstream": "pgsql-hackers thread \"Use-after-free of a shared Path in add_path()/add_partial_path()\" (Jeevan Chalke, 2026-09-09; v2 2026-09-23, uncommitted): https://www.postgresql.org/message-id/flat/CAM2+6=XaYtMGwh27O7oDTfAw7kV4VdUVbxC2RVzWtKz_ysekKw@mail.gmail.com",
+      "fix": {
+        "kind": "core",
+        "optional": true,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/will-not-post/pg-unrecognized-node-10/v2-0001-skip-pfree-of-paths-of-another-rel.patch",
+            "strip": 1,
+            "note": "the thread's v2-0001 (save it under this name); v2-0002 only adds regression tests"
+          },
+          {
+            "path": "case-studies/postgresql/bugs/will-not-post/pg-unrecognized-node-10/parentcheck.diff",
+            "strip": 1,
+            "note": "local substitute: the same four `->parent == parent_rel` guards on the pfree() calls of add_path()/add_partial_path() as v2-0001, without its comments; applies to master 158b6d5109"
+          }
+        ],
+        "obtain": "v2-0001 and v2-0002 are attachments of https://www.postgresql.org/message-id/CAM2+6=V7g-jim1ZZWDBUk0pG+g97Qd5UfV__=gTfabpU_13KwA@mail.gmail.com (archive attachment ids 204590 and 204591, linked from that page); save v2-0001 as the first source's path. Until then parentcheck.diff stands in."
+      },
+      "signatures": {
+        "sqlstate": [
+          "XX000"
+        ],
+        "errors": [
+          "unrecognized node type: \\d+"
+        ],
+        "runner_signatures": [
+          "-statement-[A-Z]+-XX000$",
+          "-original-fails-[A-Z]+-XX000$"
+        ],
+        "finding_kinds": [
+          "failure"
+        ]
+      },
+      "reproduce": "single-session",
+      "check": "SET parallel_setup_cost = 0;\nSET parallel_tuple_cost = 0;\nSET min_parallel_table_scan_size = 0;\nSELECT 'q1';\nCREATE SCHEMA q1;\nSET search_path = q1;\nCREATE TABLE t1(c2 int4);\nINSERT INTO t1 DEFAULT VALUES;\nSELECT pg_restore_relation_stats('schemaname', 'q1', 'relname', 't1', 'relpages', 1000::integer, 'reltuples', '1000000'::real);\nCREATE TABLE t3(c0 text, c2 int8, c3 int4);\nSELECT 0::int8 IN (SELECT t3.c2 + 1 FROM t3 JOIN t1 ON t1.c2 = t3.c3);\nSELECT 'q2';\nCREATE SCHEMA q2;\nSET search_path = q2;\nSET debug_parallel_query = on;\nCREATE TABLE t1(c1 numeric, c2 int4);\nINSERT INTO t1 DEFAULT VALUES;\nSELECT pg_restore_relation_stats('schemaname', 'q2', 'relname', 't1', 'relpages', 1000::integer, 'reltuples', '1000000'::real, 'relallvisible', 0::integer);\nCREATE TABLE t2(c0 text, c2 int4);\nCREATE TABLE t3(c0 text, c2 int8, c3 int4);\nSELECT count(*) FROM t3 AS a0_0 RIGHT JOIN t2 AS a0_1 ON ((a0_1.c2 = a0_0.c3) AND (('5874897-12-31'::date - '2000-12-16'::date) <> '3'::int4)) JOIN t2 AS a0_2 ON (a0_2.c0 = a0_0.c0) WHERE (NOT EXISTS (SELECT CAST(a1_0.c1 AS float8) FROM t1 AS a1_0 JOIN t2 AS a1_1 ON (a1_1.c2 = a1_0.c2) WHERE ('0'::int8 IN (SELECT (a2_0.c2 + (a2_0.c2 / '2'::int8)) FROM t3 AS a2_0 JOIN t1 AS a2_1 ON (a2_1.c2 = a2_0.c3)))));\n",
+      "expected": "q1\nt\nf\nq2\nt\n0\n",
+      "expected_from": "by hand, from reply.md's verification (master + v2 and REL_18 return f; repro.sql returns 0 there); confirm with pretriage.py --expected unrecognized-node-10 once the build exists. Master prints `ERROR:  XX000` in place of f and 0.",
+      "excluded_by": "ephyra-postgresql src/sqlancer.rs known_error (\"unrecognized node type:\"): the oracles skip it (known_skips) and the runner counts it as known, not a finding (since 3ce90ab). A finding with it means a runner binary older than that, or a path where the oracle does not apply known_error (a case statement: model-statement-*-XX000)."
+    },
+    {
+      "id": "toast-missing-chunk-vacuum-full",
+      "folder": "case-studies/postgresql/bugs/will-not-post/pg-toast-missing-chunk-vacuum-full",
+      "summary": "VACUUM FULL / CLUSTER / CREATE INDEX fail with \"missing chunk number 0 for toast value N in pg_toast_M\" (XX001): a RECENTLY_DEAD heap tuple whose TOAST chunks on-access pruning already removed under a newer horizon (cached by a lazy VACUUM of an unrelated table), while a transaction in another database holds an older XID. Class of BUG #18351 / #19519.",
+      "status": "open",
+      "upstream": "BUG #19519 thread (pgsql-bugs) and CF 6824; v7 by Matthias van de Meent, 2026-10-12",
+      "fix": {
+        "kind": "core",
+        "optional": true,
+        "sources": [
+          {
+            "git": {
+              "base": "49103c3cd63",
+              "head": "1efb423981e"
+            },
+            "note": "cfbot cf/6824 as of 2026-10-16 (v7 rebased on 49103c3cd63)"
+          },
+          {
+            "git": {
+              "base": "8e82d6610e7",
+              "head": "ce53a55b3b7"
+            },
+            "note": "cfbot branch cf/6824 (v7 on 8e82d6610e7); its diff applies to master 158b6d5109"
+          },
+          {
+            "fetch": {
+              "url": "https://github.com/postgresql-cfbot/postgresql.git",
+              "ref": "cf/6824"
+            },
+            "note": "build-fixed.sh: the branch's diff from its merge base with origin/master (cfbot rebases it)"
+          }
+        ],
+        "obtain": "git -C $PG_SRC fetch https://github.com/postgresql-cfbot/postgresql.git cf/6824, or the v7 patch series attached to the latest message of the BUG #19519 thread (CAEze2Wjx98pq2FPrxqyqfTOgSMHhcMntHi1RxMFPP1NsGN+g0Q@mail.gmail.com); CF entry https://commitfest.postgresql.org/patch/6824/"
+      },
+      "signatures": {
+        "sqlstate": [
+          "XX001"
+        ],
+        "errors": [
+          "missing chunk number \\d+ for toast value \\d+"
+        ],
+        "runner_signatures": [
+          "-statement-(VACUUM|CLUSTER|CREATE|REINDEX|REPACK)-XX001$"
+        ],
+        "finding_kinds": [
+          "failure"
+        ]
+      },
+      "reproduce": "needs-concurrency",
+      "reproduce_note": "needs a transaction in another database holding an XID older than the DELETE (another worker's, in a run); a single-session replay of the finding does not have one",
+      "check": "CREATE TABLE t (id int, b text STORAGE EXTERNAL);\nCREATE TABLE u (x int);\nINSERT INTO t SELECT g, repeat(md5(g::text), 300) FROM generate_series(1, 20) g;\n\\! psql -X -d postgres -Atc \"SELECT pg_current_xact_id(), pg_sleep(4)\" > /dev/null &\nSELECT pg_sleep(1) IS NULL;\nDELETE FROM t WHERE id % 2 = 0;\nVACUUM u;\nSELECT count(*), sum(length(b)) FROM t;\nSELECT 'q1';\nVACUUM FULL t;\nSELECT 'q2';\nSELECT count(*), sum(length(b)) FROM t;\nSELECT pg_sleep(4) IS NULL;\n",
+      "expected": "f\n10|96000\nq1\nq2\n10|96000\nf\n",
+      "expected_from": "by hand, from reply.md (v7: VACUUM FULL succeeds, 10 | 96000); master prints `ERROR:  XX001` after q1 (checked on master 158b6d5109). Confirm with pretriage.py --expected.",
+      "excluded_by": "none: the generator writes VACUUM FULL on TOASTed tables and the runner's workers share one cluster (other databases), so a run can hit it; the single-session replay makes such a finding not-reproduced (needs concurrency)"
+    },
+    {
+      "id": "btree-gist-infinite-date",
+      "folder": "case-studies/postgresql/bugs/pg-btree-gist-infinite-date",
+      "summary": "btree_gist date_ops: gbt_date_penalty (and the KNN distances, and date <-> date) call date_mi, which refuses infinite dates: inserting 'infinity' into a GiST index on a date of more than one page, inserting any date into one that holds an infinity, or a KNN scan over one fails with \"cannot subtract infinite dates\" (22008).",
+      "status": "open",
+      "upstream": "BUG #19761 (pgsql-bugs, 2026-10-15): https://www.postgresql.org/message-id/19761-b72cfc453e487610%40postgresql.org",
+      "fix": {
+        "kind": "contrib",
+        "dir": "contrib/btree_gist",
+        "optional": false,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/pg-btree-gist-infinite-date/fix.patch",
+            "strip": 1,
+            "note": "our patch (report.md)"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [
+          "22008"
+        ],
+        "errors": [
+          "cannot subtract infinite dates"
+        ],
+        "runner_signatures": [
+          "-statement-(INSERT|UPDATE|COPY|CREATE|MERGE)-22008$",
+          "-original-fails-SELECT-22008$"
+        ],
+        "finding_kinds": [
+          "failure"
+        ]
+      },
+      "reproduce": "single-session",
+      "check": "CREATE EXTENSION btree_gist;\nCREATE TABLE t (d date);\nCREATE INDEX t_d_idx ON t USING gist (d);\nINSERT INTO t SELECT date '2000-01-01' + i FROM generate_series(1, 500) i;\nSELECT 'q1';\nINSERT INTO t VALUES ('infinity');\nINSERT INTO t VALUES ('-infinity');\nSELECT count(*), count(*) FILTER (WHERE NOT isfinite(d)) FROM t;\nSELECT 'q2';\nCREATE TABLE u (d date);\nINSERT INTO u SELECT date '2000-01-01' + i FROM generate_series(1, 500) i;\nINSERT INTO u VALUES ('infinity'), ('-infinity');\nCREATE INDEX u_d_idx ON u USING gist (d);\nINSERT INTO u VALUES ('2000-06-01');\nSET enable_seqscan = off;\nSELECT d FROM u ORDER BY d <-> date '2000-06-01' LIMIT 1;\nRESET enable_seqscan;\nSELECT 'q3';\nSELECT (date 'infinity' <-> date '2000-01-01') > 0;\n",
+      "expected": "q1\n502|2\nq2\n2000-06-01\nq3\nt\n",
+      "excluded_by": "ephyra-postgresql src/semantics.rs gist_dates_ok (cac530c): a GiST index is keyed on a date column only if the column never held an infinite date, and such a column is never written one; the oracles also skip 22008 as a plan-dependent error (sqlancer::expected_error), so only a case statement (model-statement-*-22008) can show it",
+      "expected_from": "pretriage.py --expected on master 158b6d5109 with fix.patch (contrib build via PGXS), 2026-10-14; master prints `ERROR:  22008` after q1 (twice, and 500|0), after q2 (twice) and after q3"
+    },
+    {
+      "id": "huge-expr-timeout",
+      "folder": "case-studies/postgresql/bugs/pg-huge-expr-timeout",
+      "summary": "Nested BETWEEN grows exponentially in parse analysis (transformAExprBetween copies its operand), and transformExprRecurse never checks for interrupts, so statement_timeout and pg_cancel_backend wait for it: a backend allocating >1 GB/s past its timeout, until a memory kill.",
+      "status": "open",
+      "upstream": "BUG #19758 (pgsql-bugs, 2026-10-14): https://www.postgresql.org/message-id/19758-d074798b35cc9215%40postgresql.org",
+      "fix": {
+        "kind": "core",
+        "optional": false,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/pg-huge-expr-timeout/cfi.patch",
+            "strip": 1,
+            "note": "our CHECK_FOR_INTERRUPTS() in transformExprRecurse: makes it cancellable, does not remove the blowup"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [
+          "57014"
+        ],
+        "errors": [],
+        "runner_signatures": [],
+        "finding_kinds": [
+          "memory",
+          "hangs",
+          "crash"
+        ]
+      },
+      "reproduce": "single-session",
+      "reproduce_note": "shows as a resource finding (a memory kill, a hang, or a signal-9 crash when the OS killed the backend), not a wrong result or an error; pretriage replays such findings with a short statement_timeout (--resource-timeout) under the memory and time watchdog: master runs past it until killed, the patched build cancels",
+      "check": "SELECT 'q1';\nSET statement_timeout = '100ms';\nSELECT 1 WHERE ((((((((((((((((((((true BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false) BETWEEN true AND false);\nRESET statement_timeout;\nSELECT 'q2';\nSELECT 1;\n",
+      "expected": "q1\npsql:<stdin>:3: ERROR:  57014\nq2\n1\n",
+      "limits": {
+        "rss_mb": 600,
+        "seconds": 30
+      },
+      "expected_from": "the output is the same on master (once parse analysis ends); the limits tell them apart: master's backend passes 1.6 GB (killed at 600 MB), the patched build cancels at about 0.1 s and 160 MB (report.md)",
+      "excluded_by": "ephyra-postgresql src/expr.rs MAX_DEPTH = 8 (expression nesting; at most 2^8 copies), and the runner's --max-rss-mb memory kill and statement timeout bound what a run spends on one"
+    },
+    {
+      "id": "hashsetop-out-of-memory",
+      "folder": "case-studies/postgresql/bugs/pg-hashsetop-out-of-memory",
+      "summary": "Since 8f29467c57f (19 BETA1..RC1, master) BuildTupleHashTable no longer caps its initial size at hash_mem, and RecursiveUnion and hashed SetOp pass the planner's raw group estimate: ExecInit allocates and zeroes up to 2^32 x 16 B = 64 GiB before reading a row. A recursive UNION (default settings) or a hashed EXCEPT/INTERSECT (when the sorted path is disabled too) fails with 53200 out of memory, or the backend grows until a memory kill.",
+      "status": "open",
+      "upstream": "BUG #19759 (pgsql-bugs, 2026-10-15): https://www.postgresql.org/message-id/19759-acd3f33402e54f36%40postgresql.org",
+      "fix": {
+        "kind": "core",
+        "optional": false,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/pg-hashsetop-out-of-memory/verify/fix-clamp.patch",
+            "strip": 1,
+            "note": "our patch (report.md): the hash_mem cap restored in BuildTupleHashTable"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [
+          "53200"
+        ],
+        "errors": [
+          "out of memory",
+          "Failed on request of size \\d+"
+        ],
+        "runner_signatures": [
+          "-53200$"
+        ],
+        "finding_kinds": [
+          "failure",
+          "memory"
+        ]
+      },
+      "reproduce": "single-session",
+      "reproduce_note": "an oracle variant that disables a plan type (plans-*, generic) often picks the oversized hashed node, so it shows as 'the original succeeds, the variant fails' as well as 53200 and memory kills; those signatures are too generic to match on, so the patched build's replay decides",
+      "check": "SELECT 'q1';\nWITH RECURSIVE r(n) AS (SELECT g FROM generate_series(1, 1000000) g UNION SELECT n + 1 FROM r WHERE n < 0) SELECT count(*) FROM r;\nSELECT 'q2';\nCREATE TABLE t0(c0 int4);\nBEGIN;\nSET LOCAL enable_sort = off;\nSELECT a.c0, b.c0, c.c0, d.c0 FROM t0 a, t0 b, t0 c, t0 d EXCEPT SELECT 1, 2, 3, 4;\nROLLBACK;\nSELECT 'q3';\nWITH RECURSIVE r(w, x, y, z) AS (SELECT a.c0, b.c0, c.c0, d.c0 FROM t0 a, t0 b, t0 c, t0 d UNION SELECT w, x, y, z FROM r WHERE false) SELECT count(*) FROM r;\n",
+      "expected": "q1\n1000000\nq2\nq3\n0\n",
+      "limits": {
+        "rss_mb": 600,
+        "seconds": 60
+      },
+      "expected_from": "by hand from report.md (the patched build returns 1000000 at 113 MB peak, no rows, 0); master passes 1 GB on q1 (killed at 600 MB) and allocates 32/64 GiB on q2/q3. Confirm with pretriage.py --expected hashsetop-out-of-memory.",
+      "excluded_by": "none: the generator writes recursive CTEs and set operations, and the plans oracle's variants disable sort/hash plan types; the runner's --max-rss-mb memory kill bounds a run's cost"
+    },
+    {
+      "id": "cluster-subxact-row-loss",
+      "folder": "case-studies/postgresql/bugs/pg-cluster-subxact-row-loss",
+      "summary": "CLUSTER (index-scan path) and REPACK drop a live row that the transaction inserted and then updated in a rolled-back subtransaction: HeapTupleSatisfiesVacuumHorizon returns INSERT_IN_PROGRESS without setting HEAP_XMAX_INVALID, rewrite_heap_tuple parks the row waiting for its aborted successor, and rewrite_heap_dead_tuple frees it. Silent loss of committed data, all supported branches.",
+      "status": "open",
+      "upstream": "BUG #19760 (pgsql-bugs, 2026-10-15): https://www.postgresql.org/message-id/19760-8f9a0eba17bc8c92@postgresql.org; replies by Takeshi Ideriha and Ayush Tiwari (2026-10-16)",
+      "fix": {
+        "kind": "core",
+        "optional": false,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/pg-cluster-subxact-row-loss/triage/fix-htsv-xmax-invalid.patch",
+            "strip": 1,
+            "note": "our patch (report.md): SetHintBits(HEAP_XMAX_INVALID) in that branch"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [],
+        "errors": [],
+        "runner_signatures": [],
+        "finding_kinds": [
+          "failure"
+        ]
+      },
+      "reproduce": "single-session",
+      "reproduce_note": "shows as the model property's 'rows written differ' or 'rows differ' after a CLUSTER inside a transaction with a rolled-back savepoint; those signatures are generic, so only the patched build's replay attributes a finding to it",
+      "check": "SELECT 'q1';\nCREATE TABLE t1(c0 int, c1 int);\nCREATE INDEX t1_i0 ON t1 (c1);\nBEGIN;\nINSERT INTO t1 VALUES (1, 1);\nSAVEPOINT s1;\nUPDATE t1 SET c0 = 2;\nROLLBACK TO s1;\nCLUSTER t1 USING t1_i0;\nSELECT count(*) FROM t1;\nCOMMIT;\nSELECT count(*) FROM t1;\n",
+      "expected": "q1\n1\n1\n",
+      "expected_from": "minimal.sql (report.md: the patched build gives 1 1, master 0 0). Confirm with pretriage.py --expected cluster-subxact-row-loss.",
+      "excluded_by": "none: cases (src/cases.rs) write savepoints, ROLLBACK TO and CLUSTER in one transaction, and the model expects every row to survive"
+    },
+    {
+      "id": "window-exclude-ties-mark",
+      "folder": "case-studies/postgresql/bugs/will-not-post/pg-window-exclude-ties-mark",
+      "summary": "ROWS frames that do not contain the current row, with EXCLUDE TIES: first_value/last_value/nth_value return NULL or a value one row off, and with an offset of 2 FOLLOWING or more ERROR XX000 \"cannot fetch row before WindowObject's mark position\". Since 11 (0a459cec96d).",
+      "status": "open",
+      "upstream": "BUG #19732 (pgsql-bugs, 2026-09-30; our query posted 2026-10-05); patch v4 by Andrey Rachitskiy 2026-10-12, Message-ID CAB8bMitM01bphvvik4hPtMh93=FMLUaFcKP+Jpch3mzHwZrYUw@mail.gmail.com, uncommitted. Not ours to file.",
+      "fix": {
+        "kind": "core",
+        "optional": false,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/will-not-post/pg-window-exclude-ties-mark/upstream-v4-0001.patch",
+            "strip": 1,
+            "note": "the thread's v4-0001 (nodeWindowAgg.c and window regression tests)"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [
+          "XX000"
+        ],
+        "errors": [
+          "cannot fetch row before WindowObject's mark position"
+        ],
+        "runner_signatures": [],
+        "finding_kinds": [
+          "failure"
+        ]
+      },
+      "reproduce": "single-session",
+      "reproduce_note": "the wrong-result form shows as window-def (or other oracles') 'results differ', too generic to match on; the patched build's replay decides",
+      "check": "SELECT 'q1';\nSELECT x, first_value(x) OVER (ORDER BY x ROWS BETWEEN 2 FOLLOWING AND UNBOUNDED FOLLOWING EXCLUDE TIES) FROM (VALUES (0),(1),(1),(1)) v(x);\nSELECT 'q2';\nSELECT x, first_value(x) OVER (ORDER BY x ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING EXCLUDE TIES) FROM (VALUES (1),(1),(2)) v(x);\nSELECT 'q3';\nSELECT x, last_value(x) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING EXCLUDE TIES) FROM (VALUES (1),(2),(2)) v(x);\n",
+      "expected": "q1\n0|1\n1|\n1|\n1|\nq2\n1|2\n1|2\n2|\nq3\n1|\n2|1\n2|1\n",
+      "expected_from": "minimal-patched.out (master + v4); master prints `ERROR:  XX000` after q1, `1|` for the first row after q2 and `2|` for the last after q3 (minimal-master.out). Confirm with pretriage.py --expected window-exclude-ties-mark.",
+      "excluded_by": "none: src/expr.rs writes EXCLUDE TIES frames and the windows oracle (src/sqlancer.rs) computes them"
+    },
+    {
+      "id": "parallel-material-dup-toc",
+      "folder": "case-studies/postgresql/bugs/pg-parallel-material-dup-toc",
+      "summary": "The parallel executor's DSM and instrumentation walks (execParallel.c) visit a SubPlan's one PlanState once per Parallel Append child that references it, so its nodes are set up twice. Since a241bc4fede (master, 2026-10-12, Material storage instrumentation) EXPLAIN ANALYZE with default settings crashes assert builds: TRAP Assert(\"toc->toc_entry[i].key != key\") in shm_toc_insert; Sort, IncrementalSort, Hash, Agg, Memoize and SeqScan IO instrumentation crash 19rc1 assert builds the same way (the assert is 43222b8e53f, master/19); without asserts and on 14-18, EXPLAIN ANALYZE counts the SubPlan's nodes 4x and loses per-worker details.",
+      "status": "open",
+      "upstream": "BUG #19766 (pgsql-bugs, 2026-10-16, short report without a fix): https://www.postgresql.org/message-id/19766-c3d105a4e0ec5487@postgresql.org",
+      "fix": {
+        "kind": "core",
+        "optional": false,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/pg-parallel-material-dup-toc/fix.patch",
+            "strip": 1,
+            "note": "ours (report.md): the four walkers skip a plan node already visited; regression test in partition_prune"
+          },
+          {
+            "path": "case-studies/postgresql/bugs/pg-parallel-material-dup-toc/fix-toc-once.patch",
+            "strip": 1,
+            "note": "the first, partial fix (Material only)"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [],
+        "errors": [
+          "toc->toc_entry\\[i\\]\\.key != key",
+          "shm_toc\\.c"
+        ],
+        "runner_signatures": [
+          "shm_toc"
+        ],
+        "finding_kinds": [
+          "crash",
+          "failure"
+        ]
+      },
+      "reproduce": "single-session",
+      "check": "SELECT 'q1';\nCREATE TABLE p (a int) PARTITION BY LIST (a);\nCREATE TABLE p1 PARTITION OF p FOR VALUES IN (1);\nCREATE TABLE p2 PARTITION OF p FOR VALUES IN (2);\nCREATE TABLE s (b int);\n\\o /dev/null\nEXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF) SELECT * FROM p WHERE a NOT IN (SELECT 1 FROM s, s s2);\n\\o\nSELECT 'q2';\n",
+      "expected": "q1\nq2\n",
+      "expected_from": "by hand: the patched build runs the EXPLAIN (output discarded, workers launched vary); master crashes the backend there. Confirm with pretriage.py --expected parallel-material-dup-toc.",
+      "excluded_by": "none: the views oracle runs EXPLAIN ANALYZE of every query, and the generator writes partitioned tables and IN (subquery)"
+    },
+    {
+      "id": "viewdef-negated-sort-constant",
+      "folder": "case-studies/postgresql/bugs/pg-viewdef-negated-sort-constant",
+      "summary": "get_rule_sortgroupclause prints an ORDER BY / GROUP BY / DISTINCT ON term that is a prefix operator over a constant as (- 3), which the grammar folds into a constant, a column position: the deparsed view (and pg_dump's dump) fails, or with (- (- 3)) silently sorts/dedups by a column. Since 8.3.",
+      "status": "open",
+      "upstream": "BUG #19767 (pgsql-bugs, 2026-10-16, short report without a fix): https://www.postgresql.org/message-id/19767-f1189fd6a83254b7%40postgresql.org",
+      "fix": {
+        "kind": "core",
+        "optional": false,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/pg-viewdef-negated-sort-constant/fix.patch",
+            "strip": 1,
+            "note": "ours: the Const operand printed with its cast"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [
+          "42P10"
+        ],
+        "errors": [
+          "(ORDER|GROUP) BY position -?\\d+ is not in select list",
+          "non-integer constant in (ORDER|GROUP) BY"
+        ],
+        "runner_signatures": [
+          "^views-views-viewdef"
+        ],
+        "finding_kinds": [
+          "failure"
+        ]
+      },
+      "reproduce": "single-session",
+      "check": "CREATE TABLE t (a int);\nCREATE VIEW o AS SELECT a FROM t ORDER BY (- '3'::int4);\nSELECT pg_get_viewdef('o', false) LIKE '%(- 3)%';\n",
+      "expected": "f\n",
+      "expected_from": "by hand: master prints ORDER BY (- 3) (t); the fix prints the constant with its cast (VALIDATION.md)",
+      "excluded_by": "ephyra-postgresql src/sqlancer.rs negated_sort_constant_bug: on such a query the views oracle counts an error or other rows of either text as a known skip, lifted on a target with the fix (crate::fixed)"
+    },
+    {
+      "id": "viewdef-sublink-paren",
+      "folder": "case-studies/postgresql/bugs/will-not-post/pg-viewdef-sublink-paren",
+      "summary": "In pretty mode get_sublink_expr prints the left operand of IN/ANY/ALL (subquery) without the parentheses an operator expression needs: pg_get_viewdef(.., true), pg_get_ruledef(.., true), psql \\d+ show text that fails or means something else. Since 7.4, widened in 9.5. Duplicate of a pgsql-hackers report (Henson Choi, 2026-10-13).",
+      "status": "open",
+      "upstream": "pgsql-hackers \"[DEPARSE] Pretty-printed sublink test expressions lose needed parentheses\" (Henson Choi, 2026-10-13), CAAAe_zCy+D45Qd_br484F+V34y0BVA=hp_7cb=u6HysyMkE3UQ@mail.gmail.com",
+      "fix": {
+        "kind": "core",
+        "optional": false,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/will-not-post/pg-viewdef-sublink-paren/fix.patch",
+            "strip": 1,
+            "note": "ours: get_rule_expr_paren with the SubLink as parent (the thread has its own patch)"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [],
+        "errors": [],
+        "runner_signatures": [
+          "^views-views-viewdef-pretty"
+        ],
+        "finding_kinds": [
+          "failure"
+        ]
+      },
+      "reproduce": "single-session",
+      "check": "CREATE TABLE t (a int, b bool);\nCREATE VIEW w AS SELECT (b < b) IN (SELECT false) AS r FROM t;\nSELECT pg_get_viewdef('w', true) LIKE '%(b < b IN%';\n",
+      "expected": "f\n",
+      "expected_from": "by hand: master prints (b < b IN ( SELECT false)) (t); the fix keeps ((b < b) IN ..) (VALIDATION.md)",
+      "excluded_by": "ephyra-postgresql src/sqlancer.rs sublink_paren_bug: the views oracle skips the pretty text's error or other rows on such a query, lifted on a target with the fix (crate::fixed)"
+    },
+    {
+      "id": "toast-v7-recently-dead-assert",
+      "folder": "case-studies/postgresql/bugs/will-not-post/pg-toast-v7-recently-dead-assert",
+      "summary": "A bug in the v7 TOAST patch (cfbot cf/6824) of toast-missing-chunk-vacuum-full, not in master: when VACUUM FULL / CLUSTER (no sort) scans an UPDATE's old version before its live successor and the old version's TOAST is gone, rewrite_heap_tuple() writes the successor, then fails on the parked old version and returns false for the caller's live tuple: TRAP Assert(\"recently_dead\") in heapam_relation_copy_for_cluster (heapam_handler.c:993). Without asserts the outcome is correct.",
+      "status": "open",
+      "upstream": "not reported yet (README.md: a draft reply for the BUG #19519 thread)",
+      "fix": {
+        "kind": "core",
+        "optional": true,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/will-not-post/pg-toast-v7-recently-dead-assert/scripts/v7-assert-fix.patch",
+            "strip": 1,
+            "note": "ours: drop the Assert (applies on top of v7 only, so optional: build-fixed.sh applies it after v7, build-patched.sh skips it)"
+          }
+        ]
+      },
+      "signatures": {
+        "sqlstate": [],
+        "errors": [
+          "Assert\\(\"recently_dead\"\\)"
+        ],
+        "runner_signatures": [
+          "recently_dead"
+        ],
+        "finding_kinds": [
+          "crash"
+        ]
+      },
+      "reproduce": "needs-concurrency",
+      "reproduce_note": "needs a transaction holding an xid in another database while VACUUM FULL runs (the #19519 condition); only a build with v7 has the assertion",
+      "check": "CREATE TABLE t (id int, b text STORAGE EXTERNAL);\nINSERT INTO t VALUES (1, repeat('x', 10000));\nSELECT reltoastrelid::regclass AS toast FROM pg_class WHERE oid = 't'::regclass \\gset\n\\! psql -X -d postgres -Atc \"SELECT pg_current_xact_id(), pg_sleep(4)\" > /dev/null &\nSELECT pg_sleep(1) IS NULL;\nUPDATE t SET b = NULL;\nVACUUM :toast;\nSELECT 'q1';\nVACUUM FULL t;\nSELECT 'q2';\nSELECT id, b IS NULL FROM t;\nSELECT pg_sleep(4) IS NULL;\n",
+      "expected": "f\nq1\nq2\n1|t\nf\n",
+      "expected_from": "by hand from minimal.sql (VALIDATION.md): master + v7 + the fix succeeds; master + v7 crashes after q1; plain master prints ERROR XX001 after q1",
+      "excluded_by": "none: only runs on the fixes build can hit it"
+    },
+    {
+      "id": "heap-update-locked-only-assert",
+      "folder": "case-studies/postgresql/bugs/will-not-post/pg-heap-update-locked-only-assert",
+      "summary": "heap_update asserts HEAP_XMAX_IS_LOCKED_ONLY(infomask_lock_old_tuple) (heapam.c:3893) when the row's xmax is a multi of the transaction's own lock plus an aborted subtransaction's update and the update releases the buffer lock (TOAST or a full page): MultiXactIdExpand returns the multi unchanged. Assert builds only; 14 to master.",
+      "status": "open",
+      "upstream": "pgsql-hackers \"Assertion with aborted UPDATE in subtransaction\" (Jasper Smit, 2025-03-26, unanswered, patch attached): https://www.postgresql.org/message-id/CAOG+RQ6ECiiFH7bb7e1M0bkd0whprp=T0u=rvARSaPOGrY-NDQ@mail.gmail.com",
+      "fix": {
+        "kind": "core",
+        "optional": true,
+        "sources": [
+          {
+            "path": "case-studies/postgresql/bugs/will-not-post/pg-heap-update-locked-only-assert/thread-patch.patch",
+            "strip": 1,
+            "note": "the 2025 thread's patch (save it under this name)"
+          }
+        ],
+        "obtain": "the patch attached to the 2025-03-26 message linked in upstream; save as the source path"
+      },
+      "signatures": {
+        "sqlstate": [],
+        "errors": [
+          "HEAP_XMAX_IS_LOCKED_ONLY\\(infomask_lock_old_tuple\\)"
+        ],
+        "runner_signatures": [
+          "infomask_lock_old_tuple"
+        ],
+        "finding_kinds": [
+          "crash"
+        ]
+      },
+      "reproduce": "single-session",
+      "check": "CREATE TABLE t (id int PRIMARY KEY, n int, b text);\nALTER TABLE t ALTER COLUMN b SET STORAGE EXTERNAL;\nINSERT INTO t VALUES (1, 0, repeat('x', 3000));\nBEGIN;\nSELECT id FROM t FOR NO KEY UPDATE;\nSAVEPOINT s1;\nUPDATE t SET n = 1;\nROLLBACK TO s1;\nRELEASE s1;\nUPDATE t SET n = 2;\nCOMMIT;\nSELECT n FROM t;\n",
+      "expected": "1\n2\n",
+      "expected_from": "by hand: a fixed build returns the row and n = 2 (master crashes the backend at the second UPDATE); -q hides command tags, so the SELECT id and SELECT n rows are the output",
+      "excluded_by": "none: savepoints, FK/ON CONFLICT locks and EXCEPTION blocks combine in the generator; pretriage labels the crash known by signature"
+    }
+  ]
+}

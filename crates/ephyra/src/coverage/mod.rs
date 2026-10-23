@@ -14,7 +14,7 @@
 //! Counters are process-global and incremented atomically by the compiled
 //! code, so a [`Snapshot`] taken with atomic loads is race-free, but other
 //! threads running the same code pollute the [`Delta`] between two
-//! snapshots. Coverage-using phases take the process-wide [`lock`] so that
+//! snapshots. Coverage-using phases take a process-wide lock so that
 //! ephyra's own runs serialise; run the whole suite with
 //! `RUST_TEST_THREADS=1` for exact attribution.
 //!
@@ -78,7 +78,7 @@
 //! for the selection and a brief describing the target, its current
 //! coverage and what the generator produces, to hand to whoever rewrites
 //! the generator. The property's own function is pinned at the top of the
-//! tree. Needs the `json` feature. `ephyra visualize`, from the
+//! tree. `ephyra visualize`, from the
 //! `ephyra-cli` package, shows these pages live, adds the selection to
 //! `targets.jsonl` with one click and runs the property again.
 //!
@@ -101,7 +101,6 @@
 //! in a condition that is evaluated on every run but decided differently.
 
 pub(crate) mod counters;
-#[cfg(feature = "json")]
 pub(crate) mod grid;
 pub(crate) mod locate;
 pub(crate) mod mapping;
@@ -110,9 +109,15 @@ mod names;
 pub(crate) mod targets;
 pub(crate) mod tracker;
 
-pub(crate) use locate::{
-    display_path,
-    lines_hit,
+pub(crate) use {
+    counters::{
+        Lease,
+        lock,
+    },
+    locate::{
+        display_path,
+        lines_hit,
+    },
 };
 
 /// Whether a tracked function is the property itself: the function named
@@ -135,14 +140,10 @@ pub use {
         Delta,
         Function,
         Functions,
-        Lease,
         Snapshot,
         available,
-        hits_by_function,
-        lock,
         profraw_image,
         snapshot,
-        snapshot_range,
         suppress_default_dump,
     },
     locate::{

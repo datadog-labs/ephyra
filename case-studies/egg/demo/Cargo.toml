@@ -1,0 +1,17 @@
+[package]
+name = "egg-demo"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Showcase: equivalent SQL queries sampled from an e-graph"
+
+[dependencies]
+# Generates seed queries with checked shrinkers.
+ephyra = { path = "../../../crates/ephyra" }
+egg = "0.11"
+# The parser sqleq uses.
+sqlparser = "0.63"
+# Checks the sampled queries against the seed on random databases.
+rusqlite = { version = "0.37", features = ["bundled"] }
+# Reads the verdicts sqleq-solver and QED write.
+serde_json = "1"

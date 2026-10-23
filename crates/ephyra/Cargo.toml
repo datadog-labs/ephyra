@@ -22,8 +22,9 @@ json = ["dep:serde", "dep:serde_json"]
 # `#[derive(Arbitrary)]`, `#[ephyra::shrinker]`, and `#[ephyra::test]`.
 derive = ["dep:ephyra-macros"]
 # In-process LLVM coverage counters (needs `-C instrument-coverage` on the
-# final build; detected by the build script).
-coverage = ["dep:rustc-demangle", "dep:miniz_oxide", "dep:object"]
+# final build; detected by the build script). Implies `json`, which the
+# targets file and the coverage grid need.
+coverage = ["dep:rustc-demangle", "dep:miniz_oxide", "dep:object", "json"]
 # Assume the build is instrumented even when the build script cannot see
 # the flag (profile rustflags, `cargo rustc -- ...`).
 coverage-force = ["coverage"]

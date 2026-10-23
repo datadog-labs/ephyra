@@ -4,7 +4,6 @@
 //! Counter snapshots and function records read from the profile runtime.
 
 use std::{
-    collections::HashMap,
     ops::Range,
     sync::{
         Condvar,
@@ -26,7 +25,7 @@ static FREED: Condvar = Condvar::new();
 /// Unlike a `MutexGuard` it may move between threads, so a [`Run`](crate::Run)
 /// can own one.
 #[derive(Debug)]
-pub struct Lease(());
+pub(crate) struct Lease(());
 
 impl Drop for Lease {
     fn drop(&mut self) {
@@ -39,7 +38,7 @@ impl Drop for Lease {
 /// The process-wide lock coverage-using phases hold so that ephyra's own
 /// runs do not pollute each other's deltas. Other test threads are not
 /// stopped by it; run with `RUST_TEST_THREADS=1` for exact attribution.
-pub fn lock() -> Lease {
+pub(crate) fn lock() -> Lease {
     let mut held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     while *held {
         held = FREED.wait(held).unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -139,9 +138,9 @@ pub struct Function {
     /// Demangled name, e.g. `my_crate::module::function`.
     pub name: String,
     /// Hash of the profile name, the key shared with the coverage mapping.
-    pub name_ref: u64,
+    pub(crate) name_ref: u64,
     /// Structural hash of the function, the other half of that key.
-    pub func_hash: u64,
+    pub(crate) func_hash: u64,
     /// Indices into a [`Snapshot`] of this function's counters.
     pub counters: Range<usize>,
 }
@@ -206,7 +205,7 @@ pub fn snapshot() -> Option<Snapshot> {
 
 /// A snapshot of the counters in `range` only; cheaper than the whole
 /// section when only one crate matters.
-pub fn snapshot_range(range: &Range<usize>) -> Option<Snapshot> {
+pub(crate) fn snapshot_range(range: &Range<usize>) -> Option<Snapshot> {
     runtime::counters(Some(range.clone()))
         .map(|counters| Snapshot { offset: range.start, counters })
 }
@@ -375,18 +374,6 @@ mod runtime {
     }
 }
 
-/// Group a delta by function name: how many counter increments landed in
-/// each function.
-pub fn hits_by_function(functions: &Functions, delta: &Delta) -> HashMap<String, u64> {
-    let mut out = HashMap::new();
-    for function in functions.reached(delta) {
-        let total: u64 =
-            delta.hits.iter().filter(|(i, _)| function.counters.contains(i)).map(|(_, n)| n).sum();
-        *out.entry(function.name.clone()).or_default() += total;
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -434,7 +421,7 @@ mod tests {
             assert!(
                 functions.reached(&delta).any(|f| f.name.contains("md5")),
                 "{:?}",
-                hits_by_function(functions, &delta)
+                functions.reached(&delta).map(|f| &f.name).collect::<Vec<_>>()
             );
         }
     }

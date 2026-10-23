@@ -229,6 +229,7 @@ The full list is in the `config` module documentation.
   report, coverage-guided search, fault localization (suspect functions
   ranked from the coverage of passing and failing runs), coverage targets
   the search steers toward, and a coverage grid page per property.
+  Implies `json`.
 - `coverage-force`: assume the build is instrumented when the build script
   cannot see the flag (profile rustflags, `cargo rustc -- …`). An
   uninstrumented binary then fails to link, by design.

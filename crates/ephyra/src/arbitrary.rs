@@ -10,12 +10,10 @@ use std::collections::{
     HashSet,
 };
 
-use crate::{
-    gens::{
-        BoxGen,
-        GenExt,
-    },
-    primitives as gens,
+use crate::gens::{
+    self,
+    BoxGen,
+    GenExt,
 };
 
 /// Types with a default generator. Use [`any`] to obtain it.

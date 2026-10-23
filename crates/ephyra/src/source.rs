@@ -18,10 +18,15 @@
 use std::{
     borrow::Cow,
     fmt,
+    hash::{
+        BuildHasher,
+        RandomState,
+    },
     ops::{
         Bound,
         RangeBounds,
     },
+    time::Instant,
 };
 
 use {
@@ -262,6 +267,34 @@ pub(crate) fn small_magnitude(rng: &mut impl RngCore) -> u64 {
     uniform(rng, 1u64 << bits) + 1
 }
 
+/// The size parameter for generation attempt `iteration`: `floor(log2(i + 1))`,
+/// capped at `max_size`. This spends twice as many attempts at each successive
+/// size while remaining a pure function of the iteration for replay.
+pub(crate) fn size_for(iteration: u64, max_size: usize) -> usize {
+    let size = u64::BITS - iteration.saturating_add(1).leading_zeros() - 1;
+    (size as usize).min(max_size)
+}
+
+/// A fresh seed from the operating system's randomness (via `RandomState`).
+pub(crate) fn random_seed() -> u64 {
+    RandomState::new().hash_one(Instant::now())
+}
+
+/// Derive an independent 64-bit value from `seed` and `index` (SplitMix64).
+pub(crate) fn mix(seed: u64, index: u64) -> u64 {
+    let mut z = seed
+        .wrapping_add(index.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// A uniform draw in `[0, 1)` from a seed and an index.
+pub(crate) fn hash_u01(seed: u64, index: u64) -> f64 {
+    (mix(seed, index) >> 11) as f64 / (1u64 << 53) as f64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,5 +371,15 @@ mod tests {
         g.discard("first");
         g.discard(String::from("second"));
         assert_eq!(g.discarded(), Some("first"));
+    }
+
+    #[test]
+    fn size_increases_logarithmically_and_respects_the_maximum() {
+        let sizes: Vec<usize> = (0..16).map(|i| size_for(i, 100)).collect();
+        assert_eq!(sizes, [0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4]);
+        assert_eq!(size_for(1_023, 100), 10);
+        assert_eq!(size_for(u64::MAX, 100), 63);
+        assert_eq!(size_for(u64::MAX, 7), 7);
+        assert_eq!(size_for(17, 0), 0);
     }
 }
