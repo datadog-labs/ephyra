@@ -1,0 +1,11 @@
+CREATE TABLE t(a, b);
+INSERT INTO t VALUES (1, 10), (1.0, 20);
+SELECT * FROM (SELECT a, sum(b) OVER (PARTITION BY a) AS s FROM t) WHERE a||'' = '1';
+SELECT a, sum(b) FROM t GROUP BY a HAVING typeof(a) = 'real';
+SELECT * FROM (SELECT a, sum(b) OVER (PARTITION BY a) AS s FROM t) WHERE a = 1;
+CREATE TABLE ti(a INTEGER, b);
+INSERT INTO ti VALUES (1, 10), (1.0, 20);
+SELECT a, sum(b) FROM ti GROUP BY a HAVING typeof(a) = 'integer';
+CREATE TABLE tt(a TEXT, b);
+INSERT INTO tt VALUES ('1', 10), ('1', 20);
+SELECT a, sum(b) FROM tt GROUP BY a HAVING typeof(a) = 'text';

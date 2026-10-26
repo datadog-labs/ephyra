@@ -1,0 +1,110 @@
+--- a/src/expr.c
++++ b/src/expr.c
+@@ -2841,23 +2841,98 @@
+ 
+ 
+ /*
+-** sqlite3WalkExpr() callback used by sqlite3ExprIsConstantOrGroupBy().
++** Return true if any two values of GROUP BY or PARTITION BY term p that
++** compare equal are the same value.  This is not so in general: the
++** integer 1 and the real 1.0 compare equal and so are placed in the same
++** group, but functions such as typeof() can tell them apart.  It is true
++** for the rowid and for a column of an ordinary table with TEXT, NUMERIC,
++** INTEGER or REAL affinity, as the affinity is applied to each value when
++** it is stored.  It is also true for the || operator and for CAST to
++** TEXT, INTEGER or REAL, as these always give a value of one type.
+ */
+-static int exprNodeIsConstantOrGroupBy(Walker *pWalker, Expr *pExpr){
+-  ExprList *pGroupBy = pWalker->u.pGroupBy;
+-  int i;
++static int exprIsGroupExact(const Expr *p){
++  const Table *pTab;
++  if( p->op==TK_CONCAT ) return 1;
++  if( p->op==TK_CAST ){
++    char aff = sqlite3ExprAffinity(p);
++    return aff==SQLITE_AFF_TEXT || aff==SQLITE_AFF_INTEGER
++        || aff==SQLITE_AFF_REAL;
++  }
++  if( p->op!=TK_COLUMN || !ExprUseYTab(p) ) return 0;
++  pTab = p->y.pTab;
++  if( pTab==0 || !IsOrdinaryTable(pTab) ) return 0;
++  if( (pTab->tabFlags & TF_Ephemeral)!=0 ) return 0;
++  if( p->iColumn<0 ) return 1;
++  return pTab->aCol[p->iColumn].affinity>=SQLITE_AFF_TEXT;
++}
+ 
+-  /* Check if pExpr is identical to any GROUP BY term. If so, consider
+-  ** it constant.  */
++/*
++** Return true if pExpr is a copy of a term of pGroupBy that uses the
++** BINARY collating sequence.  If bExact is true, the GROUP BY term must
++** also be one for which exprIsGroupExact() is true.
++*/
++static int exprIsGroupByTerm(
++  Parse *pParse,
++  ExprList *pGroupBy,
++  const Expr *pExpr,
++  int bExact
++){
++  int i;
+   for(i=0; i<pGroupBy->nExpr; i++){
+     Expr *p = pGroupBy->a[i].pExpr;
+     if( sqlite3ExprCompare(0, pExpr, p, -1)<2 ){
+-      CollSeq *pColl = sqlite3ExprNNCollSeq(pWalker->pParse, p);
+-      if( sqlite3IsBinary(pColl) ){
+-        return WRC_Prune;
++      CollSeq *pColl = sqlite3ExprNNCollSeq(pParse, p);
++      if( sqlite3IsBinary(pColl) && (bExact==0 || exprIsGroupExact(p)) ){
++        return 1;
+       }
+     }
+   }
++  return 0;
++}
++
++/*
++** sqlite3WalkExpr() callback used by sqlite3ExprIsConstantOrGroupBy().
++*/
++static int exprNodeIsConstantOrGroupBy(Walker *pWalker, Expr *pExpr){
++  ExprList *pGroupBy = pWalker->u.pGroupBy;
++
++  /* A comparison has the same result for all values that compare equal
++  ** to each other, such as the integer 1 and the real 1.0, unless TEXT
++  ** affinity is applied to its operands first.  So an operand of such a
++  ** comparison may be any copy of a GROUP BY term.  */
++  if( (pExpr->op==TK_IS || pExpr->op==TK_ISNOT
++       || (pExpr->op>=TK_NE && pExpr->op<=TK_GE))
++   && sqlite3ExprIsVector(pExpr->pLeft)==0
++   && comparisonAffinity(pExpr)!=SQLITE_AFF_TEXT
++  ){
++    if( !exprIsGroupByTerm(pWalker->pParse, pGroupBy, pExpr->pLeft, 0) ){
++      sqlite3WalkExpr(pWalker, pExpr->pLeft);
++    }
++    if( pWalker->eCode
++     && !exprIsGroupByTerm(pWalker->pParse, pGroupBy, pExpr->pRight, 0)
++    ){
++      sqlite3WalkExpr(pWalker, pExpr->pRight);
++    }
++    return pWalker->eCode ? WRC_Prune : WRC_Abort;
++  }
++
++  /* The same for "x IN (list)", which applies the affinity of x to x.  */
++  if( pExpr->op==TK_IN && ExprUseXList(pExpr)
++   && sqlite3ExprIsVector(pExpr->pLeft)==0
++   && sqlite3ExprAffinity(pExpr->pLeft)!=SQLITE_AFF_TEXT
++  ){
++    if( !exprIsGroupByTerm(pWalker->pParse, pGroupBy, pExpr->pLeft, 0) ){
++      sqlite3WalkExpr(pWalker, pExpr->pLeft);
++    }
++    if( pWalker->eCode ) sqlite3WalkExprList(pWalker, pExpr->x.pList);
++    return pWalker->eCode ? WRC_Prune : WRC_Abort;
++  }
++
++  /* Check if pExpr is identical to any GROUP BY term that cannot hold two
++  ** different values that compare equal. If so, consider it constant.  */
++  if( exprIsGroupByTerm(pWalker->pParse, pGroupBy, pExpr, 1) ){
++    return WRC_Prune;
++  }
+ 
+   /* Check if pExpr is a sub-select. If so, consider it variable. */
+   if( ExprUseXSelect(pExpr) ){

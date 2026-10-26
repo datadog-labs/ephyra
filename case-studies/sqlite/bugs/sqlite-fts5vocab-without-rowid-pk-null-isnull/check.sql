@@ -1,0 +1,17 @@
+CREATE VIRTUAL TABLE n USING fts5(a, detail=none);
+CREATE VIRTUAL TABLE c USING fts5(a, detail=column);
+INSERT INTO n VALUES('x y');
+INSERT INTO c VALUES('x y');
+CREATE VIRTUAL TABLE nc USING fts5vocab(n, 'col');
+CREATE VIRTUAL TABLE ni USING fts5vocab(n, 'instance');
+CREATE VIRTUAL TABLE ci USING fts5vocab(c, 'instance');
+SELECT 'q1';
+SELECT count(*) FROM nc WHERE col IS NULL;
+SELECT 'q2';
+SELECT count(*) FROM nc WHERE col IS NOT NULL;
+SELECT 'q3';
+SELECT count(*) FROM ni WHERE col IS NULL;
+SELECT 'q4';
+SELECT count(*) FROM ni WHERE offset IS NULL;
+SELECT 'q5';
+SELECT count(*) FROM ci WHERE offset IS NULL;

@@ -35,6 +35,8 @@ a test. Status as of this export; the upstream link is authoritative.
 | [FTS5 detail=none/column: snippet() fails with "database disk image is malformed", highlight() and bm25() see matches in UNINDEXED columns](sqlite-fts5-unindexed-detail-none-instances/) | open | SQLite bug forum, posted 2026-10-20 (thread id not recorded) |
 | [sqlite-fts5vocab-rowid-or-right-join](sqlite-fts5vocab-rowid-or-right-join/) | reported 2026-10-23 | [link](https://sqlite.org/bugs/forumpost/d29f636f37) |
 | [FTS5: in a UTF-16 database, fts5vocab applies `term <` / `>` and ORDER BY term in UTF-8 order](sqlite-fts5vocab-term-range-utf16-order/) | open | [link](https://sqlite.org/bugs/forumpost/b0c03988e8) |
+| [fts5vocab: col IS NULL returns no rows since the WITHOUT ROWID schema change (reply in d29f636f37)](sqlite-fts5vocab-without-rowid-pk-null-isnull/) | open | [link](https://sqlite.org/bugs/forumpost/2d3320849d) |
+| [FULL JOIN USING column reads back as REAL through a subquery that is not flattened](sqlite-full-join-using-column-affinity/) | open | [link](https://sqlite.org/bugs/forumpost/26213fdfb9) |
 | [An index on a VIRTUAL generated column with no type returns an integral REAL as an INTEGER](sqlite-gencol-index-real-int/) | fixed | [link](https://sqlite.org/bugs/forumpost/6973ad169e) |
 | [Geopoly: `rowid = <non-integer value>` finds the row of its integer part](sqlite-geopoly-rowid-eq-nonint/) | open | SQLite bug forum, posted 2026-10-21 (thread id not recorded) |
 | [Geopoly: an UPDATE that changes the rowid but not _shape fails with "_shape does not contain a valid polygon"](sqlite-geopoly-update-rowid-nochange/) | open | SQLite bug forum, posted 2026-10-21 (thread id not recorded) |
@@ -54,6 +56,7 @@ a test. Status as of this export; the upstream link is authoritative.
 | [In a UTF-16 database, a blob over 4000 bytes read from a table's overflow pages is converted as UTF-8](sqlite-overflow-blob-encoding/) | fixed | [link](https://sqlite.org/bugs/forumpost/48c64d8bab) |
 | [In a UTF-16 database, text over 4000 bytes read from a table loses a leading U+FEFF, and an UPDATE then writes it back without it](sqlite-overflow-text-bom/) | fixed | [link](https://sqlite.org/bugs/forumpost/36a73e8c8a) |
 | [A partial index WHERE col = <constant> makes col read back as the constant: a TEXT '5.0' comes back as '5'](sqlite-partial-index-constant-affinity/) | open | [link](https://sqlite.org/bugs/forumpost/35992eec46) |
+| [HAVING-to-WHERE and window push-down drop rows when a group holds both 1 and 1.0](sqlite-partition-groupby-equal-values-pushdown/) | open | [link](https://sqlite.org/bugs/forumpost/0d4c9e9e99) |
 | [WHERE b = -9223372036854775808.0 AND typeof(b) = 'integer' misses a row whose INT column b holds that integer](sqlite-propagate-const-real-minint/) | open | [link](https://sqlite.org/bugs/forumpost/9bbaa34eea) |
 | [sqlite-rename-column-ipk-unique](sqlite-rename-column-ipk-unique/) | reported 2026-10-23 | [link](https://sqlite.org/bugs/forumpost/b088eb5b02) |
 | [`SELECT *` over a USING join left of a RIGHT or FULL JOIN is "ambiguous column name" when a later table has that column](sqlite-right-join-using-star-ambiguous/) | open | [link](https://sqlite.org/bugs/forumpost/8be1215e2c) |

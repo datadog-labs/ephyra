@@ -1,0 +1,36 @@
+--- a/src/select.c
++++ b/src/select.c
+@@ -2411,7 +2411,7 @@
+   Column *pCol;
+   CollSeq *pColl;
+   int i,j;
+-  Expr *p;
++  Expr *p, *pX;
+   struct ExprList_item *a;
+   NameContext sNC;
+ 
+@@ -2433,6 +2433,24 @@
+     p = a[i].pExpr;
+     /* pCol->szEst = ... // Column size est for SELECT tables never used */
+     pCol->affinity = sqlite3ExprAffinity(p);
++    pX = sqlite3ExprSkipCollateAndLikely(p);
++    if( pCol->affinity==SQLITE_AFF_REAL
++     && pX->op==TK_FUNCTION && pX->affExpr==SQLITE_AFF_DEFER
++    ){
++      /* The USING column of a FULL JOIN is coalesce(L.x,R.x,...) and takes
++      ** the affinity of L.x, but its value may come from a column that REAL
++      ** affinity was never applied to.  A REAL column of a subquery is read
++      ** with OP_RealAffinity, which would change such a value.  Unless
++      ** every argument has REAL affinity, use NUMERIC instead. */
++      ExprList *pArgs = pX->x.pList;
++      assert( ExprUseXList(pX) );
++      for(j=1; j<pArgs->nExpr; j++){
++        if( sqlite3ExprAffinity(pArgs->a[j].pExpr)!=SQLITE_AFF_REAL ){
++          pCol->affinity = SQLITE_AFF_NUMERIC;
++          break;
++        }
++      }
++    }
+     while( pCol->affinity<=SQLITE_AFF_NONE && pS2->pNext!=0 ){
+       m |= sqlite3ExprDataType(pS2->pEList->a[i].pExpr);
+       pS2 = pS2->pNext;

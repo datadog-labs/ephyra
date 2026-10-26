@@ -1,0 +1,16 @@
+--- a/src/build.c
++++ b/src/build.c
+@@ -50,9 +50,11 @@
+   sqlite3 *db = pParse->db;
+   Vdbe *v = pParse->pVdbe;
+ 
+-  /* Mark every PRIMARY KEY column as NOT NULL (except for imposter tables)
++  /* Mark every PRIMARY KEY column as NOT NULL (except for imposter tables
++  ** and for virtual tables, whose xColumn method may return NULL for a
++  ** PRIMARY KEY column, as fts5vocab does for "col" on a detail=none table)
+   */
+-  if( !db->init.imposterTable ){
++  if( !db->init.imposterTable && !IN_DECLARE_VTAB ){
+     for(i=0; i<pTab->nCol; i++){
+       if( (pTab->aCol[i].colFlags & COLFLAG_PRIMKEY)!=0
+        && (pTab->aCol[i].notNull==OE_None)
