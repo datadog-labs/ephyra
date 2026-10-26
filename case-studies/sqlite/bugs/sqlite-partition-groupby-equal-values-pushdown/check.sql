@@ -1,0 +1,10 @@
+CREATE TABLE t(a, b);
+INSERT INTO t VALUES (1, 10), (1.0, 20);
+SELECT 'q1';
+SELECT a, sum(b) OVER (PARTITION BY a) FROM t;
+SELECT 'q2';
+SELECT * FROM (SELECT a, sum(b) OVER (PARTITION BY a) AS s FROM t) WHERE typeof(a) = 'integer';
+SELECT 'q3';
+SELECT a, sum(b) FROM t GROUP BY a;
+SELECT 'q4';
+SELECT a, sum(b) FROM t GROUP BY a HAVING typeof(a) = 'integer';
