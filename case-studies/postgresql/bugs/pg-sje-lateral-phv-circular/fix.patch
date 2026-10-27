@@ -1,0 +1,146 @@
+diff --git a/src/backend/optimizer/plan/analyzejoins.c b/src/backend/optimizer/plan/analyzejoins.c
+index 7aad91fd34e..7b8bca65845 100644
+--- a/src/backend/optimizer/plan/analyzejoins.c
++++ b/src/backend/optimizer/plan/analyzejoins.c
+@@ -33,6 +33,7 @@
+ #include "optimizer/optimizer.h"
+ #include "optimizer/pathnode.h"
+ #include "optimizer/paths.h"
++#include "optimizer/placeholder.h"
+ #include "optimizer/planmain.h"
+ #include "optimizer/prep.h"
+ #include "optimizer/restrictinfo.h"
+@@ -96,6 +97,7 @@ static void fixup_selfjoin_jointree(PlannerInfo *root, Node *jtnode, int relid,
+ static List *fixup_selfjoin_quals(PlannerInfo *root, List *quals, int relid);
+ static Node *replace_selfjoin_qual(Node *qual);
+ static int	self_join_candidates_cmp(const void *a, const void *b);
++static bool self_join_creates_lateral_cycle(PlannerInfo *root, int r, int k);
+ 
+ 
+ /*
+@@ -1758,6 +1760,111 @@ match_unique_clauses(PlannerInfo *root, RelOptInfo *outer, List *uclauses,
+ 	return true;
+ }
+ 
++/*
++ * Would merging relation r into relation k create a cycle of lateral
++ * references?
++ *
++ * That happens when r (directly, or through a PlaceHolderVar evaluated at r)
++ * laterally references some relation that itself laterally depends on k:
++ * after the merge, k would have to be scanned both before and after that
++ * relation.  The lateral dependencies are computed here the same way
++ * create_lateral_join_info() will compute them later.
++ */
++static bool
++self_join_creates_lateral_cycle(PlannerInfo *root, int r, int k)
++{
++	int			nrels = root->simple_rel_array_size;
++	Relids	   *deps;
++	Relids		reached;
++	Relids		todo;
++	int			rti;
++	bool		result;
++
++	if (!root->hasLateralRTEs)
++		return false;
++
++	deps = (Relids *) palloc0(nrels * sizeof(Relids));
++
++	/* Direct lateral references of each baserel */
++	for (rti = 1; rti < nrels; rti++)
++	{
++		RelOptInfo *brel = root->simple_rel_array[rti];
++
++		if (brel == NULL || brel->reloptkind != RELOPT_BASEREL)
++			continue;
++
++		foreach_ptr(Node, node, brel->lateral_vars)
++		{
++			if (IsA(node, Var))
++				deps[rti] = bms_add_member(deps[rti], ((Var *) node)->varno);
++			else if (IsA(node, PlaceHolderVar))
++			{
++				PlaceHolderInfo *phinfo =
++					find_placeholder_info(root, (PlaceHolderVar *) node);
++
++				deps[rti] = bms_add_members(deps[rti], phinfo->ph_eval_at);
++			}
++		}
++	}
++
++	/* Lateral references within PlaceHolderVars */
++	foreach_node(PlaceHolderInfo, phinfo, root->placeholder_list)
++	{
++		Relids		lateral_refs;
++		int			varno = -1;
++
++		if (phinfo->ph_lateral == NULL)
++			continue;
++
++		lateral_refs = bms_intersect(phinfo->ph_lateral, root->all_baserels);
++		while ((varno = bms_next_member(phinfo->ph_eval_at, varno)) >= 0)
++		{
++			if (varno < nrels && root->simple_rel_array[varno] != NULL &&
++				root->simple_rel_array[varno]->reloptkind == RELOPT_BASEREL)
++				deps[varno] = bms_add_members(deps[varno], lateral_refs);
++		}
++	}
++
++	/* Pretend r has been merged into k */
++	deps[k] = bms_add_members(deps[k], deps[r]);
++	deps[r] = NULL;
++	for (rti = 1; rti < nrels; rti++)
++	{
++		if (bms_is_member(r, deps[rti]))
++		{
++			deps[rti] = bms_del_member(deps[rti], r);
++			deps[rti] = bms_add_member(deps[rti], k);
++		}
++	}
++
++	/*
++	 * Is k reachable from the relations k laterally references?  (A reference
++	 * from k to itself is harmless: it disappears with the merge.)
++	 */
++	reached = NULL;
++	todo = bms_del_member(bms_copy(deps[k]), k);
++	result = false;
++	while (!bms_is_empty(todo))
++	{
++		int			next = bms_next_member(todo, -1);
++
++		todo = bms_del_member(todo, next);
++		if (next == k)
++		{
++			result = true;
++			break;
++		}
++		if (bms_is_member(next, reached))
++			continue;
++		reached = bms_add_member(reached, next);
++		if (next < nrels)
++			todo = bms_add_members(todo, deps[next]);
++	}
++
++	pfree(deps);
++	return result;
++}
++
+ /*
+  * Find and remove unique self-joins in a group of base relations that have
+  * the same Oid.
+@@ -1922,6 +2029,13 @@ remove_self_joins_one_group(PlannerInfo *root, Relids relids)
+ 			if (!match_unique_clauses(root, rrel, uclauses, krel->relid))
+ 				continue;
+ 
++			/*
++			 * Don't merge the relations if that would make the remaining
++			 * relation laterally dependent on itself.
++			 */
++			if (self_join_creates_lateral_cycle(root, r, k))
++				continue;
++
+ 			/* OK, remove rrel from the query */
+ 			remove_self_join_rel(root, krel, rrel, kmark, rmark);
+ 			removed = true;
