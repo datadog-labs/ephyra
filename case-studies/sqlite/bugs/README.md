@@ -50,6 +50,7 @@ a test. Status as of this export; the upstream link is authoritative.
 | [json_valid() returns 0 for valid JSON text based on json_set call](sqlite-json-valid-stale-cache-json5/) | fixed | [link](https://sqlite.org/bugs/forumpost/1339f93b28) |
 | [LEFT JOIN with `x = NULL AND y IN (…)` on a two-column index returns a matched row as well as the NULL-extended one (regression in 3.43.0)](sqlite-left-join-in-null/) | fixed | SQLite bug forum, posted 2026-10-07 (thread id not recorded) |
 | [An OR in a LEFT JOIN's ON clause drives a loop on the left table: wrong rows, or a segfault when the joined table is omitted](sqlite-leftjoin-on-or-omitted-table-segv/) | open | [link](https://sqlite.org/bugs/forumpost/090de3eb79) |
+| [LIKE optimization reads an uninitialized counter under a LEFT JOIN (reply in 74bf8db543)](sqlite-like-opt-counter-uninit-left-join/) | open | [link](https://sqlite.org/bugs/forumpost/70e3174f54) |
 | [a IN (...) AND c GLOB 'A' with an index on (a,c): GROUP BY splits a group, DISTINCT repeats a row (BLOB in c)](sqlite-like-opt-in-order/) | fixed upstream before we reported it |  |
 | [NOT INDEXED is ignored on WITHOUT ROWID tables: the planner still uses secondary and UNIQUE indexes](sqlite-notindexed-without-rowid/) | open | [link](https://sqlite.org/bugs/forumpost/cd41fceaa0) |
 | [An OR term that uses a partial index WHERE a=5 and also tests a fails with "internal query planner error"](sqlite-or-partial-index-covering-error/) | fixed | [link](https://sqlite.org/bugs/forumpost/3ede79ce42) |

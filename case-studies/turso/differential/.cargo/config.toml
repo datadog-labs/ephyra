@@ -1,0 +1,9 @@
+# SQLite 3.50.4 (vendored libsqlite3-sys, see Cargo.toml) built with the
+# extensions ephyra-sqlite's generator draws and its trunk build has:
+# Geopoly (`CREATE VIRTUAL TABLE .. USING geopoly`) and STAT4 (its crafted
+# statistics write `sqlite_stat4`). Without them SQLite 3.50.4 rejects those
+# cases before Turso runs. libsqlite3-sys's build script reads this; the
+# runner checks the build at startup. Cargo reads this file when run from
+# this directory.
+[env]
+LIBSQLITE3_FLAGS = "SQLITE_ENABLE_GEOPOLY SQLITE_ENABLE_STAT4"

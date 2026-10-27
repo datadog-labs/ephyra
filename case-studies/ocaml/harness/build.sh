@@ -4,7 +4,7 @@
 
 # build.sh <src-dir> <build-dir> [coverage]
 # Builds two OCaml compilers from <src-dir> (closure and flambda middle ends) into
-# <build-dir>/{closure,flambda}/inst, and the Rust driver into <build-dir>/bin/ocfuzz.
+# <build-dir>/{closure,flambda}/inst, and the ephyra-based Rust driver into <build-dir>/bin/ocfuzz.
 # With "coverage", the compilers' lambda/middle_end/asmcomp are instrumented with
 # bisect_ppx (cov/build-cov.sh) and <build-dir>/coverage.json is written.
 set -euo pipefail
@@ -51,41 +51,8 @@ else
   wait $p2
 fi
 
-# Independent reference for the ref oracle: the OCaml 5.4.0 release, bytecode
-# only (front end + Lambda of a year-older compiler), built once into
-# <build-dir>/ref54/inst. Not built from <src-dir>: patches do not apply to it.
-# 5.4.0 shares some bugs that the loop already fixed in trunk; ref54-patches/
-# backports those fixes so the ref oracle does not keep reporting the
-# reference's copy of a known bug as a trunk/5.4.0 difference. The stamp
-# records which backports the installed reference has.
-build_ref54() {
-  local d=$B/ref54
-  local stamp
-  stamp=$(cat "$H"/ref54-patches/*.diff | sha256sum | cut -c1-16)
-  [ -x "$d/inst/bin/ocamlc" ] && [ -x "$d/inst/bin/ocamlrun" ] \
-    && [ "$(cat "$d/inst/ref54-patches.stamp" 2>/dev/null)" = "$stamp" ] && return 0
-  rm -rf "$d"; mkdir -p "$d"
-  cd "$d"
-  local tb=$B/.cache/ocaml-5.4.0.tar.gz
-  if [ ! -s "$tb" ]; then
-    mkdir -p "$B/.cache"
-    curl -sSfL -o "$tb.tmp" https://github.com/ocaml/ocaml/archive/refs/tags/5.4.0.tar.gz
-    mv "$tb.tmp" "$tb"
-  fi
-  tar xzf "$tb"
-  cd ocaml-5.4.0
-  local p
-  for p in "$H"/ref54-patches/*.diff; do
-    patch -p1 -s < "$p" || { echo "ref54: $p does not apply" >&2; return 1; }
-  done
-  ./configure --prefix="$d/inst" --disable-native-compiler --disable-ocamldoc --disable-debugger \
-    --disable-ocamltest > ../configure.log 2>&1
-  make -j16 > ../make.log 2>&1 || { tail -30 ../make.log >&2; return 1; }
-  make install > ../install.log 2>&1 || { tail -30 ../install.log >&2; return 1; }
-  echo "$stamp" > "$d/inst/ref54-patches.stamp"
-  cd "$d" && rm -rf ocaml-5.4.0
-}
-build_ref54
+# OCaml 5.4.0 release bytecode compiler, the ref oracle's reference (same in coverage mode)
+bash "$H/ref54.sh" "$B"
 
 # Rust driver (generator + oracle)
 cd "$H/ocfuzz"

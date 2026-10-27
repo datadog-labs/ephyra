@@ -1,0 +1,22 @@
+[package]
+name = "bbtree-properties"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Property tests for bbtree's file maps, bbtree-mmap and bbtree-store, against std's BTreeMap"
+
+[dependencies]
+ephyra = { path = "../../../crates/ephyra" }
+# The checkout at the repository root (gitignored, like the other targets').
+bbtree = { path = "../../../bbtree/bbtree", features = ["file"] }
+bbtree-mmap = { path = "../../../bbtree/bbtree-mmap" }
+bbtree-store = { path = "../../../bbtree/bbtree-store" }
+
+[profile.test]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
+[features]
+# In-process coverage for guided runs: build with RUSTFLAGS="-C instrument-coverage".
+coverage = ["ephyra/coverage"]

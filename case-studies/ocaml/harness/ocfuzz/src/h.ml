@@ -9,6 +9,8 @@ type fr = { mutable fx : float; fy : float }
 type v = V0 | V1 | V2 of int | V3 of float * int | V4 of int64
        | V5 of { mutable vx : int; vy : float }
 type pv = [ `A | `B of int | `C of float * int | `D of string ]
+(* atomic record fields (Atomic.Loc, [%atomic.loc]) next to a plain mutable one *)
+type ar = { mutable ai : int [@atomic]; mutable ab : bool [@atomic]; mutable ap : int }
 module type S = sig val k : int val f : int -> int end
 
 let p_int x = print_string (string_of_int x); print_char ' '
@@ -38,6 +40,8 @@ let p_pv : pv -> unit = function
   | `C (f, i) -> print_string "`C "; p_float f; p_int i
   | `D s -> print_string "`D "; p_str s
 let p_atom f a = print_string "atom("; f (Atomic.get a); print_string ") "
+let p_ar r = print_string "ar{"; p_int (Atomic.Loc.get [%atomic.loc r.ai]); p_bool r.ab; p_int r.ap; print_string "} "
+let p_aa a = print_string "aa[|"; for i = 0 to Atomic.Array.length a - 1 do p_int (Atomic.Array.get a i) done; print_string "|] "
 
 let p_exn = function
   | E0 -> print_string "E0"
@@ -105,3 +109,10 @@ let rec kvsum n v =
     | K0 -> 1
     | K1 (i, w) -> i + kvsum (n - 1) w
     | K2 r -> r.k2 + r.k2f 0 + kvsum (n - 1) r.k2n
+
+(* GADTs (lambda/matching.ml field reads and translcore/typeopt value kinds
+   under local type equations): a witness per payload type, an existential *)
+type _ w = WI : int w | WS : string w | WF : float w | WL : int list w | WP : (int * float) w
+type gb = G : 'a * 'a w -> gb
+(* a fresh heap string (not a static constant): moved by the minor GC *)
+let fresh_str n = String.init ((n land 7) + 1) (fun i -> Char.chr (97 + ((i + n) land 15)))

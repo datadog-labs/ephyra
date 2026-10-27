@@ -1,0 +1,15 @@
+[package]
+name = "tyz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ephyra = { path = "../../../crates/ephyra", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace]
+
+[profile.release]
+debug = "line-tables-only"

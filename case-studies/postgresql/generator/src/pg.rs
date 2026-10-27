@@ -10,7 +10,8 @@
 //! (default `.pg` in this crate). The first session of a process starts the
 //! cluster when it is not running (and creates it when it does not exist:
 //! `initdb` with the C locale and UTF-8), and leaves it running for the
-//! next process; `pg_ctl -D .pg/data stop` stops it. It runs with fsync,
+//! next process; `pg_ctl -D .pg/data stop` stops it. With `EPHYRA_PG_PORT`
+//! set it listens on 127.0.0.1 instead of the socket (see [`tcp_port`]). It runs with fsync,
 //! synchronous commit and full-page writes off (nothing here outlives a
 //! case), autovacuum off (so no plan depends on when it ran), and dynamic
 //! shared memory in files of the data directory (`mmap`): parallel queries'
@@ -58,10 +59,29 @@ pub fn pg_dir() -> PathBuf {
     }
 }
 
+/// `EPHYRA_PG_PORT=<base>`: the cluster listens on 127.0.0.1 and nothing
+/// else (no Unix socket), on port base + (a hash of [`pg_dir`]) % 1000, so
+/// two clusters (this crate's and the coverage crate's) never share one.
+/// For sandboxes that forbid binding Unix sockets (the managed loop's round
+/// agents run under one); unset, the socket in [`pg_dir`] as always, which
+/// the loop's gate and the fuzz runner use.
+pub fn tcp_port() -> Option<u16> {
+    port_for(std::env::var("EPHYRA_PG_PORT").ok().as_deref(), &pg_dir())
+}
+
+fn port_for(base: Option<&str>, dir: &std::path::Path) -> Option<u16> {
+    let base: u32 = base?.trim().parse().ok()?;
+    let h = dir.to_string_lossy().bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+    u16::try_from(base + (h % 1000) as u32).ok()
+}
+
 fn connect_to(db: &str) -> Result<Client, postgres::Error> {
-    let host = pg_dir();
     let mut config = postgres::Config::new();
-    config.host_path(&host).user("postgres").dbname(db).connect_timeout(Duration::from_secs(10));
+    match tcp_port() {
+        Some(port) => config.host("127.0.0.1").port(port),
+        None => config.host_path(pg_dir()),
+    };
+    config.user("postgres").dbname(db).connect_timeout(Duration::from_secs(10));
     config.connect(NoTls)
 }
 
@@ -130,9 +150,12 @@ fn start_server() -> Result<(), String> {
                 return Err(format!("initdb: {}", String::from_utf8_lossy(&out.stderr)));
             }
         }
+        let listen = match tcp_port() {
+            Some(port) => format!("-c unix_socket_directories= -c listen_addresses=127.0.0.1 -p {port}"),
+            None => format!("-k {} -c listen_addresses=", dir.display()),
+        };
         let opts = format!(
-            "-k {} -c listen_addresses= -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c autovacuum=off -c max_connections=200 -c shared_buffers=256MB -c max_locks_per_transaction=256 -c dynamic_shared_memory_type=mmap",
-            dir.display()
+            "{listen} -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c autovacuum=off -c max_connections=200 -c shared_buffers=256MB -c max_locks_per_transaction=256 -c dynamic_shared_memory_type=mmap"
         );
         let out = Command::new(bin.join("pg_ctl"))
             .arg("-D")
@@ -410,6 +433,17 @@ pub fn close_session() {
 mod tests {
     use super::*;
     use crate::model::{Type, DATE_MAX, DATE_MIN, TIMESTAMP_MAX, TIMESTAMP_MIN};
+
+    #[test]
+    fn tcp_port_is_per_cluster_and_off_by_default() {
+        let (a, b) = (std::path::Path::new("/w/generator/.pg"), std::path::Path::new("/w/coverage/.pg"));
+        assert_eq!(port_for(None, a), None);
+        assert_eq!(port_for(Some("x"), a), None);
+        let pa = port_for(Some("15432"), a).unwrap();
+        assert!((15432..16432).contains(&pa));
+        assert_eq!(port_for(Some(" 15432 "), a), Some(pa));
+        assert_ne!(port_for(Some("15432"), b), Some(pa));
+    }
 
     #[test]
     fn values_read_back_exactly() {

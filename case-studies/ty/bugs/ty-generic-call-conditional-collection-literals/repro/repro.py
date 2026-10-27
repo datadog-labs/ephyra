@@ -1,0 +1,9 @@
+class A: ...
+class B(A): ...
+
+def f[T](items: list[T], item: T) -> None: ...
+
+def check(flag: bool) -> None:
+    f([B] if flag else [A], B)
+
+check(True)

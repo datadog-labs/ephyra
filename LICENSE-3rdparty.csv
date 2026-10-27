@@ -44,6 +44,7 @@ cobs,https://github.com/jamesmunns/cobs.rs,MIT OR Apache-2.0,"Allen Welkie <>, J
 concurrent-queue,https://github.com/smol-rs/concurrent-queue,Apache-2.0 OR MIT,"Stjepan Glavina <stjepang@gmail.com>, Taiki Endo <te316e89@gmail.com>, John Nunley <dev@notgull.net>"
 console,https://github.com/console-rs/console,MIT,The console Authors
 const-oid,https://github.com/RustCrypto/formats,Apache-2.0 OR MIT,RustCrypto Developers
+convert_case,https://github.com/rutrum/convert-case,MIT,David Purdum <purdum41@gmail.com>
 cookie,https://github.com/SergioBenitez/cookie-rs,MIT OR Apache-2.0,"Sergio Benitez <sb@sergio.bz>, Alex Crichton <alex@alexcrichton.com>"
 cookie_store,https://github.com/pfernie/cookie_store,MIT OR Apache-2.0,Patrick Fernie <patrick.fernie@gmail.com>
 core-foundation-sys,https://github.com/servo/core-foundation-rs,MIT OR Apache-2.0,The Servo Project Developers
@@ -184,6 +185,7 @@ md-5,https://github.com/RustCrypto/hashes,MIT OR Apache-2.0,RustCrypto Developer
 md5,https://github.com/stainless-steel/md5,Apache-2.0 OR MIT,"Ivan Ukhov <ivan.ukhov@gmail.com>, Kamal Ahmad <shibe@openmailbox.org>, Konstantin Stepanov <milezv@gmail.com>, Lukas Kalbertodt <lukas.kalbertodt@gmail.com>, Nathan Musoke <nathan.musoke@gmail.com>, Scott Mabin <scott@mabez.dev>, Tony Arcieri <bascule@gmail.com>, Wim de With <register@dewith.io>, Yosef Dinerstein <yosefdi@gmail.com>"
 memchr,https://github.com/BurntSushi/memchr,Unlicense OR MIT,"Andrew Gallant <jamslam@gmail.com>, bluss"
 memfd,https://github.com/lucab/memfd-rs,MIT OR Apache-2.0,"Luca Bruno <lucab@lucabruno.net>, Simonas Kazlauskas <memfd@kazlauskas.me>"
+memmap2,https://github.com/RazrFalcon/memmap2-rs,MIT OR Apache-2.0,"Dan Burkert <dan@danburkert.com>, Yevhenii Reizner <razrfalcon@gmail.com>, The Contributors"
 memoffset,https://github.com/Gilnaa/memoffset,MIT,Gilad Naaman <gilad.naaman@gmail.com>
 miette,https://github.com/zkat/miette,Apache-2.0,Kat Marchán <kzm@zkat.tech>
 miette-derive,https://github.com/zkat/miette,Apache-2.0,Kat Marchán <kzm@zkat.tech>
@@ -355,6 +357,12 @@ utf8-zero,https://github.com/algesten/utf8-zero,MIT OR Apache-2.0,"Simon Sapin <
 utf8_iter,https://github.com/hsivonen/utf8_iter,Apache-2.0 OR MIT,Henri Sivonen <hsivonen@hsivonen.fi>
 uuid,https://github.com/uuid-rs/uuid,Apache-2.0 OR MIT,"Ashley Mannix<ashleymannix@live.com.au>, Dylan DPC<dylan.dpc@gmail.com>, Hunar Roop Kahlon<hunar.roop@gmail.com>"
 valuable,https://github.com/tokio-rs/valuable,MIT,The valuable Authors
+verus_builtin,https://github.com/verus-lang/verus,MIT,The verus_builtin Authors
+verus_builtin_macros,https://github.com/verus-lang/verus,MIT,The verus_builtin_macros Authors
+verus_prettyplease,https://github.com/dtolnay/prettyplease,MIT OR Apache-2.0,"David Tolnay <dtolnay@gmail.com>, The Verus Contributors"
+verus_state_machines_macros,https://github.com/verus-lang/verus,MIT,The verus_state_machines_macros Authors
+verus_syn,https://github.com/dtolnay/syn,MIT OR Apache-2.0,"David Tolnay <dtolnay@gmail.com>, The Verus Contributors"
+vstd,https://github.com/verus-lang/verus,MIT,The vstd Authors
 vte,https://github.com/alacritty/vte,Apache-2.0 OR MIT,"Joe Wilm <joe@jwilm.com>, Christian Duerr <contact@christianduerr.com>"
 wasi,https://github.com/bytecodealliance/wasi,Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT,The Cranelift Project Developers
 wasi,https://github.com/bytecodealliance/wasi-rs,Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT,The Cranelift Project Developers

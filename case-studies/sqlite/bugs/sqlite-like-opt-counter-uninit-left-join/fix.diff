@@ -1,0 +1,18 @@
+--- a/src/wherecode.c
++++ b/src/wherecode.c
+@@ -2159,6 +2159,15 @@
+     ** starting at regBase.
+     */
+     codeCursorHint(pTabItem, pWInfo, pLevel, pRangeEnd);
++#ifndef SQLITE_LIKE_DOESNT_MATCH_BLOBS
++    if( pLevel->iLikeRepCntr ){
++      /* An == term that is NULL jumps past the loop before the counter
++      ** is set to 1 below, and the LEFT JOIN NULL row re-enters the loop
++      ** body and so reaches the OP_DecrJumpZero. Start it at 0 so that
++      ** the OP_DecrJumpZero does not jump back into the loop. */
++      sqlite3VdbeAddOp2(v, OP_Integer, 0, (int)(pLevel->iLikeRepCntr>>1));
++    }
++#endif
+     regBase = codeAllEqualityTerms(pParse,pLevel,bRev,nExtraReg,&zStartAff);
+     assert( zStartAff==0 || sqlite3Strlen30(zStartAff)>=nEq );
+ #ifndef SQLITE_LIKE_DOESNT_MATCH_BLOBS

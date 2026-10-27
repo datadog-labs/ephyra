@@ -1,0 +1,31 @@
+[package]
+name = "bbz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+bbtree = { path = "@SRC@/bbtree", features = ["file"] }
+bbtree-mmap = { path = "@SRC@/bbtree-mmap" }
+bbtree-store = { path = "@SRC@/bbtree-store" }
+ephyra = { path = "@EPHYRA@/crates/ephyra", default-features = false }
+serde = { version = "1", features = ["derive"] }
+# u128 keys: Value numbers past u64
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+
+[workspace]
+
+[lints.rust]
+# bbtree's invariant checks (check_invariants, check_prefix_lens) are
+# compiled under --cfg fuzzing, which build.sh sets.
+unexpected_cfgs = { level = "allow" }
+
+# release + debug assertions (bbtree has many) + overflow checks, no LTO
+[profile.fuzz]
+inherits = "release"
+debug-assertions = true
+overflow-checks = true
+codegen-units = 16
+lto = false
+incremental = false
+debug = "line-tables-only"

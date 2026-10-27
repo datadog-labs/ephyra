@@ -1,0 +1,66 @@
+From 1596c1c63ee7a524a6df02e6be10b984e1e7ae41 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Tue, 27 Oct 2026 11:03:28 -0400
+Subject: [PATCH] amd64: reload the tied argument and result of atomic exchange
+ into one register
+
+Since #14980, Iatomic_exchange (like Iatomic_fetch_add since #14575) ties
+res.(0) to arg.(1) in selection.ml, because xchg/xadd overwrite their
+register operand with the old value. When that pseudo-register was
+spilled, Reloadgen.reload_operation reloaded the argument and the result
+into two different registers, so the exchange stored whatever the
+result's register held, e.g. Atomic.get after
+
+  let old = Atomic.exchange a x in (old spilled across a loop)
+
+returned an address-like value instead of x. Reload both into the same
+register.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ asmcomp/amd64/reload.ml                           |  6 ++++++
+ .../lib-atomic/test_atomic_exchange_spill.ml      | 15 +++++++++++++++
+ 2 files changed, 21 insertions(+)
+ create mode 100644 testsuite/tests/lib-atomic/test_atomic_exchange_spill.ml
+
+diff --git a/asmcomp/amd64/reload.ml b/asmcomp/amd64/reload.ml
+index 3a60721..c40536a 100644
+--- a/asmcomp/amd64/reload.ml
++++ b/asmcomp/amd64/reload.ml
+@@ -115,6 +115,12 @@ method! reload_operation op arg res =
+       if !Clflags.pic_code || !Clflags.dlcode || Arch.win64
+       then super#reload_operation op arg res
+       else (arg, res)
++  | Iatomic_fetch_add | Iatomic_exchange ->
++      (* res.(0) is tied to arg.(1) (see selection.ml): if they were spilled,
++         reload them into one register, not two *)
++      let r = self#makereg arg.(1) in
++      ([| self#makereg arg.(0); r; self#makereg arg.(2) |],
++       Array.mapi (fun i x -> if i = 0 then r else self#makereg x) res)
+   | _ -> (* Other operations: all args and results in registers *)
+       super#reload_operation op arg res
+ 
+diff --git a/testsuite/tests/lib-atomic/test_atomic_exchange_spill.ml b/testsuite/tests/lib-atomic/test_atomic_exchange_spill.ml
+new file mode 100644
+index 0000000..d9f3c33
+--- /dev/null
++++ b/testsuite/tests/lib-atomic/test_atomic_exchange_spill.ml
+@@ -0,0 +1,15 @@
++(* TEST *)
++
++(* On amd64, the result of Atomic.exchange is tied to its new-value
++   argument. When the result is spilled, the reload pass must put both
++   in one register, or the exchange stores another register. *)
++
++let a = Atomic.make 0
++let () =
++  let n = Sys.opaque_identity 2 in
++  let x = Sys.opaque_identity 1 in
++  let old = Atomic.exchange a x in
++  for _ = x downto n lor 0 do
++    if sin 1. = 0. then ignore (Sys.opaque_identity (if n = 0 then old else 0))
++  done;
++  assert (Atomic.get a = 1)
+-- 
+2.56.0
+

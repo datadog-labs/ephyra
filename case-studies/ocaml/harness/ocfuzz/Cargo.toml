@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+ephyra = { path = "../../../../crates/ephyra" }
 
 [workspace]
 
