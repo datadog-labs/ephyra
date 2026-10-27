@@ -10,6 +10,7 @@ a test. Status as of this export; the upstream link is authoritative.
 | [btree_gist date_ops: inserting infinity/-infinity into a multi-page GiST index on a date fails with "cannot subtract infinite dates"](pg-btree-gist-infinite-date/) | open | [link](https://www.postgresql.org/message-id/19761-b72cfc453e487610%40postgresql.org) |
 | [CLUSTER / REPACK silently loses a row updated in a rolled-back subtransaction](pg-cluster-subxact-row-loss/) | open | [link](https://www.postgresql.org/message-id/19760-8f9a0eba17bc8c92%40postgresql.org) |
 | ["cannot start a subtransaction when there are unprocessed inval messages" after ALTER DOMAIN DROP CONSTRAINT](pg-domain-inval-subxact/) | open | BUG #19790 |
+| [BUG #19798: "failed to build any 4-way joins" with ROLLUP over a LATERAL subquery](pg-grouping-sets-lateral-phv-no-join/) | open | [link](https://www.postgresql.org/message-id/19798-5a5da856f5f71118%40postgresql.org) |
 | [Hashed set operations and recursive UNION pre-size their hash table from the planner's estimate without the hash_mem cap (PostgreSQL 19 regression)](pg-hashsetop-out-of-memory/) | open | [link](https://www.postgresql.org/message-id/19759-acd3f33402e54f36%40postgresql.org) |
 | [Nested BETWEEN grows exponentially in parse analysis and statement_timeout cannot stop it](pg-huge-expr-timeout/) | open | [link](https://www.postgresql.org/message-id/19758-d074798b35cc9215%40postgresql.org) |
 | [JSON_TABLE with a subquery in PASSING fails with "unexpected non-SELECT command in SubLink"](pg-json-table-passing-sublink/) | open | [link](https://www.postgresql.org/message-id/19786-70758103a4b2bff2%40postgresql.org) |
@@ -20,5 +21,6 @@ a test. Status as of this export; the upstream link is authoritative.
 | ["could not find pathkey item to sort" for a Gather Merge over a merge join after outer-join reordering](pg-pathkey-item-norec-join/) | open | [link](https://www.postgresql.org/message-id/19787-d14d7f0f320f4495%40postgresql.org) |
 | [PostgreSQL: candidate from today's round, report drafted, not reported](pg-plans-sortagg-cte/) | open | BUG #19783 |
 | [SET CONSTRAINTS in a released savepoint survives ROLLBACK TO an enclosing savepoint](pg-set-constraints-released-savepoint/) | open | BUG #19782 |
+| [BUG #19799: Self-join elimination: "failed to build any 3-way joins" with LATERAL](pg-sje-lateral-phv-circular/) | open | [link](https://www.postgresql.org/message-id/19799-dab86d769b08dc53%40postgresql.org) |
 | ["expression not found in statistics object" with MCV statistics on a domain over boolean](pg-statext-bool-domain/) | open | BUG #19789 |
 | [pg_get_viewdef prints a negated integer constant in ORDER BY / GROUP BY as a column position](pg-viewdef-negated-sort-constant/) | open | [link](https://www.postgresql.org/message-id/19767-f1189fd6a83254b7%40postgresql.org) |

@@ -1,0 +1,44 @@
+diff --git a/src/backend/optimizer/path/joinrels.c b/src/backend/optimizer/path/joinrels.c
+index cf95021db75..8f3cac08051 100644
+--- a/src/backend/optimizer/path/joinrels.c
++++ b/src/backend/optimizer/path/joinrels.c
+@@ -164,17 +164,21 @@ join_search_one_level(PlannerInfo *root, int level)
+ 		foreach(r, joinrels[k])
+ 		{
+ 			RelOptInfo *old_rel = (RelOptInfo *) lfirst(r);
++			bool		old_rel_joinable;
+ 			int			first_rel;
+ 			ListCell   *r2;
+ 
+ 			/*
+-			 * We can ignore relations without join clauses here, unless they
+-			 * participate in join-order restrictions --- then we might have
+-			 * to force a bushy join plan.
++			 * We can ignore pairs of relations that both lack join clauses,
++			 * unless one of them participates in join-order restrictions ---
++			 * then we might have to force a bushy join plan.  We must test
++			 * both members of the pair: each pair is visited only once, and
++			 * the restricted member may be the one taken from the other list
++			 * (a join rel's lateral_referencers is never set, for instance).
+ 			 */
+-			if (old_rel->joininfo == NIL && !old_rel->has_eclass_joins &&
+-				!has_join_restriction(root, old_rel))
+-				continue;
++			old_rel_joinable = (old_rel->joininfo != NIL ||
++								old_rel->has_eclass_joins ||
++								has_join_restriction(root, old_rel));
+ 
+ 			if (k == other_level)	/* only consider remaining rels */
+ 				first_rel = foreach_current_index(r) + 1;
+@@ -185,6 +189,11 @@ join_search_one_level(PlannerInfo *root, int level)
+ 			{
+ 				RelOptInfo *new_rel = (RelOptInfo *) lfirst(r2);
+ 
++				if (!old_rel_joinable &&
++					new_rel->joininfo == NIL && !new_rel->has_eclass_joins &&
++					!has_join_restriction(root, new_rel))
++					continue;
++
+ 				if (!bms_overlap(old_rel->relids, new_rel->relids))
+ 				{
+ 					/*
