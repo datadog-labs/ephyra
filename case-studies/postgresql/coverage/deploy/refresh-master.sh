@@ -6,6 +6,8 @@
 #
 # 1. build-pg.sh fetches master and builds it (PG_BUILDS/<commit12>/); when
 #    its commit is the current build's, stops (FORCE=1 goes on anyway).
+#    NO_FETCH=1 builds the local origin/master without fetching (a rebuild
+#    or a move of the runner, with no network).
 # 2. Runs ephyra-postgresql's `cargo test --lib` and `cargo test --test
 #    cases` against the new build (EPHYRA_PG_BIN; a cluster of its own,
 #    RUN_ROOT/t-<commit12>, stopped and removed afterwards). When they fail,
@@ -37,7 +39,9 @@ if command -v flock > /dev/null && ! flock -n 9; then
 fi
 
 OUT="$RUN_ROOT/refresh-build.log"
-if ! NEW_BIN=$("$HERE/build-pg.sh" 2> "$OUT" | tail -1); then
+FETCH_ARG=()
+[ "${NO_FETCH:-0}" = 1 ] && FETCH_ARG=(--no-fetch)
+if ! NEW_BIN=$("$HERE/build-pg.sh" ${FETCH_ARG[@]+"${FETCH_ARG[@]}"} 2> "$OUT" | tail -1); then
     log "build-pg.sh failed: $OUT; the run stays on its build"
     exit 1
 fi

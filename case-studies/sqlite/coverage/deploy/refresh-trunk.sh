@@ -23,14 +23,25 @@
 # pre-triage CLIs and the known-bug check stay plain trunk's and each
 # bug's, and build-fixed.sh adds RUN_ROOT/clis/<check-in>/fixed/. When the
 # fixed build fails, plain trunk is vendored (logged). Switching the target
-# without a trunk move: FORCE=1 refresh-trunk.sh.
+# without a trunk move: FORCE=1 refresh-trunk.sh (offline from the kept tree:
+# FORCE=1 SQLITE_SRC=$RUN_ROOT/sqlite-src refresh-trunk.sh).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-curl -sfL https://sqlite.org/src/tarball/trunk/sqlite.tar.gz -o "$TMP/sqlite.tar.gz"
-tar xzf "$TMP/sqlite.tar.gz" -C "$TMP"
+# SQLITE_SRC: a source tree to use instead of trunk's tarball (no download;
+# the ephyra-agent controller's fixes rebuild passes RUN_ROOT/sqlite-src).
+if [ -n "${SQLITE_SRC:-}" ]; then
+    mkdir "$TMP/sqlite"
+    (cd "$SQLITE_SRC" && tar cf - -T <(tree_files "$SQLITE_SRC")) | (cd "$TMP/sqlite" && tar xf -)
+else
+    curl -sfL https://sqlite.org/src/tarball/trunk/sqlite.tar.gz -o "$TMP/sqlite.tar.gz"
+    tar xzf "$TMP/sqlite.tar.gz" -C "$TMP"
+    # Keep the pristine tree for offline rebuilds (RUN_ROOT/sqlite-src).
+    rm -rf "$RUN_ROOT/sqlite-src.new" && cp -a "$TMP/sqlite" "$RUN_ROOT/sqlite-src.new" \
+        && rm -rf "$RUN_ROOT/sqlite-src" && mv "$RUN_ROOT/sqlite-src.new" "$RUN_ROOT/sqlite-src"
+fi
 (cd "$TMP/sqlite" && ./configure > "$TMP/configure.log" 2>&1 && make sqlite3.c > "$TMP/make.log" 2>&1)
 NEW=$(checkin "$TMP/sqlite/sqlite3.h")
 OLD=$(checkin "$VENDOR/sqlite3/sqlite3.h")

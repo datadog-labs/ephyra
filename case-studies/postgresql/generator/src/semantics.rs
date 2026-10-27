@@ -1497,6 +1497,34 @@ fn reads_backing_index(m: &Model, t: &Table, column: u32) -> bool {
     t.indexes.iter().any(|i| i.columns_read().contains(&column) && fk::may_back(&m.tables, t.id, i))
 }
 
+/// Whether a CHECK constraint of `t` (not the column's domain's own) or a
+/// partial index predicate compares column `c{column}` while it is of a
+/// domain type. The parser relabels a domain column to the domain's base
+/// type under an operator, and the stored definition prints that as an
+/// explicit cast (`CHECK (((c0)::smallint > 0))`). ALTER COLUMN TYPE
+/// rebuilds the constraint or index by re-parsing that stored text, so the
+/// old base type stays pinned: a later INSERT of a value the old type
+/// cannot hold fails with 22003, and the comparison keeps its old-type
+/// meaning. PostgreSQL does this on purpose (ruleutils.c prints implicit
+/// casts so a re-parse picks the same operator; alter_table's regression
+/// test expects it), not a bug:
+/// `../bugs/discarded/pg-alter-type-domain-cast-narrowing` (runner
+/// clusters `*-statement-*-22003`). The model would compare with the new
+/// type, so such a column is not retyped. `IS NULL` takes no cast.
+fn domain_cast_pinned(t: &Table, column: u32) -> bool {
+    fn compares(p: &Pred, column: u32) -> bool {
+        match p {
+            Pred::Cmp(c, ..) | Pred::Between(c, ..) => *c == column,
+            Pred::IsNull(..) => false,
+            Pred::And(a, b) | Pred::Or(a, b) => compares(a, column) || compares(b, column),
+            Pred::Not(a) => compares(a, column),
+        }
+    }
+    t.column(column).is_some_and(|c| c.dom.is_some())
+        && (t.checks.iter().chain(t.named.iter().map(|(_, p)| p)).any(|p| compares(p, column))
+            || t.indexes.iter().any(|i| i.filter.as_ref().is_some_and(|f| compares(f, column))))
+}
+
 /// `ALTER TABLE t{k} ALTER COLUMN c{column} TYPE ty [USING ..]`: the table
 /// after it (Ok), the one error PostgreSQL must raise (Err), or None when
 /// the statement is not drawn. Not drawn (each a refusal or a rebuild the
@@ -1510,6 +1538,8 @@ fn reads_backing_index(m: &Model, t: &Table, column: u32) -> bool {
 /// - a column whose CHECK constraints or partial index predicates do not
 ///   compare with the new type as the model does ([`pred_valid`]):
 ///   PostgreSQL re-parses their text against the new type;
+/// - a column of a domain type that a table CHECK constraint or a partial
+///   index's predicate compares ([`domain_cast_pinned`]);
 /// - a column with a default: PostgreSQL keeps the default's constant
 ///   under an implicit cast, and at the next ALTER strips that cast and
 ///   converts the constant again from its first type
@@ -1537,7 +1567,7 @@ pub fn alter_type(m: &Model, k: u32, column: u32, ty: Type, using: bool) -> Opti
     {
         return None;
     }
-    if col.default.is_some() {
+    if col.default.is_some() || domain_cast_pinned(t, column) {
         return None;
     }
     if needs && !using {
@@ -1866,7 +1896,7 @@ pub fn apply(m: &mut Model, s: &Statement) -> Effect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Action, Deferral, ForeignKey, Numeric, Type};
+    use crate::model::{Action, Deferral, Domain, ForeignKey, Numeric, Type};
 
     #[test]
     fn unique_constraints_follow_postgres_equality() {
@@ -1913,6 +1943,33 @@ mod tests {
         m.tables[0].indexes[0].filter = None;
         m.tables[1].fk = None;
         assert!(valid(&m, &drop));
+    }
+
+    #[test]
+    fn alter_type_of_a_domain_column_a_check_compares_is_not_drawn() {
+        // ../bugs/discarded/pg-alter-type-domain-cast-narrowing, minimal.sql:
+        // CREATE DOMAIN small_id AS smallint; CREATE TABLE t (id small_id CHECK (id > 0));
+        // ALTER TABLE t ALTER COLUMN id TYPE bigint; INSERT INTO t VALUES (100000) -> 22003,
+        // the CHECK being `((id)::smallint > 0)` after the rebuild.
+        let positive = Pred::Cmp(0, CmpOp::Gt, Lit::plain(Value::Int(0)));
+        let mut t = Table::new(0, &[Type::Int2]);
+        t.checks.push(positive.clone());
+        let mut m = Model { tables: vec![t], ..Model::default() };
+        // the control: a plain smallint column is retyped, its CHECK compares as bigint
+        let new = alter_type(&m, 0, 0, Type::Int8, false).expect("drawn").expect("no error");
+        assert_eq!(new.columns[0].ty, Type::Int8);
+        m.tables[0].columns[0].dom = Some(Domain { name: 0, not_null: false, check: None });
+        assert!(alter_type(&m, 0, 0, Type::Int8, false).is_none());
+        assert!(!valid(&m, &Statement::AlterType { table: 0, column: 0, ty: Type::Int8, using: false }));
+        // a partial index's predicate pins it too; IS NULL takes no cast
+        m.tables[0].checks = vec![Pred::IsNull(0, true)];
+        assert!(alter_type(&m, 0, 0, Type::Int8, false).is_some());
+        m.tables[0].indexes.push(Index { filter: Some(positive.clone()), ..Index::btree(0, &[0]) });
+        assert!(alter_type(&m, 0, 0, Type::Int8, false).is_none());
+        // the domain's own CHECK is not the table's: dropped with the domain
+        m.tables[0].indexes.clear();
+        m.tables[0].columns[0].dom = Some(Domain { name: 0, not_null: false, check: Some(positive) });
+        assert!(alter_type(&m, 0, 0, Type::Int8, false).is_some());
     }
 
     #[test]

@@ -14,29 +14,24 @@
 
 use std::fmt::Write;
 
-pub struct Rng(u64);
-impl Rng {
-    pub fn new(seed: u64) -> Rng {
-        Rng(seed ^ 0x9E37_79B9_7F4A_7C15)
-    }
+/// Every decision is drawn from the ephyra `Source` of the current test, so a
+/// program is a pure function of the source (ephyra's determinism contract).
+pub struct Rng<'a>(&'a mut ephyra::Source);
+impl<'a> Rng<'a> {
     pub fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        self.0.int(..)
     }
     pub fn below(&mut self, n: usize) -> usize {
-        (self.next() % (n as u64)) as usize
+        self.0.index(n)
     }
     pub fn range(&mut self, lo: usize, hi: usize) -> usize {
-        lo + self.below(hi - lo + 1)
+        self.0.int(lo..=hi)
     }
     pub fn chance(&mut self, p: f64) -> bool {
-        (self.next() >> 11) as f64 / ((1u64 << 53) as f64) < p
+        self.0.bool_with(p)
     }
-    pub fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
-        &xs[self.below(xs.len())]
+    pub fn pick<'b, T>(&mut self, xs: &'b [T]) -> &'b T {
+        self.0.pick(xs)
     }
 }
 
@@ -59,6 +54,10 @@ pub enum Ty {
     V,
     PV,
     Atom(Box<Ty>),
+    /// H.ar: record with [@atomic] fields ai : int, ab : bool and a plain ap : int
+    AR,
+    /// int Atomic.Array.t (always length 4)
+    AA,
     Fun(Box<Ty>, Box<Ty>),
 }
 use Ty::*;
@@ -87,6 +86,8 @@ impl Ty {
             V => "H.v".into(),
             PV => "H.pv".into(),
             Atom(t) => format!("({}) Atomic.t", t.ml()),
+            AR => "H.ar".into(),
+            AA => "(int Atomic.Array.t)".into(),
             Fun(a, b) => format!("({} -> {})", a.ml(), b.ml()),
         }
     }
@@ -109,13 +110,15 @@ impl Ty {
             V => "H.p_v".into(),
             PV => "H.p_pv".into(),
             Atom(t) => format!("(H.p_atom {})", t.printer()),
+            AR => "H.p_ar".into(),
+            AA => "H.p_aa".into(),
             Fun(..) => "(fun _ -> print_string \"<fun> \")".into(),
         }
     }
     /// Polymorphic compare is defined (no functional values inside).
     fn comparable(&self) -> bool {
         match self {
-            Fun(..) | Atom(_) => false,
+            Fun(..) | Atom(_) | AR | AA => false,
             Opt(t) | List(t) | Arr(t) | Ref(t) => t.comparable(),
             Pair(a, b) => a.comparable() && b.comparable(),
             _ => true,
@@ -167,23 +170,23 @@ enum RK {
     Konst,
 }
 
+/// A generated program: module A's source and Main's test functions
+/// (`(N, "let tN () =\n...()\n")`, run in order). Shrinking deletes tests,
+/// top-level items of A and lines of tests, so ids need not be contiguous.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Program {
     pub a: String,
-    pub tests: Vec<String>,
+    pub tests: Vec<(usize, String)>,
 }
 
 impl Program {
-    pub fn main_src(&self, keep: Option<&[usize]>) -> String {
+    pub fn main_src(&self) -> String {
         let mut s = String::new();
-        let idx: Vec<usize> = match keep {
-            Some(k) => k.to_vec(),
-            None => (0..self.tests.len()).collect(),
-        };
-        for &i in &idx {
-            s.push_str(&self.tests[i]);
+        for (_, t) in &self.tests {
+            s.push_str(t);
             s.push('\n');
         }
-        for &i in &idx {
+        for (i, _) in &self.tests {
             let _ = writeln!(s, "let () = H.run \"t{i}\" t{i}");
         }
         s.push_str("let () = print_newline ()\n");
@@ -191,8 +194,8 @@ impl Program {
     }
 }
 
-pub struct Gen {
-    r: Rng,
+pub struct Gen<'a> {
+    r: Rng<'a>,
     n: usize,
     /// remaining "size" budget for the current top-level function
     fuel: i64,
@@ -212,9 +215,9 @@ const STR_POOL: &[&str] = &[
 
 const SCALAR: &[Ty] = &[Int, Int, Int, Bool, Float, Float, I32, I64, I64, Nat, Str];
 
-impl Gen {
-    pub fn new(seed: u64) -> Gen {
-        Gen { r: Rng::new(seed), n: 0, fuel: 0, handler: 0 }
+impl<'a> Gen<'a> {
+    pub fn new(src: &'a mut ephyra::Source) -> Gen<'a> {
+        Gen { r: Rng(src), n: 0, fuel: 0, handler: 0 }
     }
     fn fresh(&mut self, p: &str) -> String {
         self.n += 1;
@@ -489,6 +492,11 @@ impl Gen {
                 }
             }
             Atom(u) => format!("(Atomic.make {})", self.pure(u, env, d.saturating_sub(1))),
+            AR => {
+                let d1 = d.saturating_sub(1);
+                format!("{{ H.ai = {}; ab = {}; ap = {} }}", self.pure(&Int, env, d1), self.pure(&Bool, env, d1), self.pure(&Int, env, d1))
+            }
+            AA => format!("(Atomic.Array.make 4 {})", self.pure(&Int, env, d.saturating_sub(1))),
             Fun(a, b) => {
                 let x = self.fresh("x");
                 let body = self.pure(b, &env.with_var(&x, (**a).clone()), d.saturating_sub(1));
@@ -515,6 +523,16 @@ impl Gen {
                 FR if *t == Float => cands.push(format!("{}.H.fx", v.name)),
                 FR if *t == Float => cands.push(format!("{}.H.fy", v.name)),
                 Atom(u) if **u == *t => cands.push(format!("(Atomic.get {})", v.name)),
+                AR if *t == Int => {
+                    cands.push(format!("(Atomic.Loc.get [%atomic.loc {}.H.ai])", v.name));
+                    cands.push(format!("{}.H.ap", v.name));
+                    cands.push(format!("{}.H.ai", v.name));
+                }
+                AR if *t == Bool => cands.push(format!("{}.H.ab", v.name)),
+                AA if *t == Int => {
+                    let i = self.pure_int(env, 0);
+                    cands.push(format!("(Atomic.Array.get {} ({i} land 3))", v.name));
+                }
                 Opt(u) if **u == *t => {
                     let dflt = self.pure(t, env, d - 1);
                     cands.push(format!("(Option.value ~default:{dflt} {})", v.name))
@@ -1040,8 +1058,14 @@ impl Gen {
     fn stmt(&mut self, s: &mut String, env: &mut Env, depth: u32) {
         self.fuel -= 2;
         let deep = depth > 0 && self.fuel > 0;
-        let k = if self.handler > 0 && self.r.chance(0.15) { 104 } else { self.r.below(124) };
+        let k = if self.handler > 0 && self.r.chance(0.15) { 104 } else { self.r.below(128) };
         match k {
+            124..=126 if deep => self.gadt_fun(s, env, depth),
+            127 => {
+                // a minor collection moves young blocks: a value the native code does
+                // not register as a root reads stale memory afterwards
+                s.push_str("Gc.minor ();\n");
+            }
             114..=117 if deep => self.tmc_fun(s, env, depth),
             118..=123 if deep => self.let_rec_values(s, env),
             100..=103 if deep => {
@@ -1266,6 +1290,7 @@ impl Gen {
             }
             77..=83 if deep => self.local_fun(s, env, depth),
             84..=87 if deep => self.local_loop(s, env, depth),
+            88..=90 if self.r.chance(0.4) => self.atomic_loc_op(s, env),
             88..=90 => {
                 // atomics
                 let ats: Vec<Var> = env.vars.iter().filter(|v| matches!(v.ty, Atom(_))).cloned().collect();
@@ -1336,47 +1361,125 @@ impl Gen {
     }
 
     fn atomic_op(&mut self, s: &mut String, env: &mut Env, a: &str, u: &Ty) {
+        self.atomic_op_at(s, env, "Atomic", a, u, true)
+    }
+
+    /// An atomic operation on an atomic location: `m` is the module
+    /// (`Atomic`, `Atomic.Loc`, `Atomic.Array`), `a` the location argument(s)
+    /// (`x`, `[%atomic.loc r.H.ai]`, `arr (i land 3)`); `incr` whether the
+    /// module has incr/decr (Atomic.Array has not).
+    fn atomic_op_at(&mut self, s: &mut String, env: &mut Env, m: &str, a: &str, u: &Ty, incr: bool) {
         let x = self.fresh("ao");
-        match self.r.below(7) {
+        match self.r.below(8) {
             0 => {
-                let _ = writeln!(s, "let {x} = Atomic.get {a} in");
+                let _ = writeln!(s, "let {x} = {m}.get {a} in");
                 env.vars.push(Var { name: x, ty: u.clone() });
             }
             1 => {
                 let e = self.pure(u, env, 2);
-                let _ = writeln!(s, "Atomic.set {a} {e};");
+                let _ = writeln!(s, "{m}.set {a} {e};");
             }
             2 => {
                 let e = self.pure(u, env, 2);
-                let _ = writeln!(s, "let {x} = Atomic.exchange {a} {e} in");
+                let _ = writeln!(s, "let {x} = {m}.exchange {a} {e} in");
                 env.vars.push(Var { name: x, ty: u.clone() });
             }
             3 | 4 => {
                 // compare_and_set uses physical equality: only immediates or refs
                 // (mutable, so physical equality is well defined)
-                let exp = if self.r.chance(0.4) { format!("(Atomic.get {a})") } else { self.pure(u, env, 1) };
-                let exp = if matches!(u, Ref(_)) && !exp.starts_with("(Atomic.get") {
+                let exp = if self.r.chance(0.4) { format!("({m}.get {a})") } else { self.pure(u, env, 1) };
+                let exp = if matches!(u, Ref(_)) && !exp.starts_with('(') {
                     match env.vars_of(u).first() {
                         Some(_) => self.r.pick(&env.vars_of(u)).name.clone(),
-                        None => format!("(Atomic.get {a})"),
+                        None => format!("({m}.get {a})"),
                     }
                 } else {
                     exp
                 };
                 let nw = self.pure(u, env, 2);
-                let _ = writeln!(s, "let {x} = Atomic.compare_and_set {a} {exp} {nw} in");
+                let _ = writeln!(s, "let {x} = {m}.compare_and_set {a} {exp} {nw} in");
                 env.vars.push(Var { name: x, ty: Bool });
             }
             5 if *u == Int => {
                 let e = self.pure(&Int, env, 2);
-                let _ = writeln!(s, "let {x} = Atomic.fetch_and_add {a} {e} in");
+                let _ = writeln!(s, "let {x} = {m}.fetch_and_add {a} {e} in");
                 env.vars.push(Var { name: x, ty: Int });
             }
-            6 if *u == Int => {
-                let _ = writeln!(s, "{} {a};", self.r.pick(&["Atomic.incr", "Atomic.decr"]));
+            6 if *u == Int && incr => {
+                let f = self.r.pick(&["incr", "decr"]);
+                let _ = writeln!(s, "{m}.{f} {a};");
+            }
+            7 if *u == Int || *u == Bool => {
+                // update with a pure, total function (no concurrent writer: f runs once)
+                let y = self.fresh("x");
+                let mut env2 = env.clone();
+                env2.vars.push(Var { name: y.clone(), ty: u.clone() });
+                let e = self.pure(u, &env2, 2);
+                let _ = writeln!(s, "{m}.update (fun {y} -> {e}) {a};");
             }
             _ => {
-                let _ = writeln!(s, "H.p_atom {} {a};", u.printer());
+                let _ = writeln!(s, "{} ({m}.get {a});", u.printer());
+            }
+        }
+    }
+
+    /// Atomic record fields and atomic arrays (trunk 5.4+/5.6 features).
+    fn atomic_loc_op(&mut self, s: &mut String, env: &mut Env) {
+        let locs: Vec<Var> = env.vars.iter().filter(|v| matches!(v.ty, AR | AA)).cloned().collect();
+        if locs.is_empty() || self.r.chance(0.25) {
+            let x = self.fresh("al");
+            if self.r.chance(0.5) {
+                let (i, b, p) = (self.pure(&Int, env, 2), self.pure(&Bool, env, 2), self.pure(&Int, env, 2));
+                let _ = writeln!(s, "let {x} = {{ H.ai = {i}; ab = {b}; ap = {p} }} in");
+                env.vars.push(Var { name: x, ty: AR });
+            } else {
+                let e = self.pure(&Int, env, 2);
+                if self.r.chance(0.5) {
+                    let _ = writeln!(s, "let {x} = Atomic.Array.make 4 {e} in");
+                } else {
+                    let j = self.fresh("j");
+                    let mut env2 = env.clone();
+                    env2.vars.push(Var { name: j.clone(), ty: Int });
+                    let e = self.pure(&Int, &env2, 2);
+                    let _ = writeln!(s, "let {x} = Atomic.Array.init 4 (fun {j} -> {e}) in");
+                }
+                env.vars.push(Var { name: x, ty: AA });
+            }
+            return;
+        }
+        let v = self.r.pick(&locs).clone();
+        match v.ty {
+            AR => match self.r.below(5) {
+                0 => {
+                    let e = self.pure(&Int, env, 2);
+                    let _ = writeln!(s, "{}.H.ap <- {e};", v.name);
+                }
+                1 => {
+                    // plain write to an atomic field (allowed: a release store)
+                    let e = self.pure(&Int, env, 2);
+                    let _ = writeln!(s, "{}.H.ai <- {e};", v.name);
+                }
+                2 => {
+                    let a = format!("[%atomic.loc {}.H.ab]", v.name);
+                    self.atomic_op_at(s, env, "Atomic.Loc", &a, &Bool, true);
+                }
+                _ => {
+                    let a = format!("[%atomic.loc {}.H.ai]", v.name);
+                    self.atomic_op_at(s, env, "Atomic.Loc", &a, &Int, true);
+                }
+            },
+            _ => {
+                // indices always in bounds (land 3, length 4); unsafe_ variants too
+                let i = self.pure_int(env, 1);
+                let pre = if self.r.chance(0.3) { "unsafe_" } else { "" };
+                let a = format!("{} (({i}) land 3)", v.name);
+                let mut op = String::new();
+                self.atomic_op_at(&mut op, env, "Atomic.Array", &a, &Int, false);
+                if pre.is_empty() {
+                    s.push_str(&op);
+                } else {
+                    s.push_str(&op.replacen("Atomic.Array.", "Atomic.Array.unsafe_", 1).replace("Atomic.Array.unsafe_length", "Atomic.Array.length"));
+                }
             }
         }
     }
@@ -1402,6 +1505,95 @@ impl Gen {
             let _ = writeln!(s, "let {x} = {call} in");
         }
         env.vars.push(Var { name: x, ty: f.ret.clone() });
+    }
+
+    /// A local function matching on a GADT witness (`H.w`) together with a
+    /// payload of the witnessed type, then 1-3 calls (some through the
+    /// existential `H.gb`). Shapes follow testsuite/tests/basic/gadt_immediate_fields.ml
+    /// and typeopt/partial_gadt.ml: tuple, curried `match w, x`, constructor or
+    /// record of a local type mentioning the abstract type, GADT pattern on a
+    /// parameter (partial: Match_failure, alone in its let). Arms observe the
+    /// payload after a `Gc.minor ()` (a field read wrongly classified as
+    /// immediate is not a GC root).
+    fn gadt_fun(&mut self, s: &mut String, env: &mut Env, depth: u32) {
+        let cons: [(&str, Ty); 5] = [("WI", Int), ("WS", Str), ("WF", Float), ("WL", List(bx(Int))), ("WP", Pair(bx(Int), bx(Float)))];
+        let name = self.fresh("gf");
+        let shape = self.r.below(7);
+        // arms: a subset in random order; partial when some are missing (no wildcard)
+        let mut idx: Vec<usize> = (0..5).collect();
+        for i in (1..idx.len()).rev() {
+            let j = self.r.below(i + 1);
+            idx.swap(i, j);
+        }
+        let keep = if shape == 5 { 1 } else if self.r.chance(0.6) { 5 } else { self.r.range(1, 4) };
+        idx.truncate(keep);
+        let wild = keep < 5 && shape != 5 && self.r.chance(0.4);
+        let attr = *self.r.pick(&["", "", "[@inline never]", "[@inline]"]);
+        let mut arms = String::new();
+        for &c in &idx {
+            let (cn, ty) = &cons[c];
+            let x = self.fresh("gx");
+            let env2 = env.with_var(&x, ty.clone());
+            let gc = if self.r.chance(0.5) { "Gc.minor (); " } else { "" };
+            let body = self.block(&Int, &env2, depth - 1, 3);
+            // rebound at its refined type: lets in the body that derive from it would
+            // otherwise have the ambiguous type `a` (escaping its equation)
+            let src = if matches!(shape, 4 | 6) { "gp" } else { x.as_str() };
+            let arm_body = format!("(let {x} : {} = {src} in {gc}{} {x}; {body})", ty.ml(), ty.printer());
+            let pat = match shape {
+                0 => format!("({x}, H.{cn})"),
+                1 => format!("H.{cn}, {x}"),
+                2 => format!("M.C ({x}, H.{cn})"),
+                3 => format!("{{ M.gw = H.{cn}; gv = {x} }}"),
+                _ => format!("H.{cn}"),
+            };
+            match shape {
+                5 => arms = format!("({x} : a) : int = {arm_body}"),
+                _ => {
+                    let _ = writeln!(arms, "  | {pat} -> {arm_body}");
+                }
+            }
+        }
+        if wild {
+            let d = self.pure(&Int, env, 2);
+            let _ = writeln!(arms, "  | _ -> {d}");
+        }
+        let def = match shape {
+            0 => format!("let{attr} {name} = fun (type a) (p : a * a H.w) : int -> match p with\n{arms} in\n"),
+            1 => format!("let{attr} {name} = fun (type a) (gp : a) (w : a H.w) : int -> match w, gp with\n{arms} in\n"),
+            2 => format!(
+                "let{attr} {name} = fun (type a) (gp : a) (w : a H.w) : int ->\n let module M = struct type u = C of a * a H.w end in\n match Sys.opaque_identity (M.C (gp, w)) with\n{arms} in\n"
+            ),
+            3 => format!(
+                "let{attr} {name} = fun (type a) (gp : a) (w : a H.w) : int ->\n let module M = struct type u = {{ gv : a; gw : a H.w }} end in\n match Sys.opaque_identity {{ M.gv = gp; gw = w }} with\n{arms} in\n"
+            ),
+            4 => format!("let{attr} {name} = fun (type a) (w : a H.w) (gp : a) : int -> match w with\n{arms} in\n"),
+            5 => format!("let{attr} {name} (type a) (H.{} : a H.w) {arms} in\n", cons[idx[0]].0),
+            _ => format!("let{attr} {name} : type a. a H.w -> a -> int = fun w gp -> match w with\n{arms} in\n"),
+        };
+        s.push_str(&def);
+        let ncalls = self.r.range(1, 3);
+        for _ in 0..ncalls {
+            // mostly a constructor the function handles
+            let c = if self.r.chance(0.8) { idx[self.r.below(idx.len())] } else { self.r.below(5) };
+            let (cn, ty) = &cons[c];
+            let v = if *ty == Str && self.r.chance(0.6) { format!("(H.fresh_str {})", self.pure(&Int, env, 2)) } else { self.pure(ty, env, 2) };
+            let call = |a: &str, w: &str| -> String {
+                match shape {
+                    0 => format!("{name} ({a}, {w})"),
+                    1 | 2 | 3 => format!("{name} {a} {w}"),
+                    _ => format!("{name} {w} {a}"),
+                }
+            };
+            let x = self.fresh("g");
+            if self.r.chance(0.3) {
+                let e = format!("(match Sys.opaque_identity (H.G ({v}, H.{cn})) with H.G (ga, gw) -> {})", call("ga", "gw"));
+                let _ = writeln!(s, "let {x} = {e} in");
+            } else {
+                let _ = writeln!(s, "let {x} = {} in", call(&v, &format!("H.{cn}")));
+            }
+            env.vars.push(Var { name: x, ty: Int });
+        }
     }
 
     fn local_fun(&mut self, s: &mut String, env: &mut Env, depth: u32) {
@@ -2004,6 +2196,8 @@ impl Gen {
             (FR, "{ H.fx = 1.; fy = 2. }".into()),
             (Atom(bx(Int)), "Atomic.make 0".into()),
             (Atom(bx(Bool)), "Atomic.make false".into()),
+            (AR, "{ H.ai = 0; ab = false; ap = 0 }".into()),
+            (AA, "Atomic.Array.make 4 0".into()),
         ];
         for (i, (t, init)) in globals.iter().enumerate() {
             if self.r.chance(0.7) {
@@ -2080,7 +2274,7 @@ impl Gen {
             }
             s.push_str(&body);
             s.push_str("()\n");
-            tests.push(s);
+            tests.push((i, s));
         }
         Program { a, tests }
     }

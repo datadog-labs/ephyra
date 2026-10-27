@@ -115,6 +115,42 @@ fn update_from_repaired_against_another_state_agrees_with_sqlite() {
     assert!(tried > 400 && kept > 80, "{tried} UPDATE FROM statements repaired, {kept} kept as UPDATE FROM");
 }
 
+/// Whether the linked SQLite has our bug 6973ad169e (bug forum; folder
+/// `bugs/sqlite-gencol-index-real-int`): an index on a VIRTUAL generated
+/// column with no type over a REAL column stores an integral REAL as an
+/// INTEGER, so reads through the index give `1` where the table gives
+/// `1.0`. Fixed on trunk by 7408f90ecc (2026-10-14); the frozen scorer
+/// amalgamation (797081cb705c, 2026-10-08) still has it, and the managed
+/// loop's gate runs these tests on that amalgamation. Probed once, on the
+/// linked library itself, so a build with the fix checks every case.
+fn gencol_index_real_int_bug() -> bool {
+    static BUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *BUG.get_or_init(|| {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE t(a REAL, b AS (a) VIRTUAL); INSERT INTO t(a) VALUES (1.0); CREATE INDEX i ON t(b);")
+            .unwrap();
+        query(&db, "SELECT typeof(b) FROM t INDEXED BY i").unwrap() == [[Value::Text("integer".into())]]
+    })
+}
+
+/// The shape of 6973ad169e in the model: an index (on its columns or its
+/// expression's) over a generated column (all are VIRTUAL and untyped
+/// here) that copies a REAL column. Only a case that disagrees with
+/// SQLite and has this shape, on a library that has the bug, is let go:
+/// the rest of the case is not checked (its later reads go through the
+/// same index).
+fn meets_gencol_index_real_int(m: &ephyra_sqlite::model::Model) -> bool {
+    use ephyra_sqlite::model::{affinity, Affinity};
+    gencol_index_real_int_bug()
+        && m.tables.iter().any(|t| {
+            t.indexes.iter().any(|ix| {
+                ix.columns.iter().any(|&(c, _)| {
+                    t.generated.get(c).copied().flatten().is_some_and(|src| affinity(t, src) == Affinity::Real)
+                })
+            })
+        })
+}
+
 fn agree(case: &Case) {
     let mut m = model_of(&case.file).expect("a well formed case");
     let db = open(&case.file.0);
@@ -124,6 +160,9 @@ fn agree(case: &Case) {
         match effect.rows {
             Some(expected) => {
                 let actual = query(&db, &sql).unwrap_or_else(|e| panic!("statement {k}: {sql}: {e}"));
+                if !expected.matches(&actual) && meets_gencol_index_real_int(&m) {
+                    return;   // the known SQLite bug 6973ad169e (above)
+                }
                 assert!(expected.matches(&actual), "statement {k}: {sql}\nexpected {expected:?}\nactual {actual:?}");
             },
             None => {
@@ -146,6 +185,9 @@ fn agree(case: &Case) {
         };
         let actual = query(&db, &sql).unwrap();
         let expected = semantics::contents(t);
+        if !semantics::same_rows(&actual, &expected) && meets_gencol_index_real_int(&m) {
+            return;   // 6973ad169e: the scan read the index (above)
+        }
         assert!(semantics::same_rows(&actual, &expected), "table t{k} at the end\nexpected {expected:?}\nactual {actual:?}");
     }
     // The named constraints as the model has them, in the order of the
@@ -256,4 +298,70 @@ fn storage_statements_drawn_and_agree() {
     for k in ["journal_mode Delete", "journal_mode Persist", "journal_mode Off", "begin", "commit", "auto_vacuum", "temp_store", "mmap_size", "vacuum_into"] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 10, "{k}: {seen:?}");
     }
+}
+
+/// The gate's counterexample of 2026-10-26 (managed round steer-1 on
+/// workspace-ephyra-fuzz, `EPHYRA_REPLAY=13472932561469801468:801`) shrank
+/// to `t2(c0, c1, c2, c3 DOUBLE)` holding `('', NULL, NULL, 1.0)`, then
+/// `ALTER TABLE t2 ADD COLUMN c4 AS (c3) VIRTUAL; CREATE INDEX t2_i0 ON
+/// t2(c0, c4)`. The same shape on a drawn file (a REAL column holding an
+/// integral real): SQLite with 6973ad169e reads the generated column
+/// through the index as an integer, the case meets the exclusion and the
+/// property lets it go; a library with the fix reads the real, as the
+/// model says, and no case is let go.
+#[test]
+fn gencol_index_over_real_column_is_the_known_bug_6973ad169e() {
+    use ephyra_sqlite::{
+        files::draw_for_statements,
+        model::{affinity, Affinity, Db, Index, MAX_COLUMNS},
+        statements::NewColumn,
+    };
+    for seed in 0..3000u64 {
+        let file = draw_for_statements(&mut Source::new(seed, (seed % 101) as usize));
+        let Some(m0) = model_of(&file) else { continue };
+        let found = m0.tables.iter().enumerate().find_map(|(k, t)| {
+            let ok = t.strict.is_none() && t.db == Db::Main && t.columns < MAX_COLUMNS && t.generated.iter().all(Option::is_none);
+            (0..t.columns)
+                .find(|&c| {
+                    ok && affinity(t, c) == Affinity::Real
+                        && t.rows.iter().any(|r| matches!(r.values[c], Value::Real(x) if x.fract() == 0.0 && x.abs() < 1e15))
+                })
+                .map(|c| (k, c))
+        });
+        let Some((k, c)) = found else { continue };
+        let (n, ix) = (m0.tables[k].columns, m0.tables[k].indexes.len());
+        let add = Statement::AddColumn {
+            table: k,
+            column: n,
+            def: NewColumn { ty: None, decl: None, coll: None, not_null: false, default: None, references: None, generated: Some((c, true)) },
+        };
+        let index = Statement::CreateIndex {
+            table: k,
+            index: ix,
+            def: Index { columns: vec![(n, false)], unique: false, expr: None, filter: None, coll: vec![] },
+            db: Db::Main,
+        };
+        let mut m = m0.clone();
+        if !semantics::valid(&m, &add) {
+            continue;
+        }
+        semantics::apply(&mut m, &add);
+        if !semantics::valid(&m, &index) {
+            continue;
+        }
+        semantics::apply(&mut m, &index);
+        let db = open(&file.0);
+        db.execute_batch(&format!("{add}; {index};")).unwrap();
+        let types = query(&db, &format!("SELECT DISTINCT typeof(c{n}) FROM t{k} INDEXED BY t{k}_i{ix} WHERE typeof(c{c}) = 'real' AND c{c} = CAST(c{c} AS INTEGER)")).unwrap();
+        if gencol_index_real_int_bug() {
+            assert!(types.contains(&vec![Value::Text("integer".into())]), "seed {seed}: the linked SQLite has 6973ad169e: {types:?}");
+            assert!(meets_gencol_index_real_int(&m), "seed {seed}");
+        } else {
+            assert_eq!(types, [[Value::Text("real".into())]], "seed {seed}");
+            assert!(!meets_gencol_index_real_int(&m), "no exclusion on a library with the fix");
+        }
+        agree(&Case { file, statements: vec![add, index] });
+        return;
+    }
+    panic!("no drawn file with a REAL column holding an integral real");
 }

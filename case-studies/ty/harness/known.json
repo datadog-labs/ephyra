@@ -1,0 +1,50 @@
+[
+ {
+  "name": "max-generic-list-context",
+  "sig": "fp__",
+  "msg": "SupportsDunderLT[Any]",
+  "note": "bugs/candidates/max-generic-list-context"
+ },
+ {
+  "name": "intenum-truthiness-precision",
+  "sig": "sound__assign",
+  "msg": "is_assignable_to(_t.Literal[E",
+  "note": "if p: on IntEnum | None gives E & ~AlwaysFalsy; ty cannot prove an IntEnum literal is not always falsy (precision, not soundness)"
+ },
+ {
+  "name": "typeddict-union-arg-dict-literal",
+  "sig": "fp__",
+  "msg": "| dict[str, list[",
+  "note": "dict literal against TypedDict | dict[str, list[...]] infers inner lists without context (bugs/candidates/typeddict-union-arg-dict-literal)"
+ },
+ {
+  "name": "generic-alias-param-comprehension-context",
+  "sig": "fp__",
+  "msg": "found `list[Never]`",
+  "note": "r2 candidate: comprehension with a statically false condition vs generic alias param A2[T] = list[T] (candidates/generic-alias-param-comprehension-context)"
+ },
+ {
+  "name": "generic-alias-param-constrained-literalstring",
+  "sig": "fp__",
+  "msg": "satisfies the inferred upper bound `LiteralString`",
+  "note": "r2 candidate: constrained TypeVar through generic alias param A0[T] = list[T] (candidates/generic-alias-param-comprehension-context/min2-constrained.py)"
+ },
+ {
+  "name": "generic-alias-param-solving",
+  "sig": "fp__invalid-argument-type",
+  "msg": "is incorrect: Expected `A",
+  "note": "r2 candidate family: ty solves a TypeVar through a generic alias parameter A[T] = list[T] differently from list[T] (candidates/generic-alias-param-comprehension-context, min3)"
+ },
+ {
+  "name": "typeddict-union-arg-dict-literal-dictvals",
+  "sig": "fp__",
+  "msg": "| dict[str, dict[",
+  "note": "ty#4829 with dict values"
+ },
+ {
+  "name": "max-generic-list-context-overload",
+  "sig": "fp__no-matching-overload",
+  "msg": "No overload of function",
+  "note": "ty#4828 via max(first(...)) into an overloaded call; broad matcher, revisit"
+ }
+]

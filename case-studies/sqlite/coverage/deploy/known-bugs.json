@@ -570,7 +570,7 @@
         "dir": "."
       },
       "repro": "case-studies/sqlite/bugs/sqlite-fts5vocab-term-range-utf16-order/check.sql",
-      "expected": "q1|apple ĳs\nq2|apple b ĳs\nq3|ĳs apple b\nq4|ĳs\n"
+      "expected": "q1|apple \u0133s\nq2|apple b \u0133s\nq3|\u0133s apple b\nq4|\u0133s\n"
     },
     {
       "name": "sqlite-fts5-detail-none-secure-delete-replaced-rowid",
@@ -755,6 +755,58 @@
       },
       "repro": "case-studies/sqlite/bugs/sqlite-rename-column-ipk-unique/check.sql",
       "expected": "q1|CREATE TABLE t1(z INTEGER, PRIMARY KEY(z), UNIQUE(z)) WITHOUT ROWID\nq2|CREATE TABLE t2(z INTEGER, d, UNIQUE(d, z), PRIMARY KEY(z))\n"
+    },
+    {
+      "name": "sqlite-partition-groupby-equal-values-pushdown",
+      "folder": "case-studies/sqlite/bugs/sqlite-partition-groupby-equal-values-pushdown",
+      "summary": "A WHERE term on a subquery with a window function (pushDownWindowCheck, select.c) or a HAVING term (havingToWhere) that uses only PARTITION BY / GROUP BY expressions is moved below the window/aggregate by sqlite3ExprIsConstantOrGroupBy (expr.c), which treats such terms as constant per partition/group; but values that compare equal (integer 1 and real 1.0) can be told apart (typeof, ||), so single rows are removed from a partition/group and sum() OVER (PARTITION BY a) / sum() GROUP BY a give 10 instead of 30. Wrong result on trunk 4fee54f1d687 and every trunk CLI on the host back to 03f699544e6b",
+      "status": "open",
+      "fix": {
+        "path": "case-studies/sqlite/bugs/sqlite-partition-groupby-equal-values-pushdown/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "case-studies/sqlite/bugs/sqlite-partition-groupby-equal-values-pushdown/check.sql",
+      "expected": "q1\n1|30\n1.0|30\nq2\n1|30\nq3\n1|30\nq4\n1|30\n"
+    },
+    {
+      "name": "sqlite-full-join-using-column-affinity",
+      "folder": "case-studies/sqlite/bugs/sqlite-full-join-using-column-affinity",
+      "summary": "The USING column of a FULL JOIN whose left column is REAL reads back as REAL through a materialized subquery, CTE, DISTINCT subquery or window query: a right-only row's integer 9007199254740993 becomes 9007199254740992.0 (sqlite3SubqueryColumnTypes gives the SQLITE_AFF_DEFER coalesce() the left column's REAL affinity, so the reader adds OP_RealAffinity)",
+      "status": "open",
+      "fix": {
+        "path": "case-studies/sqlite/bugs/sqlite-full-join-using-column-affinity/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "case-studies/sqlite/bugs/sqlite-full-join-using-column-affinity/check.sql",
+      "expected": "q1\n0|integer\n9007199254740993|integer\nq2\n0|integer\n9007199254740993|integer\nq3\n0|integer\n9007199254740993|integer\nq4\n0|integer\n9007199254740993|integer\n"
+    },
+    {
+      "name": "sqlite-fts5vocab-without-rowid-pk-null-isnull",
+      "folder": "case-studies/sqlite/bugs/sqlite-fts5vocab-without-rowid-pk-null-isnull",
+      "summary": "fts5vocab tables declared WITHOUT ROWID with PRIMARY KEY(term, col...) get implicit NOT NULL PK columns, so WHERE col/offset IS NULL is folded to false although the vtab returns NULL for them (detail=none/column).",
+      "status": "open",
+      "fix": {
+        "path": "case-studies/sqlite/bugs/sqlite-fts5vocab-without-rowid-pk-null-isnull/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "case-studies/sqlite/bugs/sqlite-fts5vocab-without-rowid-pk-null-isnull/check.sql",
+      "expected": "q1\n2\nq2\n0\nq3\n2\nq4\n2\nq5\n2\n"
+    },
+    {
+      "name": "sqlite-like-opt-counter-uninit-left-join",
+      "folder": "case-studies/sqlite/bugs/sqlite-like-opt-counter-uninit-left-join",
+      "summary": "Since check-in 08e979525ff1 (the fix for our 74bf8db543) the LIKE optimization loop counter is set after the == terms; an == term that is NULL jumps past it, and a LEFT JOIN's NULL row re-enters the loop body and reaches OP_DecrJumpZero on the uninitialized counter: debug builds assert memIsValid, release builds may restart the LIKE loop with uncomputed key registers (runner worker SIGSEGV in vdbeRecordCompareString via sqlite3BtreeIndexMoveto, run 20261027-0705). Needs a GLOB prefix or case-sensitive LIKE and an outer join. Check: the fixed build's bytecode sets the counter (Integer 0) before the IsNull.",
+      "status": "open",
+      "fix": {
+        "path": "case-studies/sqlite/bugs/sqlite-like-opt-counter-uninit-left-join/fix.diff",
+        "strip": 1,
+        "dir": "."
+      },
+      "repro": "case-studies/sqlite/bugs/sqlite-like-opt-counter-uninit-left-join/check.sql",
+      "expected": "addr  opcode         p1    p2    p3    p4             p5  comment      \n----  -------------  ----  ----  ----  -------------  --  -------------\n0     Init           0     23    0                    0   \n1     OpenRead       0     4     0     0              0   \n2     OpenRead       2     3     0     k(3,,,)        0   \n3     Rewind         0     22    0                    0   \n4       Integer        0     1     0                    0   \n5       Integer        0     2     0                    0   \n6       Null           0     3     0                    0   \n7       IsNull         3     18    0                    0   \n8       Integer        1     2     0                    0   \n9       String8        0     4     2     a              0   \n10      SeekGE         2     17    3     2              0   \n11      String8        0     4     2     b              0   \n12        IdxGE          2     17    3     2              0   \n13        Integer        1     1     0                    0   \n14        Integer        1     5     0                    0   \n15        ResultRow      5     1     0                    0   \n16      Next           2     12    0                    0   \n17      DecrJumpZero   2     9     0                    0   \n18      IfPos          1     21    0                    0   \n19      NullRow        2     0     0                    0   \n20      Goto           0     13    0                    0   \n21    Next           0     4     0                    1   \n22    Halt           0     0     0                    0   \n23    Transaction    0     0     3     0              1   \n24    Goto           0     1     0                    0   \n"
     }
   ]
 }

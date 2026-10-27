@@ -1,0 +1,44 @@
+# Backport of loop patch 001 (lambda/matching.ml hunks only) to OCaml 5.4.0,
+# whose as_interval_canfail has the same bug: `match x with -4611686018427387904 -> a | (2|4) when false -> b | _ -> c`
+# returns a for x = 0 in 5.4.0 bytecode.
+diff --git a/lambda/matching.ml b/lambda/matching.ml
+index 1bc049332..7697633cf 100644
+--- a/lambda/matching.ml
++++ b/lambda/matching.ml
+@@ -2843,22 +2843,22 @@ let as_interval_canfail fail ~low ~high l =
+           if act_index = cur_act then
+             nofail_rec cur_low i cur_act rem
+           else if act_index = 0 then
+-            (cur_low, i - 1, cur_act) :: fail_rec i i rem
++            (cur_low, i - 1, cur_act) :: fail_rec i rem
+           else
+             (cur_low, i - 1, cur_act) :: nofail_rec i i act_index rem
+         else if act_index = 0 then
+           (cur_low, cur_high, cur_act)
+-          :: fail_rec (cur_high + 1) (cur_high + 1) all
++          :: fail_rec (cur_high + 1) all
+         else
+           (cur_low, cur_high, cur_act)
+           :: (cur_high + 1, i - 1, 0)
+           :: nofail_rec i i act_index rem
+-  and fail_rec cur_low cur_high = function
+-    | [] -> [ (cur_low, cur_high, 0) ]
++  and fail_rec cur_low = function
++    | [] -> [ (cur_low, high, 0) ]
+     | (i, act_i) :: rem ->
+         let index = do_store "YES" act_i in
+         if index = 0 then
+-          fail_rec cur_low i rem
++          fail_rec cur_low rem
+         else
+           (cur_low, i - 1, 0) :: nofail_rec i i index rem
+   in
+@@ -2867,7 +2867,7 @@ let as_interval_canfail fail ~low ~high l =
+     | (i, act_i) :: rem ->
+         let index = do_store "INIT" act_i in
+         if index = 0 then
+-          fail_rec low i rem
++          fail_rec low rem
+         else if low < i then
+           (low, i - 1, 0) :: nofail_rec i i index rem
+         else
