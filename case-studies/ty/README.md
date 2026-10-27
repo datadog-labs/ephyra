@@ -8,6 +8,7 @@ Testing [ty](https://github.com/astral-sh/ty), Astral's Python type checker
   builds and runs. Paths under `/agent-run` are the agent host's run directory.
   The harness depends on the library here through a relative path.
 
-The bugs it found were reported as
-[astral-sh/ty#4825 to #4831](https://github.com/astral-sh/ty/issues?q=is%3Aissue+author%3Aalpaylan);
-their folders will be added here.
+- [`bugs/`](bugs): the bugs it found that were reported upstream
+  ([astral-sh/ty](https://github.com/astral-sh/ty/issues?q=is%3Aissue+author%3Aalpaylan)),
+  each with the issue as posted (`posted.md`) and its reproduction;
+  [`bugs/README.md`](bugs/README.md) lists them with their status.
