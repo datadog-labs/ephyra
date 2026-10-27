@@ -6,8 +6,10 @@ a test. Status as of this export; the upstream link is authoritative.
 
 | Bug | Status | Upstream |
 |---|---|---|
+| [ty-baseline-sort-total-order](ty-baseline-sort-total-order/) | reported 2026-10-27 | [link](https://github.com/astral-sh/ty/issues/4839) |
 | [ty-closure-narrowing-comprehension](ty-closure-narrowing-comprehension/) | reported 2026-10-26 | [link](https://github.com/astral-sh/ty/issues/4825) |
 | [ty-crash-panic-type-expression-271](ty-crash-panic-type-expression-271/) | reported 2026-10-27 | [link](https://github.com/astral-sh/ty/issues/4837) |
+| [ty-fix-backslash-ignore-comment](ty-fix-backslash-ignore-comment/) | reported 2026-10-27 | [link](https://github.com/astral-sh/ty/issues/4840) |
 | [ty-generic-alias-param-solving](ty-generic-alias-param-solving/) | reported 2026-10-26 | [link](https://github.com/astral-sh/ty/issues/4830) |
 | [ty-generic-call-conditional-collection-literals](ty-generic-call-conditional-collection-literals/) | reported 2026-10-27 | [link](https://github.com/astral-sh/ty/issues/4836) |
 | [ty-lambda-union-of-callables](ty-lambda-union-of-callables/) | reported 2026-10-27 | [link](https://github.com/astral-sh/ty/issues/4835) |
