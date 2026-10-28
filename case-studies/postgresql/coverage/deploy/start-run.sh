@@ -38,7 +38,12 @@ if ! "$COV/target/release/runner" version >> "$RUN_ROOT/deploy.log" 2>&1; then
     fi
 fi
 
-DIR="$RUN_ROOT/$(date -u +%Y%m%d-%H%M)-postgresql-$COMMIT"
+# Two runs started in the same minute (a deploy right after the nightly refresh, 2026-10-28)
+# must not share a directory: mkdir -p reused it and the deploy saw no new run.
+STAMP=$(date -u +%Y%m%d-%H%M)
+DIR="$RUN_ROOT/$STAMP-postgresql-$COMMIT"
+N=2
+while [ -e "$DIR" ] && [ $N -lt 100 ]; do DIR="$RUN_ROOT/$STAMP-postgresql-$COMMIT-$N"; N=$((N + 1)); done
 SOCKET="$DIR/pg/.s.PGSQL.5432"
 if [ "${#SOCKET}" -ge 100 ]; then
     log "the cluster's socket $SOCKET is ${#SOCKET} bytes, a Unix socket path takes under 100: set a shorter RUN_ROOT"

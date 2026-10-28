@@ -5,6 +5,9 @@ verified by coding agents**: you author the generator, the support
 predicate, the shrinker and the mutator; the library verifies all of them
 and makes every failure reproducible from its seed.
 
+Asking an agent to test a project with ephyra? Point it at
+[STARTUP.md](https://github.com/datadog-labs/ephyra/blob/main/STARTUP.md).
+
 ```rust
 use ephyra::prelude::*;
 

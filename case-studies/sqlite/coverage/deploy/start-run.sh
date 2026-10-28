@@ -45,7 +45,12 @@ if [ "${SQLITE_TARGET:-master}" = fixed ] && [ -z "$FIXED_BUGS" ]; then
 elif [ "${SQLITE_TARGET:-master}" != fixed ] && [ -n "$FIXED_BUGS" ]; then
     log "warning: SQLITE_TARGET is not fixed, but the vendored SQLite $CHECKIN has the fixes of $FIXED_BUGS (FORCE=1 refresh-trunk.sh vendors plain trunk)"
 fi
-DIR="$RUN_ROOT/$(date -u +%Y%m%d-%H%M)-sqlite-$CHECKIN"
+# Two runs started in the same minute (a deploy right after the nightly refresh, 2026-10-28)
+# must not share a directory: mkdir -p reused it and the deploy saw no new run.
+STAMP=$(date -u +%Y%m%d-%H%M)
+DIR="$RUN_ROOT/$STAMP-sqlite-$CHECKIN"
+N=2
+while [ -e "$DIR" ] && [ $N -lt 100 ]; do DIR="$RUN_ROOT/$STAMP-sqlite-$CHECKIN-$N"; N=$((N + 1)); done
 mkdir -p "$DIR"
 cp "$COV/target/release/runner" "$DIR/runner"
 {

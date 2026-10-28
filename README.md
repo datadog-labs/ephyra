@@ -8,6 +8,10 @@ be changed from the environment.
 See [`crates/ephyra/README.md`](crates/ephyra/README.md) for the
 library's own README and the [changelog](crates/ephyra/CHANGELOG.md).
 
+**Testing a project with an agent?** Point it at [STARTUP.md](STARTUP.md):
+"Let's test `<my project>` with ephyra; start from
+https://github.com/datadog-labs/ephyra/blob/main/STARTUP.md".
+
 ## Workspace
 
 | Crate | Purpose | Status |
