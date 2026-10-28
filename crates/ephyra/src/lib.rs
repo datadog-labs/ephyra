@@ -16,6 +16,8 @@
 //! - [`check`] runs a property, shrinks the first failure with the
 //!   generator's shrinker, remembers it in a regressions file and returns a
 //!   [`Report`] with a replay point. [`quickcheck`] is `check` with defaults.
+//!   With [`Config::failures`] it collects several distinct failures,
+//!   grouped by [`signature`].
 //! - [`check_generator`], [`check_shrinker`] and [`check_mutator`] verify a
 //!   generator and its hooks against a support predicate.
 //! - [`Config`] holds every knob; `EPHYRA_*` variables override it (see
@@ -138,6 +140,8 @@ pub use {
         CausalJump,
         CausalPoint,
         Causality,
+        DistinctFailure,
+        FailureInfo,
         Report,
         ShrinkStats,
         Status,
@@ -159,6 +163,7 @@ pub use {
             label,
             measure,
             observe,
+            signature,
             target,
         },
         quickcheck,
@@ -250,6 +255,7 @@ pub mod prelude {
         measure,
         observe,
         quickcheck,
+        signature,
         target,
     };
 }

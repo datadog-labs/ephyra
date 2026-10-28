@@ -5,6 +5,7 @@
 //! was new, and the summary that goes into the report.
 
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     fmt,
     ops::Range,
@@ -55,8 +56,10 @@ pub(crate) struct Tracker {
     novel_inputs: u64,
     /// The input index (0-based, over observed inputs) at which coverage last grew.
     last_novelty_at: u64,
-    /// Name prefix used to select functions, for the report.
+    /// Name prefix used to select functions (normalized), for the report.
     filter: String,
+    /// Functions the filter itself selected, without the extras.
+    matched: usize,
     /// Whether each window slot belongs to a selected function.
     selected_mask: Vec<bool>,
     /// Selected counters hit so far.
@@ -76,23 +79,24 @@ pub(crate) struct Observation {
 
 impl Tracker {
     /// Track the functions whose demangled names start with `filter`
-    /// (`crate` or `crate::module`), or every function except ephyra's
-    /// own when `filter` is empty, plus `extra` (indices into
-    /// [`Functions::all`], for coverage targets). `None` when the binary is
-    /// uninstrumented or nothing is selected.
+    /// (`crate`, `crate::module` or `crate::Type`; see [`normalize_filter`]),
+    /// or every function except ephyra's own when `filter` is empty, plus
+    /// `extra` (indices into [`Functions::all`], for coverage targets).
+    /// `None` when the binary is uninstrumented or nothing is selected.
     pub fn new(filter: &str, extra: &[usize]) -> Option<Tracker> {
+        let filter = normalize_filter(filter);
         let functions = Functions::get();
-        let mut selected: Vec<usize> = functions
-            .all()
-            .iter()
-            .enumerate()
-            .filter(
-                |(_, f)| {
-                    if filter.is_empty() { !is_own(&f.name) } else { matches(&f.name, filter) }
-                },
-            )
-            .map(|(i, _)| i)
-            .collect();
+        let mut selected: Vec<usize> =
+            functions
+                .all()
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| {
+                    if filter.is_empty() { !is_own(&f.name) } else { matches(&f.name, &filter) }
+                })
+                .map(|(i, _)| i)
+                .collect();
+        let matched = selected.len();
         selected.extend(extra.iter().copied().filter(|i| *i < functions.all().len()));
         selected.sort_unstable();
         selected.dedup();
@@ -116,7 +120,8 @@ impl Tracker {
             inputs: 0,
             novel_inputs: 0,
             last_novelty_at: 0,
-            filter: filter.to_string(),
+            filter,
+            matched,
             selected_mask,
             hit_so_far: 0,
             growth: Series::default(),
@@ -126,6 +131,17 @@ impl Tracker {
     /// Indices into [`Functions::all`] of the selected functions.
     pub fn selected(&self) -> &[usize] {
         &self.selected
+    }
+
+    /// The normalized filter.
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// How many functions the filter itself selected, not counting the
+    /// coverage targets' and the property's own functions.
+    pub fn matched(&self) -> usize {
+        self.matched
     }
 
     /// Inputs observed so far.
@@ -295,9 +311,60 @@ fn is_own(name: &str) -> bool {
     bare.starts_with("ephyra::") || bare.starts_with("ephyra_macros::")
 }
 
-fn matches(name: &str, prefix: &str) -> bool {
+/// The filter as matched: surrounding whitespace, a leading `<` and a
+/// trailing `>` trimmed, and `>::` read as `::`, so the way a method's name
+/// demangles (`<my_crate::Type>::method`) and partial copies of it
+/// (`<my_crate::Type`, `<my_crate::Type>`) mean `my_crate::Type::method` and
+/// `my_crate::Type`.
+pub(crate) fn normalize_filter(filter: &str) -> String {
+    let filter = filter.trim().trim_start_matches('<').trim_end_matches('>');
+    filter.replace(">::", "::")
+}
+
+/// A demangled name as matched: leading `<`s trimmed and `>::` read as
+/// `::`, the way [`normalize_filter`] reads a filter, so
+/// `<my_crate::Type>::method` is `my_crate::Type::method`.
+fn normalize_name(name: &str) -> Cow<'_, str> {
     let bare = name.trim_start_matches('<');
-    bare == prefix || bare.starts_with(prefix) && bare[prefix.len()..].starts_with("::")
+    if bare.contains(">::") { Cow::Owned(bare.replace(">::", "::")) } else { Cow::Borrowed(bare) }
+}
+
+/// Whether `name` is `prefix` or lies under it: the prefix must end at a
+/// path boundary (`::`), at the type's generic arguments (`<`), or before
+/// ` as Trait` in a trait method's name, so `my_crate` never matches
+/// `my_crate_other::f`.
+fn matches(name: &str, prefix: &str) -> bool {
+    let name = normalize_name(name);
+    let Some(rest) = name.strip_prefix(prefix) else { return false };
+    rest.is_empty() || rest.starts_with("::") || rest.starts_with('<') || rest.starts_with(" as ")
+}
+
+/// A crate-level filter selecting fewer functions than this is almost
+/// surely the wrong crate (or the test crate itself): real code under test
+/// has more. Module and type filters are narrow by choice and exempt.
+const FEW_FUNCTIONS: usize = 5;
+
+/// The `coverage_filter` health warning for a filter that selected
+/// `matched` functions, if it deserves one. `own_crate`: the filter is the
+/// crate the property is defined in, as the defaults choose.
+pub(crate) fn filter_warning(filter: &str, matched: usize, own_crate: bool) -> Option<String> {
+    let what = if matched == 0 {
+        "matches no instrumented functions".to_string()
+    } else if !filter.is_empty() && !filter.contains("::") && matched < FEW_FUNCTIONS {
+        format!("selects only {matched} {}", if matched == 1 { "function" } else { "functions" })
+    } else {
+        return None;
+    };
+    let own = if own_crate {
+        ", and it is the crate the property is defined in, so a separate test crate covers only itself"
+    } else {
+        ""
+    };
+    Some(format!(
+        "the coverage filter `{filter}` {what}{own}; point it at the code under test with \
+         EPHYRA_COVERAGE_FILTER=<crate> or `config.coverage.filter = \"<crate>\"`, as `crate` or \
+         `crate::module` (the default is the test's own package)"
+    ))
 }
 
 /// Write a profraw image of the process's counters to `<dir>/<name>.profraw`
@@ -329,6 +396,103 @@ mod tests {
         assert!(!matches("my_crate_other::a", "my_crate"));
         assert!(is_own("ephyra::runner::check"));
         assert!(!is_own("crabby::x"));
+    }
+
+    /// Match `name` against `filter` as the tracker does.
+    fn selects(filter: &str, name: &str) -> bool {
+        matches(name, &normalize_filter(filter))
+    }
+
+    #[test]
+    fn a_crate_filter_selects_free_functions_and_methods() {
+        for name in [
+            "sqlparser::parse",
+            "sqlparser::parser::Parser::new",
+            "<sqlparser::parser::Parser>::parse_select",
+            "<sqlparser::parser::Parser as core::fmt::Debug>::fmt",
+            "<sqlparser::ast::Expr<u8>>::span",
+        ] {
+            assert!(selects("sqlparser", name), "{name}");
+            assert!(selects(" sqlparser\n", name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_crate_filter_has_no_false_prefix_matches() {
+        assert!(!selects("sqlparser", "sqlparser_ephyra::props::roundtrip"));
+        assert!(!selects("sqlparser", "<sqlparser_ephyra::Gen>::generate"));
+        assert!(!selects("sqlparser::parser", "sqlparser::parser_utils::f"));
+        assert!(!selects("sqlparser::parser::Parser", "<sqlparser::parser::ParserError>::fmt"));
+        assert!(!selects("sqlparser", "<core::option::Option<sqlparser::ast::Expr>>::map"));
+    }
+
+    #[test]
+    fn module_and_type_filters_in_any_spelling() {
+        let method = "<sqlparser::parser::Parser>::parse_select";
+        let trait_method = "<sqlparser::parser::Parser as core::fmt::Debug>::fmt";
+        for filter in [
+            "sqlparser::parser",
+            "sqlparser::parser::Parser",
+            "<sqlparser::parser::Parser>",
+            "<sqlparser::parser::Parser",
+            "sqlparser::parser::Parser>",
+        ] {
+            assert!(selects(filter, method), "{filter}");
+            assert!(selects(filter, trait_method), "{filter}");
+            assert!(!selects(filter, "sqlparser::tokenizer::Tokenizer::new"), "{filter}");
+        }
+        for filter in [
+            "<sqlparser::parser::Parser>::parse_select",
+            "sqlparser::parser::Parser>::parse_select",
+            "sqlparser::parser::Parser::parse_select",
+        ] {
+            assert!(selects(filter, method), "{filter}");
+            assert!(selects(filter, "sqlparser::parser::Parser::parse_select"), "{filter}");
+            assert!(!selects(filter, "<sqlparser::parser::Parser>::parse_selection"), "{filter}");
+        }
+        assert_eq!(normalize_filter("<a::B>::c"), "a::B::c");
+        assert_eq!(normalize_filter("  a::b "), "a::b");
+    }
+
+    #[test]
+    fn filter_warnings() {
+        let none = filter_warning("sqlparser", 0, false).expect("a warning");
+        assert!(none.contains("`sqlparser` matches no instrumented functions"), "{none}");
+        assert!(none.contains("EPHYRA_COVERAGE_FILTER=<crate>"), "{none}");
+        assert!(none.contains("`crate` or `crate::module`"), "{none}");
+        assert!(!none.contains("defined in"), "{none}");
+        let few = filter_warning("my_tests", 3, true).expect("a warning");
+        assert!(few.contains("selects only 3 functions"), "{few}");
+        assert!(few.contains("the crate the property is defined in"), "{few}");
+        assert!(filter_warning("my_tests", 1, false).unwrap().contains("only 1 function;"));
+        // Enough functions, or a deliberately narrow module or type.
+        assert_eq!(filter_warning("my_lib", 40, true), None);
+        assert_eq!(filter_warning("my_lib::parser", 2, false), None);
+        assert_eq!(filter_warning("", 3, false), None);
+        assert!(filter_warning("my_lib::parser", 0, false).is_some());
+    }
+
+    /// Under instrumentation the normalized spellings select this very
+    /// module's functions, methods included.
+    #[cfg(ephyra_instrumented)]
+    #[test]
+    fn normalized_filters_select_instrumented_functions() {
+        let names = |filter: &str| -> Vec<String> {
+            let tracker = Tracker::new(filter, &[]).expect("functions in this module");
+            assert_eq!(tracker.matched(), tracker.selected().len());
+            let all = Functions::get().all();
+            tracker.selected().iter().map(|&i| all[i].name.clone()).collect()
+        };
+        let plain = names("ephyra::coverage::tracker::Tracker");
+        assert!(plain.iter().any(|n| n.contains("Tracker>::summary")), "{plain:?}");
+        assert_eq!(names("<ephyra::coverage::tracker::Tracker>"), plain);
+        assert_eq!(names("<ephyra::coverage::tracker::Tracker"), plain);
+        assert_eq!(names(" ephyra::coverage::tracker::Tracker "), plain);
+        let method = names("<ephyra::coverage::tracker::Tracker>::summary");
+        assert!(!method.is_empty(), "{method:?}");
+        assert!(method.iter().all(|n| n.contains("Tracker>::summary")), "{method:?}");
+        assert!(Tracker::new("ephyra::coverage::tracker", &[]).unwrap().matched() > plain.len());
+        assert!(Tracker::new("ephyra_no_such_crate", &[]).is_none());
     }
 
     #[test]

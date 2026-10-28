@@ -514,7 +514,7 @@ where
     P: FnMut(G::Value) -> R,
     S: SeedPool<G::Value, Validity> + ?Sized,
 {
-    if run.failure().is_some() || run.report().status != Status::Passed {
+    if !run.carry_on() || run.report().status != Status::Passed {
         return false;
     }
     let (input, mutated) = match pool.sample() {
@@ -529,7 +529,7 @@ where
     };
     let tested = run.test(&input);
     if tested.failed() {
-        return false;
+        return run.carry_on();
     }
     let feedback = score(&tested).map(|score| Validity { valid: tested.passed(), score });
     let invest = feedback

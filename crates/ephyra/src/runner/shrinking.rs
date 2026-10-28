@@ -17,6 +17,7 @@ use {
         exec::{
             At,
             Input,
+            Ran,
             Signature,
             evaluate,
         },
@@ -44,6 +45,8 @@ use {
 pub(super) struct Found<T> {
     pub(super) input: Input<T>,
     pub(super) result: Result<Outcome, PanicInfo>,
+    /// How it failed: shrink candidates must fail the same way.
+    pub(super) signature: Signature,
 }
 
 impl<T> Found<T> {
@@ -88,13 +91,14 @@ where
         let Some(found) = self.pending.as_ref() else {
             return false;
         };
-        let signature = Signature::of(&found.result).expect("pending failures fail");
+        let signature = found.signature.clone();
         let value = found.input.value.clone();
         let started = Instant::now();
-        let (rerun, _) = evaluate(&mut self.exec.property, value.clone(), false);
+        let (rerun, observed) = evaluate(&mut self.exec.property, value.clone(), false);
         self.report.prop_time += started.elapsed();
         self.stats.prop_micros.push(micros(started.elapsed()));
-        let flaky = Signature::of(&rerun).as_ref() != Some(&signature);
+        let rerun = self.exec.signature(&rerun, observed.signature, Some(&value));
+        let flaky = rerun.as_ref() != Some(&signature);
         if flaky {
             self.report.warn(
                 "flaky",
@@ -150,7 +154,7 @@ where
         shrinking.stats.steps += 1;
         let ran = self.exec.run(candidate, at, Some(&shrinking.signature));
         self.report.prop_time += ran.elapsed;
-        let same = same_failure(ran.result, &shrinking.signature);
+        let same = same_failure(ran, &shrinking.signature);
         if same.is_some() {
             shrinking.stats.accepted += 1;
         }
@@ -220,7 +224,7 @@ where
             &self.config.shrink,
             shrinking.minimal.clone(),
             |value, visitor| generator.shrink(value, visitor),
-            |candidate| same_failure(exec.run(candidate, at, Some(signature)).result, signature),
+            |candidate| same_failure(exec.run(candidate, at, Some(signature)), signature),
         );
         self.report.prop_time += started.elapsed();
         shrinking.minimal = result.value;
@@ -242,16 +246,22 @@ where
     /// Handle the pending failure: check it reproduces, shrink it (unless
     /// the loop already did), remember it, and fill in the report.
     pub(super) fn fail(&mut self) {
+        if let Some(failure) = self.settle() {
+            self.report.status = Status::Failed;
+            self.report.failure = Some(failure);
+        }
+    }
+
+    /// Take the pending failure: check it reproduces, shrink it (unless the
+    /// loop already did), localize it (the first failure only), remember
+    /// it, and describe it.
+    pub(super) fn settle(&mut self) -> Option<Failure> {
         let limit = self.config.report.truncate_debug_at;
         let could_shrink = self.reproduce_pending();
-        let Some(found) = self.pending.take() else {
-            return;
-        };
-        let Some(mut shrinking) = self.shrinking.take() else {
-            return;
-        };
+        let found = self.pending.take()?;
+        let mut shrinking = self.shrinking.take()?;
         let at = found.derived("shrink", self.report.seed);
-        let Found { input, result } = found;
+        let Found { input, result, .. } = found;
         let (kind, mut message, mut location) = details(result);
         let original = counterexample(&input.value, limit);
         let flaky = shrinking.flaky;
@@ -274,8 +284,9 @@ where
             }
             shrink_stats = Some(shrinking.stats);
         }
+        // The spectrum follows the first failure.
         #[cfg(feature = "coverage")]
-        if self.exec.coverage.spectrum.is_some() && !flaky {
+        if self.exec.coverage.spectrum.is_some() && !flaky && self.report.failure.is_none() {
             self.localize(&minimal, input.size, at, location.as_ref());
         }
         // Like Hypothesis's "minimal failing case", the sinks end with the
@@ -292,8 +303,7 @@ where
             self.remember_failure(point, &original, shrunk.as_ref());
         }
 
-        self.report.status = Status::Failed;
-        self.report.failure = Some(Failure {
+        Some(Failure {
             kind,
             message,
             location,
@@ -304,7 +314,7 @@ where
             replay: input.point,
             flaky,
             shrink: shrink_stats,
-        });
+        })
     }
 }
 
@@ -319,15 +329,12 @@ pub(super) fn details(
     }
 }
 
-/// The message and location of `result` when it fails like `signature`.
-pub(super) fn same_failure(
-    result: Result<Outcome, PanicInfo>,
-    signature: &Signature,
-) -> shrink::SameFailure {
-    if Signature::of(&result).as_ref() != Some(signature) {
+/// The message and location of a run when it fails like `signature`.
+pub(super) fn same_failure(ran: Ran, signature: &Signature) -> shrink::SameFailure {
+    if ran.signature.as_ref() != Some(signature) {
         return None;
     }
-    let (_, message, location) = details(result);
+    let (_, message, location) = details(ran.result);
     Some((message, location))
 }
 

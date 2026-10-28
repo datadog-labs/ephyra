@@ -34,6 +34,7 @@
 //! | `EPHYRA_TIMEOUT_MS` | `timeout_ms` |
 //! | `EPHYRA_FILTER_MAX_ATTEMPTS` | `filter_max_attempts` |
 //! | `EPHYRA_NAME` | `name` |
+//! | `EPHYRA_FAILURES` | `failures` |
 //! | `EPHYRA_REPLAY` | `replay` (`seed:iteration` from a report) |
 //! | `EPHYRA_SHRINK` | `shrink.enabled` (`0`/`1`, `false`/`true`) |
 //! | `EPHYRA_SHRINK_MAX_STEPS` | `shrink.max_steps` |
@@ -61,8 +62,11 @@ use std::{
     fmt,
     path::PathBuf,
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
+
+use crate::report::FailureInfo;
 
 /// Where an input can be regenerated from: the run seed and the generation
 /// attempt within the run. Printed as `seed:iteration` in reports and
@@ -126,6 +130,18 @@ pub struct Config {
     /// An input to regenerate and test first (see `EPHYRA_REPLAY`). The
     /// run continues with random testing if it does not fail.
     pub replay: Option<ReplayPoint>,
+    /// How many distinct failures to look for. At 1 (the default) the run
+    /// stops at the first failure. Above 1 it goes on until it has found
+    /// this many failures with distinct signatures (see
+    /// [`signature`](crate::signature)) or the tests or time run out; each
+    /// is shrunk while keeping its signature, remembered and listed in
+    /// [`Report::failures`](crate::Report::failures).
+    pub failures: usize,
+    /// Names a failure when the property did not call
+    /// [`signature`](crate::signature) (see [`Config::signature`]). Not
+    /// read from JSON. Default none.
+    #[cfg_attr(feature = "json", serde(skip))]
+    pub signature: Option<SignatureFn>,
     /// Shrinking budget.
     pub shrink: ShrinkConfig,
     /// The targeted phase (used when the property calls [`target`](crate::target)).
@@ -139,6 +155,50 @@ pub struct Config {
     pub regressions: RegressionsConfig,
     /// Report rendering.
     pub report: ReportConfig,
+}
+
+/// A function naming failures, set with [`Config::signature`]. Two are
+/// equal when they are the same function.
+///
+/// ```
+/// use ephyra::{config::SignatureFn, report::FailureKind, Config, FailureInfo};
+///
+/// let by_kind = SignatureFn::new(|failure| format!("{:?}", failure.kind));
+/// let info = FailureInfo {
+///     kind: FailureKind::False,
+///     message: None,
+///     location: None,
+///     value: "[1, 2]".to_string(),
+/// };
+/// assert_eq!(by_kind.call(&info), "False");
+/// let config = Config { failures: 5, signature: Some(by_kind), ..Config::default() };
+/// assert_eq!(config.failures, 5);
+/// ```
+#[derive(Clone)]
+pub struct SignatureFn(Arc<dyn Fn(&FailureInfo) -> String + Send + Sync>);
+
+impl SignatureFn {
+    /// Wrap `f`.
+    pub fn new(f: impl Fn(&FailureInfo) -> String + Send + Sync + 'static) -> Self {
+        SignatureFn(Arc::new(f))
+    }
+
+    /// The signature `f` gives `failure`.
+    pub fn call(&self, failure: &FailureInfo) -> String {
+        (self.0)(failure)
+    }
+}
+
+impl fmt::Debug for SignatureFn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SignatureFn(..)")
+    }
+}
+
+impl PartialEq for SignatureFn {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// Budget for shrinking a counterexample.
@@ -178,12 +238,21 @@ pub struct CoverageConfig {
     /// Collect per-input coverage and summarise it in the report. Default
     /// true (a no-op when unavailable).
     pub enabled: bool,
-    /// Track only functions whose demangled name starts with this crate or
-    /// module path. Empty (the default) means the crate the property was
-    /// defined in: `#[ephyra::test]` uses the package name, `check` reads
-    /// it off the property's type name. Set it explicitly when the property
-    /// lives in an integration-test crate and the code under test in the
-    /// library (`"my_lib"`), or to a module (`"my_lib::parser"`).
+    /// Track only functions under this path: a crate (`"my_lib"`), a
+    /// module (`"my_lib::parser"`), a type (`"my_lib::parser::Parser"`,
+    /// covering its inherent and trait methods) or one function. Whitespace,
+    /// a leading `<` and a trailing `>` are ignored and `>::` reads as
+    /// `::`, so the demangled form of a method (`<my_lib::Parser>::parse`)
+    /// works too. A crate matches only at a path boundary: `my_lib` does
+    /// not select `my_lib_tests`.
+    ///
+    /// Empty (the default) means the crate the property was defined in:
+    /// `#[ephyra::test]` fills in its package name, `check` reads it off
+    /// the property's type name. That is right for tests inside the project
+    /// under test, but a separate test crate then covers only itself: set
+    /// it (or `EPHYRA_COVERAGE_FILTER`) to the crate under test. A filter
+    /// that selects no functions, or a crate filter that selects fewer than
+    /// five, adds a `coverage_filter` health warning.
     pub filter: String,
     /// Coverage-guided search: inputs that reach new counters join the
     /// targeted phase's pool, and the targeted phase runs even when the
@@ -365,6 +434,8 @@ impl Default for Config {
             filter_max_attempts: crate::source::DEFAULT_FILTER_MAX_ATTEMPTS,
             name: None,
             replay: None,
+            failures: 1,
+            signature: None,
             shrink: ShrinkConfig::default(),
             target: TargetConfig::default(),
             coverage: CoverageConfig::default(),
@@ -462,6 +533,62 @@ impl Config {
         self
     }
 
+    /// Set [`failures`](Self::failures): look for up to `n` distinct
+    /// failures in one run instead of stopping at the first. `0` counts
+    /// as 1.
+    ///
+    /// ```
+    /// use ephyra::{check, gens, Config};
+    ///
+    /// let config = Config::default().seed(1).failures(10).no_regressions();
+    /// let report = check(&config, gens::vec(gens::int(0u8..=9)), |v| {
+    ///     assert!(!v.contains(&3), "a three");
+    ///     assert!(!v.contains(&7), "a seven");
+    /// });
+    /// assert_eq!(report.failures.len(), 2);
+    /// // The first is also the usual single failure.
+    /// assert_eq!(report.failure.as_ref(), Some(&report.failures[0].failure));
+    /// ```
+    pub fn failures(mut self, n: usize) -> Self {
+        self.failures = n.max(1);
+        self
+    }
+
+    /// Set [`signature`](Self::signature): name each failure with `f`
+    /// when the property did not call [`signature`](crate::signature).
+    /// Failures with the same name count as one; only matters with
+    /// [`failures`](Self::failures) above 1.
+    ///
+    /// ```
+    /// use ephyra::{check, gens, Config, TestResult};
+    ///
+    /// let config = Config::default()
+    ///     .seed(1)
+    ///     .failures(10)
+    ///     .no_regressions()
+    ///     .signature(|failure| {
+    ///         // Group by what precedes the colon, whatever the values.
+    ///         let message = failure.message.as_deref().unwrap_or("");
+    ///         message.split(':').next().unwrap_or("").to_string()
+    ///     });
+    /// let report = check(&config, gens::int(0u32..=1000), |x| {
+    ///     if x % 2 == 1 {
+    ///         return TestResult::fail(format!("odd: {x}"));
+    ///     }
+    ///     if x > 900 {
+    ///         return TestResult::fail(format!("large: {x}"));
+    ///     }
+    ///     TestResult::Pass
+    /// });
+    /// let mut names: Vec<&str> = report.failures.iter().map(|f| f.signature.as_str()).collect();
+    /// names.sort();
+    /// assert_eq!(names, ["large", "odd"]);
+    /// ```
+    pub fn signature(mut self, f: impl Fn(&FailureInfo) -> String + Send + Sync + 'static) -> Self {
+        self.signature = Some(SignatureFn::new(f));
+        self
+    }
+
     /// Disable shrinking.
     pub fn no_shrink(mut self) -> Self {
         self.shrink.enabled = false;
@@ -556,6 +683,9 @@ impl Config {
                     })
                 },
                 "EPHYRA_NAME" => self.name = Some(value.clone()),
+                "EPHYRA_FAILURES" => {
+                    set!(value.parse::<usize>().ok(), "an integer", |n| self.failures = n.max(1))
+                },
                 "EPHYRA_REPLAY" => {
                     set!(value.parse().ok(), "seed:iteration", |p| self.replay = Some(p))
                 },
@@ -639,6 +769,7 @@ mod tests {
             ("EPHYRA_SHRINK", "off"),
             ("EPHYRA_REGRESSIONS", "0"),
             ("EPHYRA_REPLAY", " 42:7 "),
+            ("EPHYRA_FAILURES", "4"),
             ("EPHYRA_MAX_SIZE", "lots"),
             ("EPHYRA_TEST", "1"),
             ("PATH", "/bin"),
@@ -648,6 +779,7 @@ mod tests {
         assert!(!config.shrink.enabled);
         assert!(!config.regressions.save);
         assert_eq!(config.replay, Some(ReplayPoint { seed: 42, iteration: 7 }));
+        assert_eq!(config.failures, 4);
         assert_eq!(config.max_size, 100);
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert!(problems[0].contains("EPHYRA_MAX_SIZE=lots"));
@@ -677,8 +809,11 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn json_round_trip_with_defaults() {
-        let config = Config::from_json(r#"{ "tests": 12, "shrink": { "max_steps": 3 } }"#).unwrap();
+        let config =
+            Config::from_json(r#"{ "tests": 12, "failures": 3, "shrink": { "max_steps": 3 } }"#)
+                .unwrap();
         assert_eq!(config.tests, 12);
+        assert_eq!(config.failures, 3);
         assert_eq!(config.shrink.max_steps, 3);
         assert_eq!(config.max_size, Config::default().max_size);
         let again = Config::from_json(&serde_json::to_string(&config).unwrap()).unwrap();

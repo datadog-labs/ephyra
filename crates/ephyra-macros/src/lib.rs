@@ -507,7 +507,9 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// ```
 ///
 /// Accepted arguments: `tests = N`, `seed = N`, `max_size = N`,
-/// `config = <expression>` for a complete `Config`, `search = <expression>`,
+/// `failures = N` (collect up to N distinct failures, see
+/// `Config::failures`), `config = <expression>` for a complete `Config`,
+/// `search = <expression>`,
 /// `gen = <expression>` and `metrics = <path>`. A search expression is
 /// called with `&mut Run` after replaying remembered failures and is
 /// responsible for driving the run; for example,
@@ -515,6 +517,13 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// owns final shrinking, regression storage and reporting. The function may
 /// return anything `Testable`. Other attributes (such as `#[ignore]`) are
 /// kept.
+///
+/// With coverage on, an empty `Config::coverage.filter` becomes the
+/// package name (dashes as underscores), which covers the library when the
+/// test sits in that package. A test in a separate crate covers only that
+/// crate unless the filter names the crate under test:
+/// `config.coverage.filter = "my_lib".into()` or
+/// `EPHYRA_COVERAGE_FILTER=my_lib` (`crate` or `crate::module`).
 ///
 /// Inputs come from the parameters' `Arbitrary` generators unless a
 /// strategy is given: `#[ephyra(gen = <expression>)]` on a parameter
@@ -591,7 +600,8 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
         let Meta::NameValue(pair) = meta else {
             return Err(syn::Error::new(
                 meta.span(),
-                "expected `key = value` (tests, seed, max_size, config, search, gen, metrics)",
+                "expected `key = value` (tests, seed, max_size, failures, config, search, gen, \
+                 metrics)",
             ));
         };
         let value: &Expr = &pair.value;
@@ -605,12 +615,13 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
                     "tests" => quote!(#config.tests(#value)),
                     "seed" => quote!(#config.seed(#value)),
                     "max_size" => quote!(#config.max_size(#value)),
+                    "failures" => quote!(#config.failures(#value)),
                     "config" => quote!(#value),
                     _ => {
                         return Err(syn::Error::new(
                             pair.path.span(),
                             "unknown ephyra::test argument; expected tests, seed, max_size, \
-                             config, search, gen or metrics",
+                             failures, config, search, gen or metrics",
                         ));
                     },
                 };

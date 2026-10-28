@@ -2,8 +2,10 @@
 
 This page is for a coding agent asked to test a project with ephyra. The
 goal is real bugs, each with a small input that shows it, plus tests that
-keep them fixed. Read [the library's README](crates/ephyra/README.md) for
-the API; this page is about how to work.
+keep them fixed. This page is about how to work. For the API, read
+[the library's README](crates/ephyra/README.md), then [API.md](API.md) (every
+generator, combinator, setting and loop step, and what does not exist);
+`ephyra guide` prints the guide to writing generators.
 
 ## 1. Set up
 
@@ -32,7 +34,8 @@ behaviour must come from the project: a sentence in its docs, a type, a
 test, a standard it says it follows, or a universal rule (no crash, no
 hang, no data loss, no wrong answer to a well-defined question). Write
 down, for the 3 to 5 places where a bug would hurt most, the property you
-will check and where it comes from. Show the user this list.
+will check and where it comes from. Show the user this list; if no one is
+there to see it, write it to a notes file and go on.
 
 Oracles that find bugs, roughly in order of effort:
 
@@ -61,11 +64,28 @@ Oracles that find bugs, roughly in order of effort:
 
 ## 4. Run
 
+Run properties through ephyra's runner: `#[ephyra::test]`, `check`, or a
+`Run` loop when you need your own search (API.md, "Your own loop"). The
+runner gives you shrinking, exact replay (`EPHYRA_REPLAY`), remembered
+regressions and reports; a hand-written loop with its own minimizer loses
+all of them.
+
+To find many bugs in one long run instead of stopping at the first, set
+`Config::failures(n)` (or `EPHYRA_FAILURES=n`): the run goes on until it has
+`n` distinct failures, shrinks each one and reports each with its own replay
+line. Failures are told apart by where the property panicked; name them
+yourself with `ephyra::signature("display not reparsable: SHOW")` inside the
+property, or with `Config::signature`, when one assertion covers many causes.
+
 Short runs find shallow bugs. Once the properties pass a quick run, run
 them longer and in the background, with several seeds (`EPHYRA_SEED`) and a
 time budget (`EPHYRA_BUDGET_MS`). With the `coverage` feature
 (`RUSTFLAGS="-C instrument-coverage"`, one test thread), reports say which
-functions and lines were never reached: that is where to aim next.
+functions and lines were never reached: that is where to aim next. From a
+separate test crate, set `EPHYRA_COVERAGE_FILTER=<crate under test>` (the
+default tracks the test crate itself), and check the report's `coverage:`
+line names that crate; `.ephyra/coverage/<property>.html` shows files and
+lines.
 
 ## 5. When a property fails
 
@@ -84,7 +104,9 @@ functions and lines were never reached: that is where to aim next.
    A new oracle that fails on more than about 1% of inputs is usually the
    oracle's fault: reread the docs before the code.
 3. **Check it is new and current.** Compare with earlier findings (the
-   failure site, the shrunk input) and with the project's open issues.
+   failure site, the shrunk input) and with the project's open and closed
+   issues (GitHub's search API works without a token, rate-limited:
+   `https://api.github.com/search/issues?q=repo:OWNER/REPO+<words>`).
    Reproduce it on the latest version of the project before reporting it.
 
 ## 6. When nothing fails
