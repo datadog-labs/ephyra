@@ -208,6 +208,57 @@ fn parser_never_panics(input: String) {
 The macro calls `finish` afterward, so shrinking, regressions and reports
 work as with the default search.
 
+## Finding many bugs in one run
+
+A run stops at its first failure. `Config::failures(n)` (or
+`EPHYRA_FAILURES=n`, or `#[ephyra::test(failures = n)]`) lets it go on
+until it has found `n` distinct failures or its tests or time run out.
+Failures are told apart by a signature: by default the panic location, a
+fixed `returned false`, or the error message with its numbers and quoted
+text blanked. A property names its own with `ephyra::signature(name)`,
+and `Config::signature(f)` names the failures the property did not; the
+property's name wins.
+
+```rust
+use ephyra::{check, gens, signature, Config};
+
+let config = Config::default().failures(20).budget(std::time::Duration::from_secs(60));
+let report = check(&config, sql_statements(), |sql: String| {
+    let Ok(ast) = parse(&sql) else { return true };
+    let printed = ast.to_string();
+    match parse(&printed) {
+        Err(e) => {
+            signature(format!("reparse fails: {}", e.kind()));
+            false
+        },
+        Ok(again) if again != ast => {
+            signature(format!("round trip changes a {}", first_difference(&ast, &again)));
+            false
+        },
+        Ok(_) => true,
+    }
+});
+for found in &report.failures {
+    println!("{} (x{}): {}", found.signature, found.count, found.failure.counterexample().debug);
+}
+report.assert_passed();
+```
+
+Each new signature is shrunk while keeping its signature (a candidate that
+fails some other way is rejected), localized when it is the first and
+coverage is on, and remembered in the regressions file, so every one of
+them replays next time. Later failures with a signature already seen are
+only counted. The report keeps `failure` as the first one and lists all of
+them in `failures` (the JSON field of the same name); the text report adds
+a short block per further failure with its signature, counterexample,
+count and `EPHYRA_REPLAY` point.
+
+A loop written by hand collects failures the same way:
+`test` keeps the first failure of each new signature and the next
+`wants_more` shrinks and records it, so `while run.wants_more()` goes on
+past failures. A loop that shrinks by hand does so when a failed test
+leaves `run.failure()` set, before calling `wants_more` again.
+
 ## Reproducing and steering runs
 
 | Variable | Effect |
@@ -216,6 +267,7 @@ work as with the default search.
 | `EPHYRA_SEED=N` | rerun the same search |
 | `EPHYRA_TESTS=N`, `EPHYRA_BUDGET_MS=N`, `EPHYRA_MAX_SIZE=N` | change the budget |
 | `EPHYRA_SHRINK=0` | report the original failing input |
+| `EPHYRA_FAILURES=N` | collect up to N distinct failures instead of stopping at the first |
 | `EPHYRA_TARGET_TESTS=N` | budget of the targeted phase |
 | `EPHYRA_REPORT_JSON=path` | append every report as a JSON line |
 | `EPHYRA_OBSERVATIONS=dir` | write per-case observation traces |
@@ -240,6 +292,10 @@ The full list is in the `config` module documentation.
 Uninstrumented builds compile the coverage API to no-ops. The `coverage`
 module documentation covers setup (`RUST_TEST_THREADS=1`,
 `LLVM_PROFILE_FILE`, nightly branch coverage), targets and the grid page.
+Coverage tracks the crate the property is defined in (for `#[ephyra::test]`,
+its package); when the tests live in a separate crate, point it at the code
+under test with `config.coverage.filter = "my_lib"` or
+`EPHYRA_COVERAGE_FILTER=my_lib` (a crate, `crate::module` or `crate::Type`).
 
 ## Command-line workflow
 

@@ -40,8 +40,13 @@ where
     /// [`Config::max_discard_ratio`](crate::Config::max_discard_ratio)
     /// allows; the property failed, or the generator panicked. A rule that
     /// fired is reflected in the report.
+    ///
+    /// With [`Config::failures`](crate::Config::failures) above 1, a
+    /// failure kept by [`test`](Self::test) is first shrunk, remembered and
+    /// recorded, and the run stops only once that many distinct failures
+    /// are found.
     pub fn wants_more(&mut self) -> bool {
-        if self.pending.is_some() || self.report.status != Status::Passed {
+        if !self.carry_on() || self.report.status != Status::Passed {
             return false;
         }
         if self.report.tests >= self.config.tests {
@@ -168,6 +173,9 @@ where
             };
             let tested = self.test(&input);
             if tested.failed() {
+                if self.carry_on() {
+                    continue;
+                }
                 break;
             }
             if tested.discarded() {

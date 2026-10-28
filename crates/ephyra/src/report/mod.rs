@@ -138,6 +138,69 @@ impl Failure {
     }
 }
 
+/// One of the distinct failures of a run that looks for several
+/// ([`Config::failures`](crate::Config::failures) above 1), in the order
+/// they were found: the first is also [`Report::failure`].
+///
+/// ```
+/// use ephyra::{check, gens, Config};
+///
+/// let config = Config::default().seed(1).failures(5).no_regressions();
+/// let report = check(&config, gens::int(0u32..=100), |x| {
+///     assert!(x % 3 != 1, "one more than a multiple of three");
+///     assert!(x % 5 != 1, "one more than a multiple of five");
+/// });
+/// assert_eq!(report.failures.len(), 2);
+/// for found in &report.failures {
+///     println!("{} x{}: {}", found.signature, found.count, found.failure.counterexample().debug);
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "json", derive(serde::Serialize))]
+pub struct DistinctFailure {
+    /// What the failures in this group share: the name given with
+    /// [`signature`](crate::signature), else the one from
+    /// [`Config::signature`](crate::Config::signature), else the panic
+    /// location, `returned false`, or the error message with its numbers
+    /// and quoted text blanked.
+    pub signature: String,
+    /// Failing inputs with this signature (shrink candidates not counted).
+    pub count: u64,
+    /// The first input that failed this way, shrunk while keeping the
+    /// signature, with its replay point.
+    pub failure: Failure,
+}
+
+/// What a [`Config::signature`](crate::Config::signature) function sees of
+/// a failure, to name it.
+///
+/// ```
+/// use ephyra::{report::FailureKind, Config};
+///
+/// // Name panics by their message's first word, other failures by kind.
+/// let config = Config::default().failures(5).signature(|failure| {
+///     match (failure.kind, &failure.message) {
+///         (FailureKind::Panic, Some(message)) => {
+///             message.split_whitespace().next().unwrap_or("").to_string()
+///         },
+///         (kind, _) => format!("{kind:?}"),
+///     }
+/// });
+/// assert!(config.signature.is_some());
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FailureInfo {
+    /// What kind of failure.
+    pub kind: FailureKind,
+    /// The error, failure message or panic message.
+    pub message: Option<String>,
+    /// Where a panic originated, when known.
+    pub location: Option<Location>,
+    /// `Debug` rendering of the failing input, cut at
+    /// `Config::report.truncate_debug_at` characters.
+    pub value: String,
+}
+
 /// A generator panic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize))]
@@ -348,8 +411,14 @@ pub struct Report {
     /// A few of the passing inputs (the smallest and the largest by size,
     /// and a random sample), so the report shows what the generator makes.
     pub samples: Vec<Sample>,
-    /// The failure, when `status` is `Failed`.
+    /// The failure, when `status` is `Failed`; the first one found when the
+    /// run looked for several.
     pub failure: Option<Failure>,
+    /// Every distinct failure, the first included, when
+    /// [`Config::failures`](crate::Config::failures) is above 1; empty
+    /// otherwise.
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Vec::is_empty"))]
+    pub failures: Vec<DistinctFailure>,
     /// The generator panic, when `status` is `Aborted`.
     pub abort: Option<Abort>,
     /// What happened to the explicit replay point, if one was given.
@@ -414,6 +483,7 @@ impl Report {
             timing: None,
             samples: Vec::new(),
             failure: None,
+            failures: Vec::new(),
             abort: None,
             replay: None,
             regressions: RegressionsSummary::default(),

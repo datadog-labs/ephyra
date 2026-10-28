@@ -8,8 +8,9 @@
 //! are distributed, [`feature`] to record a number or a category per input,
 //! [`observe`] and [`measure`] to add values only to an enabled observation
 //! trace, [`cover`] to require a share of inputs to meet a condition, and
-//! [`target`] to steer the search toward inputs that maximise a score. Outside
-//! a running property all of them are no-ops.
+//! [`target`] to steer the search toward inputs that maximise a score, and
+//! [`signature`] to name the way the current input fails. Outside a running
+//! property all of them are no-ops.
 
 use std::cell::RefCell;
 
@@ -60,6 +61,7 @@ struct Context {
     features: Vec<(String, FeatureValue)>,
     /// Trace-only observations. `None` keeps their lazy values unevaluated.
     observations: Option<Vec<(String, FeatureValue)>>,
+    signature: Option<String>,
 }
 
 thread_local! {
@@ -189,6 +191,38 @@ pub fn target(score: f64) {
     record(|context| context.scores.push(score));
 }
 
+/// Name the way the current input fails, for runs that look for several
+/// distinct failures ([`Config::failures`](crate::Config::failures) above
+/// 1). Failures with the same signature count as one bug: the first is
+/// shrunk (keeping its signature) and reported, later ones are only
+/// counted. Without a call the signature comes from
+/// [`Config::signature`](crate::Config::signature), else from the failure
+/// itself (the panic location, `returned false`, or the error message with
+/// its numbers and quoted text blanked). The last call in a test case wins;
+/// on a passing input it has no effect.
+///
+/// ```
+/// use ephyra::{check, gens, signature, Config};
+///
+/// let config = Config::default().seed(1).failures(3).no_regressions();
+/// let report = check(&config, gens::int(0u32..=1000), |x| {
+///     if x % 7 == 0 {
+///         signature("multiple of seven");
+///         return false;
+///     }
+///     if x % 11 == 0 {
+///         signature("multiple of eleven");
+///         return false;
+///     }
+///     true
+/// });
+/// let names: Vec<&str> = report.failures.iter().map(|f| f.signature.as_str()).collect();
+/// assert!(names.contains(&"multiple of seven") && names.contains(&"multiple of eleven"));
+/// ```
+pub fn signature(name: impl Into<String>) {
+    record(|context| context.signature = Some(name.into()));
+}
+
 /// Declare a case the inputs must exercise: like [`classify`], but the
 /// runner reports the share of passing tests that met `condition` under
 /// `label`, and warns when it falls below
@@ -208,6 +242,8 @@ pub(crate) struct Observed {
     pub features: Vec<(String, FeatureValue)>,
     /// Trace-only values recorded with [`observe`], in call order.
     pub observations: Vec<(String, FeatureValue)>,
+    /// The last name given with [`signature`].
+    pub signature: Option<String>,
 }
 
 /// Run `f` with the side channel active and return what it reported. Nested
@@ -233,6 +269,7 @@ pub(crate) fn collect<R>(trace_observations: bool, f: impl FnOnce() -> R) -> (R,
             covers: context.covers,
             features: context.features,
             observations: context.observations.unwrap_or_default(),
+            signature: context.signature,
         },
     )
 }
@@ -262,7 +299,10 @@ mod tests {
             observe("phase", || "normalize");
             observe("nan observation", || f64::NAN);
             assert_eq!(measure("work", || 42), 42);
+            signature("first");
+            signature("last");
         });
+        assert_eq!(observed.signature.as_deref(), Some("last"));
         assert_eq!(observed.labels, vec!["a", "b"]);
         assert_eq!(observed.score, Some(5.0));
         assert_eq!(observed.covers, vec![("c".to_string(), true), ("d".to_string(), false)]);
@@ -291,6 +331,7 @@ mod tests {
         assert!(!called.get());
         assert!(none.labels.is_empty());
         assert_eq!(none.score, None);
+        assert_eq!(none.signature, None);
         assert!(none.observations.is_empty());
     }
 }

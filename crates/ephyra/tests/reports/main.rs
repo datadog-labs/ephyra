@@ -156,6 +156,19 @@ fn error_result() {
 }
 
 #[test]
+fn several_distinct_failures() {
+    let config = base("digits_without_three_or_seven").failures(5);
+    let report = check(&config, gens::vec(gens::int(0u8..=9)), |v| {
+        assert!(!v.contains(&3), "a three in {v:?}");
+        if v.contains(&7) {
+            return Err(format!("a seven at {}", v.iter().position(|&d| d == 7).unwrap_or(0)));
+        }
+        if v.len() >= 6 { Err("too long".to_string()) } else { Ok(()) }
+    });
+    snapshot("several_distinct_failures", &report, &[]);
+}
+
+#[test]
 fn discards_exhaust_the_ratio() {
     let report = check(&base("only_zero"), gens::int(0i32..=100), |x| {
         if x != 0 { TestResult::discard("not zero") } else { TestResult::check(true, "") }

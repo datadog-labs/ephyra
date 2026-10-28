@@ -1,0 +1,28 @@
+---
+source: crates/ephyra/tests/reports/main.rs
+expression: report.to_string()
+---
+ephyra: FAILED, property panicked: a three in [3]
+  at crates/ephyra/tests/reports/main.rs:[L:C]
+  counterexample: [3]
+  found at size 3, iteration 7
+  shrinking: 0 of 3 candidates accepted in [time]
+  after 200 passing tests (97 distinct, 0 discarded) in [time]
+  reproduce: EPHYRA_REPLAY=24301:7
+  or rerun the whole search: Config::default().seed(24301)
+  failure 1 of 3 (seen 120 times), signature: crates/ephyra/tests/reports/main.rs:[L:C]
+  failure 2 of 3 (seen 74 times): property failed: "a seven at 0"
+    signature: a seven at N
+    counterexample: [7]
+    reproduce: EPHYRA_REPLAY=24301:12
+  failure 3 of 3 (seen 17 times): property failed: "too long"
+    signature: too long
+    counterexample: [0, 0, 0, 0, 0, 0]
+    reproduce: EPHYRA_REPLAY=24301:70
+  timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]
+    slowest input: [input]
+  sample (random, iteration 0, size 0): []
+  sample (random, iteration 256, size 8): [2, 4]
+  sample (random, iteration 8, size 3): [5, 4, 2]
+  sample (random, iteration 42, size 5): []
+  sample (random, iteration 193, size 7): [0, 6, 8]

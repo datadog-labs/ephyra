@@ -5,6 +5,7 @@
 
 mod coverage;
 mod exec;
+mod failures;
 pub mod labels;
 pub(crate) mod panic;
 mod remember;
@@ -61,7 +62,7 @@ use self::{
     coverage::CoverageState,
     exec::{
         Exec,
-        Signature,
+        Naming,
         Skipped,
     },
     shrinking::{
@@ -83,6 +84,8 @@ pub(crate) use self::{
 
 /// Run `property` against inputs from `generator` until [`Config::tests`]
 /// inputs pass, one fails, too many are discarded, or a time limit elapses.
+/// With [`Config::failures`] above 1, a failure does not end the run until
+/// that many distinct failures are found (see [`signature`](crate::signature)).
 ///
 /// Before random testing, an explicit replay point ([`Config::replay`] or
 /// `EPHYRA_REPLAY`) and any stored regressions for this property are
@@ -117,7 +120,7 @@ where
         return run.finish();
     }
     run.random_search();
-    if run.pending.is_none() && run.report.status == Status::Passed {
+    if run.carry_on() && run.report.status == Status::Passed {
         run.targeted_search();
     }
     run.finish()
@@ -185,6 +188,34 @@ fn property_name(config: &Config) -> String {
 /// localizes it, remembers it and writes the report, its files and its
 /// pages.
 ///
+/// With [`Config::failures`] above 1 the same loop collects several
+/// distinct failures: [`test`](Self::test) keeps the first failure of each
+/// new signature, and [`wants_more`](Self::wants_more) shrinks, remembers
+/// and records it, then lets the loop go on until that many are found or
+/// the budget ends. A loop that shrinks by hand calls
+/// [`shrink`](Self::shrink), [`reproduces`](Self::reproduces) or
+/// [`shrunk_to`](Self::shrunk_to) when a failed test leaves
+/// [`failure`](Self::failure) set, before the next `wants_more`.
+///
+/// ```
+/// use ephyra::{Config, Run, gens};
+///
+/// let config = Config::default().seed(1).tests(500).failures(3).no_regressions();
+/// let mut run = Run::new(&config, gens::vec(gens::int(0u8..=9)), |v: Vec<u8>| {
+///     assert!(!v.contains(&3), "a three");
+///     assert!(!v.contains(&7), "a seven");
+/// });
+/// while run.wants_more() {
+///     let Some(input) = run.draw() else { continue };
+///     run.test(&input);
+/// }
+/// let report = run.finish();
+/// let mut shrunk: Vec<&str> =
+///     report.failures.iter().map(|f| f.failure.counterexample().debug.as_str()).collect();
+/// shrunk.sort();
+/// assert_eq!(shrunk, ["[3]", "[7]"]);
+/// ```
+///
 /// A loop is reproducible by seed: all randomness comes from the run, so
 /// the same seed replays the same run. Inputs from `draw` also carry a
 /// [replay point](Input::replay) that regenerates them alone; mutants do
@@ -206,8 +237,12 @@ pub struct Run<G: Gen, P> {
     saw_score: bool,
     /// The targeted phase's choices: explore or mutate, and which seed.
     rng: ChaCha8Rng,
-    /// The first failure, shrunk and reported by [`finish`](Self::finish).
+    /// The first failure, shrunk and reported by [`finish`](Self::finish);
+    /// with `Config::failures` above 1, the latest new one.
     pending: Option<Found<G::Value>>,
+    /// With `Config::failures` above 1: the signatures found, in order,
+    /// with how many failures had each.
+    distinct: Vec<(exec::Signature, u64)>,
     /// Mutations made through [`mutate`](Self::mutate), for the target
     /// summary of hand-written loops.
     mutations: u64,
@@ -253,13 +288,16 @@ where
             report.warn("observations", "observation files need the `json` feature");
         }
         sinks.extend(crate::sink::open(&crate::sink::RunInfo { property: &report.name, seed }));
+        let naming = (config.failures > 1).then(|| {
+            Naming { name: config.signature.clone(), limit: config.report.truncate_debug_at }
+        });
         #[cfg_attr(not(feature = "coverage"), allow(unused_mut))]
         let mut run = Run {
             pool: Pool::new(config.target.pool_size, config.target.energy),
             stats: Stats::new(config.report.samples),
             config,
             generator,
-            exec: Exec { property, coverage: CoverageState::default(), sinks },
+            exec: Exec { property, coverage: CoverageState::default(), sinks, naming },
             report,
             started: Instant::now(),
             seen: HashSet::new(),
@@ -268,6 +306,7 @@ where
             saw_score: false,
             rng: ChaCha8Rng::seed_from_u64(mix(seed, u64::MAX - 1)),
             pending: None,
+            distinct: Vec::new(),
             mutations: 0,
             shrinking: None,
             #[cfg(feature = "coverage")]
@@ -285,7 +324,10 @@ where
         &self.generator
     }
 
-    /// The failing input kept by [`test`](Self::test), as found.
+    /// The failing input kept by [`test`](Self::test), as found. With
+    /// [`Config::failures`] above 1, the latest new failure until
+    /// [`wants_more`](Self::wants_more) records it; the recorded ones are
+    /// in the [report](Self::report)'s `failures`.
     pub fn failure(&self) -> Option<&G::Value> {
         self.pending.as_ref().map(|found| &found.input.value)
     }
@@ -295,11 +337,14 @@ where
         &self.report
     }
 
-    /// Shrink, localize and remember the failure if there was one, then
+    /// Shrink, localize and remember the failure if there was one (every
+    /// failure not yet recorded, with [`Config::failures`] above 1), then
     /// the final statistics, health checks and report output (JSON,
     /// observations, profile, the coverage grid).
     pub fn finish(mut self) -> Report {
-        if self.pending.is_some() {
+        if self.wanted() > 1 {
+            self.finish_failures();
+        } else if self.pending.is_some() {
             self.fail();
         }
         if self.report.target.is_none() && self.mutations > 0 {
@@ -377,7 +422,7 @@ where
         let ran = self.exec.run(input.value, at, None);
         self.report.prop_time += ran.elapsed;
         self.stats.prop_micros.push(micros(ran.elapsed));
-        Some(Signature::of(&ran.result).as_ref() == Some(&signature))
+        Some(ran.signature.as_ref() == Some(&signature))
     }
 
     /// Keep a causality analysis for the report.

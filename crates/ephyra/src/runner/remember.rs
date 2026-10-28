@@ -10,7 +10,6 @@ use {
         Run,
         Testable,
         exec::Skipped,
-        shrinking::Found,
     },
     crate::{
         Gen,
@@ -20,7 +19,7 @@ use {
 #[cfg(feature = "json")]
 use {
     super::{
-        exec::Signature,
+        shrinking::Found,
         stats::cap,
     },
     crate::{
@@ -41,14 +40,17 @@ where
     /// property's stored regressions. Neither counts as a test. Returns
     /// whether one failed, in which case the loop should stop and
     /// [`finish`](Self::finish) reports it.
+    ///
+    /// With [`Config::failures`](crate::Config::failures) above 1, every
+    /// stored regression is replayed and each failing one is kept like a
+    /// failure [`test`](Self::test) found; `true` then means the replay
+    /// point failed or that many distinct failures are already known, and
+    /// on `false` the search goes on for the rest.
     pub fn remembered(&mut self) -> bool {
         if let Some(point) = self.config.replay {
             let origin = crate::report::Origin::Replay;
             let failed = match self.generate(point, origin) {
-                Ok(input) => {
-                    let (tested, result) = self.test_input(&input, false);
-                    tested.failed().then_some(Found { input, result })
-                },
+                Ok(input) => self.test_input(&input, false).1,
                 Err(Skipped::Discarded(reason, generate)) => {
                     self.observe_generation_discard(point, origin, &reason, generate);
                     None
@@ -56,8 +58,8 @@ where
                 Err(Skipped::Panicked(_)) => None,
             };
             self.report.replay = Some(ReplayOutcome { point, reproduced: failed.is_some() });
-            if failed.is_some() {
-                self.pending = failed;
+            if let Some(found) = failed {
+                self.note_failure(found);
                 return true;
             }
         }
@@ -94,10 +96,12 @@ where
                     continue;
                 }
                 let at = input.at("regression", self.report.seed);
-                let result = self.run_property(input.value.clone(), at).result;
-                if Signature::of(&result).is_some() {
-                    self.pending = Some(Found { input, result });
-                    return true;
+                let ran = self.run_property(input.value.clone(), at);
+                if let Some(signature) = ran.signature {
+                    self.note_failure(Found { input, result: ran.result, signature });
+                    if !self.carry_on() {
+                        return true;
+                    }
                 }
             }
         }
@@ -123,7 +127,7 @@ where
         match crate::regressions::save(&self.config.regressions.dir, &entry) {
             Ok((path, appended)) => {
                 self.report.regressions.file = Some(path);
-                self.report.regressions.saved = appended;
+                self.report.regressions.saved |= appended;
             },
             Err(e) => {
                 self.report.warn(

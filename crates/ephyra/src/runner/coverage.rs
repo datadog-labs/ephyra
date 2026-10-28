@@ -190,6 +190,8 @@ where
         } else {
             settings.filter.clone()
         };
+        let own_crate =
+            crate::coverage::tracker::normalize_filter(&filter) == crate_of(property_type);
         let targets = self.resolve_targets();
         let mut extra = targets.as_ref().map(|t| t.functions()).unwrap_or_default();
         // The property's own function is tracked whichever crate it lives
@@ -205,6 +207,13 @@ where
         extra.extend(property_fns.iter().copied());
         match crate::coverage::tracker::Tracker::new(&filter, &extra) {
             Some(tracker) => {
+                if let Some(warning) = crate::coverage::tracker::filter_warning(
+                    tracker.filter(),
+                    tracker.matched(),
+                    own_crate,
+                ) {
+                    self.report.warn("coverage_filter", warning);
+                }
                 let guard = crate::coverage::lock();
                 self.exec.coverage.targets = targets;
                 if self.config.coverage.html.is_some() {
@@ -248,10 +257,12 @@ where
                 Some(guard)
             },
             None => {
-                self.report.warn(
-                    "coverage_filter",
-                    format!("no instrumented functions match the coverage filter `{filter}`"),
-                );
+                let filter = crate::coverage::tracker::normalize_filter(&filter);
+                if let Some(warning) =
+                    crate::coverage::tracker::filter_warning(&filter, 0, own_crate)
+                {
+                    self.report.warn("coverage_filter", warning);
+                }
                 None
             },
         }
@@ -304,8 +315,10 @@ where
     pub fn suspects(&self) -> Option<crate::coverage::Locate> {
         let spectrum = self.exec.coverage.spectrum.as_ref()?;
         let found = self.pending.as_ref()?;
-        let signature = Signature::of(&found.result)?;
-        let panic = signature.panic_site.as_ref().map(|(file, line)| (file.as_str(), *line));
+        let panic = match &found.result {
+            Err(info) => info.location.as_ref().map(|l| (l.file.as_str(), l.line)),
+            Ok(_) => None,
+        };
         Some(spectrum.rank(panic, self.config.locate.top))
     }
 

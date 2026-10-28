@@ -10,6 +10,7 @@ use std::{
 
 use super::{
     Causality,
+    Failure,
     FailureKind,
     Report,
     Status,
@@ -32,14 +33,7 @@ impl fmt::Display for Report {
             },
             Status::Failed => {
                 let failure = self.failure.as_ref().expect("Failed reports carry a failure");
-                let what = match (failure.kind, &failure.message) {
-                    (FailureKind::False, _) => "property returned false".to_string(),
-                    (FailureKind::Error, Some(m)) => format!("property failed: {m}"),
-                    (FailureKind::Error, None) => "property failed".to_string(),
-                    (FailureKind::Panic, Some(m)) => format!("property panicked: {m}"),
-                    (FailureKind::Panic, None) => "property panicked".to_string(),
-                };
-                writeln!(f, "ephyra: FAILED, {what}")?;
+                writeln!(f, "ephyra: FAILED, {}", what(failure))?;
                 if let Some(location) = &failure.location {
                     writeln!(f, "  at {location}")?;
                 }
@@ -106,6 +100,7 @@ impl fmt::Display for Report {
                 {
                     writeln!(f, "  remembered in {}", file.display())?;
                 }
+                write_failures(f, self)?;
             },
             Status::GaveUp => {
                 writeln!(
@@ -255,6 +250,66 @@ impl fmt::Display for Report {
         }
         Ok(())
     }
+}
+
+/// What went wrong, for the first line of a failure.
+fn what(failure: &Failure) -> String {
+    match (failure.kind, &failure.message) {
+        (FailureKind::False, _) => "property returned false".to_string(),
+        (FailureKind::Error, Some(m)) => format!("property failed: {m}"),
+        (FailureKind::Error, None) => "property failed".to_string(),
+        (FailureKind::Panic, Some(m)) => format!("property panicked: {m}"),
+        (FailureKind::Panic, None) => "property panicked".to_string(),
+    }
+}
+
+/// The distinct failures of a run that looked for several: the first
+/// one's signature and count (its details are above), then a short block
+/// for each of the others.
+fn write_failures(f: &mut fmt::Formatter<'_>, report: &Report) -> fmt::Result {
+    let total = report.failures.len();
+    let times = |count: u64| if count == 1 { "once".to_string() } else { format!("{count} times") };
+    for (i, found) in report.failures.iter().enumerate() {
+        if i == 0 {
+            writeln!(
+                f,
+                "  failure 1 of {total} (seen {}), signature: {}",
+                times(found.count),
+                found.signature
+            )?;
+            continue;
+        }
+        let failure = &found.failure;
+        writeln!(
+            f,
+            "  failure {} of {total} (seen {}): {}",
+            i + 1,
+            times(found.count),
+            what(failure)
+        )?;
+        writeln!(f, "    signature: {}", found.signature)?;
+        let best = failure.counterexample();
+        writeln!(
+            f,
+            "    counterexample: {}{}",
+            best.debug,
+            if best.truncated { " (truncated)" } else { "" }
+        )?;
+        if failure.flaky {
+            writeln!(f, "    FLAKY: the property did not fail the same way when re-run")?;
+        }
+        match failure.replay {
+            Some(point) => writeln!(f, "    reproduce: EPHYRA_REPLAY={point}")?,
+            None => {
+                writeln!(
+                    f,
+                    "    reproduce: EPHYRA_SEED={} (found in the targeted phase)",
+                    report.seed
+                )?
+            },
+        }
+    }
+    Ok(())
 }
 
 /// The causality section: the rate at both ends, the curve as a sparkline,

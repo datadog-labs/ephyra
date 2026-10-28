@@ -780,6 +780,41 @@ fn coverage_targets_are_resolved_tracked_and_reported() {
 
 #[cfg(all(ephyra_instrumented, feature = "coverage"))]
 #[test]
+fn the_coverage_filter_is_normalized_and_warned_about() {
+    let filter_warnings = |filter: &str| {
+        let mut config = cfg();
+        config.tests = 20;
+        config.coverage.enabled = true;
+        config.coverage.filter = filter.to_string();
+        let report = check(&config, gens::int(-100i32..=100), |x| branchy(x) == 2);
+        assert_eq!(report.status, Status::Passed, "{report}");
+        let warnings: Vec<String> = report
+            .health
+            .iter()
+            .filter(|w| w.kind == "coverage_filter")
+            .map(|w| w.message.clone())
+            .collect();
+        (report, warnings)
+    };
+    // A method's demangled spelling selects its type.
+    let (report, warnings) = filter_warnings(" <ephyra::coverage::tracker::Tracker");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let coverage = report.coverage.as_ref().expect("instrumented");
+    assert_eq!(coverage.filter, "ephyra::coverage::tracker::Tracker");
+    assert!(coverage.functions_total > 5, "{coverage:?}");
+    assert!(report.to_string().contains("in `ephyra::coverage::tracker::Tracker` reached"));
+    // Nothing selected: only the property's own function is tracked.
+    let (report, warnings) = filter_warnings("ephyra_no_such_crate");
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert!(warnings[0].contains("`ephyra_no_such_crate` matches no instrumented"), "{report}");
+    assert!(warnings[0].contains("EPHYRA_COVERAGE_FILTER=<crate>"), "{report}");
+    // The property's own crate, selecting plenty: no warning.
+    let (_, warnings) = filter_warnings("ephyra");
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[cfg(all(ephyra_instrumented, feature = "coverage"))]
+#[test]
 fn novelty_counts_what_an_input_reached_first() {
     let mut config = cfg();
     config.seed = Some(1);
@@ -1028,4 +1063,60 @@ fn report_serialises_to_json() {
     assert_eq!(value["failure"]["shrunk"]["debug"], "5");
     assert_eq!(value["failure"]["replay"]["seed"], 1);
     assert!(value["failure"]["shrink"]["steps"].is_number());
+}
+
+#[test]
+fn default_failure_names_blank_the_values() {
+    use super::{
+        exec::{
+            blank,
+            default_name,
+        },
+        panic::PanicInfo,
+    };
+    assert_eq!(blank("index 12 out of range for length 3"), "index N out of range for length N");
+    assert_eq!(blank(r#"Parse("SELECT \"a\" 1") at 4"#), r#"Parse("…") at N"#);
+    assert_eq!(blank("got 'x' and `y z`, don't"), "got '…' and `…`, don't");
+    assert_eq!(blank("unclosed \"quote 7"), "unclosed \"quote N");
+    assert_eq!(default_name(&Ok(Outcome::False)), "returned false");
+    // `Err(String)` arrives quoted; its text is kept.
+    let quoted = |m: &str| default_name(&Ok(Outcome::Fail(m.into())));
+    assert_eq!(quoted(r#""odd 7, \"x\"""#), r#"odd N, "…""#);
+    assert_eq!(quoted(r#""a" or "b""#), r#""…" or "…""#);
+    let location = crate::report::Location { file: "src/a.rs".into(), line: 3, column: 9 };
+    let at = PanicInfo { message: "boom 1".into(), location: Some(location) };
+    assert_eq!(default_name(&Err(at)), "src/a.rs:3:9");
+    let nowhere = PanicInfo { message: "boom 1".into(), location: None };
+    assert_eq!(default_name(&Err(nowhere)), "panicked: boom N");
+}
+
+#[test]
+fn several_failures_keep_counts_and_the_first_as_the_failure() {
+    let report = check(&cfg().tests(300).failures(4), gens::int(0u32..=1000), |x| {
+        crate::signature(format!("x mod 3 = {}", x % 3));
+        x % 3 == 0
+    });
+    assert_eq!(report.status, Status::Failed);
+    let mut names: Vec<&str> = report.failures.iter().map(|f| f.signature.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["x mod 3 = 1", "x mod 3 = 2"]);
+    let failed: u64 = report.failures.iter().map(|f| f.count).sum();
+    assert_eq!(failed + report.tests, report.iterations, "every failing test is counted once");
+    assert_eq!(report.failure.as_ref(), Some(&report.failures[0].failure));
+}
+
+#[test]
+fn a_generator_panic_after_failures_is_a_warning() {
+    // Localization (instrumented builds) mutates the failure; only fresh
+    // inputs panic.
+    let panicky = (|source: &mut Source| {
+        let x = source.int(0u32..=1000);
+        assert!(x < 990, "generator gave up");
+        x
+    })
+    .with_mutate(|x, _| *x);
+    let report = check(&cfg().tests(5_000).failures(10), panicky, |x| x % 2 == 0);
+    assert_eq!(report.status, Status::Failed, "{report}");
+    assert!(report.abort.is_some());
+    assert!(report.health.iter().any(|w| w.kind == "aborted"), "{report}");
 }
