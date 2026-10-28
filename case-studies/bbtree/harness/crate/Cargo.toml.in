@@ -9,6 +9,8 @@ bbtree = { path = "@SRC@/bbtree", features = ["file"] }
 bbtree-mmap = { path = "@SRC@/bbtree-mmap" }
 bbtree-store = { path = "@SRC@/bbtree-store" }
 ephyra = { path = "@EPHYRA@/crates/ephyra", default-features = false }
+# the WAL oracle decodes the documented layout itself
+crc32c = "0.6"
 serde = { version = "1", features = ["derive"] }
 # u128 keys: Value numbers past u64
 serde_json = { version = "1", features = ["arbitrary_precision"] }
@@ -25,7 +27,10 @@ unexpected_cfgs = { level = "allow" }
 inherits = "release"
 debug-assertions = true
 overflow-checks = true
-codegen-units = 16
 lto = false
-incremental = false
+# Incremental, codegen units left to it: a new fix or a merged round rebuilt every binary
+# from scratch (plain 15 min, ASan 30, chaos 25, coverage 20; nothing searched meanwhile).
+# Measured on an ASan build (2026-10-27): a bbtree change rebuilds in 11 min, a harness
+# change in 32 s. Cost: tight inlined loops run slower (filemap 57%, store 96% of before).
+incremental = true
 debug = "line-tables-only"

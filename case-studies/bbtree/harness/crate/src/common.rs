@@ -30,6 +30,18 @@ pub fn ensure(ok: bool, sig: &str, msg: impl FnOnce() -> String) -> Result<(), F
     if ok { Ok(()) } else { Err(fail(sig, msg())) }
 }
 
+/// Spawns a property's thread in `scope` with a 64 MiB stack. Under ASan
+/// (bbz-asan) the thread closures' frames outgrow std's 2 MiB default
+/// (synclin's is about 2.6 MB); such a frame jumps the guard page into the
+/// next thread's stack, and ASan reports stack-use-after-scope in harness
+/// code (cluster crash__abort__synclin). Stack overflow still faults.
+pub fn spawn_in<'s, 'e, T: Send + 's>(
+    scope: &'s std::thread::Scope<'s, 'e>,
+    f: impl FnOnce() -> T + Send + 's,
+) -> std::thread::ScopedJoinHandle<'s, T> {
+    std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(scope, f).expect("spawn a property thread")
+}
+
 /// Runs `f`, turning a panic into `None`: for the reads of a damaged map,
 /// where the contract allows a panic.
 pub fn quietly<T>(f: impl FnOnce() -> T) -> Option<T> {

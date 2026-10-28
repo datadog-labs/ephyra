@@ -70,6 +70,52 @@ asan() {
   cp "$BUILD/target-asan/$HOST/fuzz/bbz" "$BUILD/bin/bbz-asan.new"
   mv "$BUILD/bin/bbz-asan.new" "$BUILD/bin/bbz-asan"
 }
+# Schedule-perturbation build: run.sh uses it for seeds = 2 (mod 4). A copy of the sources whose
+# Interleaving::switch_point / wait (bbtree/src/tree/interleaving.rs, Shuttle's switch points) call the
+# harness's hooks (crate/src/chaos.rs). Optional; BBZ_NO_CHAOS=1 skips it.
+chaos() {
+  local CS="$BUILD/chaos-src" CC="$BUILD/crate-chaos" IL
+  mkdir -p "$CS" "$CC/src"
+  rsync -a --delete --exclude target --exclude .git --exclude /bbtree/src/tree/interleaving.rs \
+    --include '/Cargo.toml' --include '/Cargo.lock' --include '/bbtree/***' --include '/bbtree-mmap/***' \
+    --include '/bbtree-store/***' --exclude '*' "$SRC/" "$CS/" || return 1
+  IL="$CS/bbtree/src/tree/interleaving.rs"
+  python3 - "$SRC/bbtree/src/tree/interleaving.rs" "$IL.new" <<'PY' || return 1
+import sys
+s = open(sys.argv[1]).read()
+sp = "pub(in crate::tree) fn switch_point() {\n"
+wt = "pub(in crate::tree) fn wait(spins: u32) {\n"
+assert s.count(sp) == 1 and s.count(wt) == 1, "interleaving.rs changed shape"
+s = s.replace(sp, sp + '        unsafe extern "Rust" { safe fn bbz_chaos_switch_point(); }\n        bbz_chaos_switch_point();\n')
+s = s.replace(wt, wt + '        unsafe extern "Rust" { safe fn bbz_chaos_wait(spins: u32); }\n        if true { bbz_chaos_wait(spins); return; }\n')
+open(sys.argv[2], "w").write(s)
+PY
+  if cmp -s "$IL.new" "$IL"; then rm -f "$IL.new"; else mv "$IL.new" "$IL"; fi
+  for f in "$HERE"/crate/src/*.rs; do
+    cmp -s "$f" "$CC/src/$(basename "$f")" || cp "$f" "$CC/src/"
+  done
+  sed -e "s#@SRC@#$CS#g" -e "s#@EPHYRA@#$EPHYRA#g" "$HERE/crate/Cargo.toml.in" > "$CC/Cargo.toml.new"
+  if cmp -s "$CC/Cargo.toml.new" "$CC/Cargo.toml"; then rm -f "$CC/Cargo.toml.new"; else mv "$CC/Cargo.toml.new" "$CC/Cargo.toml"; fi
+  [ -f "$CC/Cargo.lock" ] || cp "$CRATE/Cargo.lock" "$CC/Cargo.lock" 2>/dev/null || true
+  RUSTFLAGS="--cfg fuzzing --cfg bbz_chaos" cargo build --manifest-path "$CC/Cargo.toml" --profile fuzz \
+    --target-dir "$BUILD/target-chaos" > "$BUILD/chaos-build.log" 2>&1 || return 1
+  cp "$BUILD/target-chaos/fuzz/bbz" "$BUILD/bin/bbz-chaos.new"
+  mv "$BUILD/bin/bbz-chaos.new" "$BUILD/bin/bbz-chaos"
+}
+# built alongside the ASan build
+chaos_build() {
+  if [ "${BBZ_NO_CHAOS:-}" = 1 ]; then
+    rm -f "$BUILD/bin/bbz-chaos"
+  elif chaos; then
+    echo "built $BUILD/bin/bbz-chaos"
+  else
+    rm -f "$BUILD/bin/bbz-chaos"
+    echo "warning: no schedule-perturbation build (see $BUILD/chaos-build.log); run.sh uses bbz for its seeds" >&2
+  fi
+}
+chaos_build &
+CHAOS_PID=$!
+
 if [ "${BBZ_NO_ASAN:-}" = 1 ]; then
   rm -f "$BUILD/bin/bbz-asan"
 elif asan; then
@@ -78,3 +124,4 @@ else
   rm -f "$BUILD/bin/bbz-asan"
   echo "warning: no AddressSanitizer build (see $BUILD/asan-build.log or asan-toolchain.log); run.sh uses bbz for every seed" >&2
 fi
+wait "$CHAOS_PID"

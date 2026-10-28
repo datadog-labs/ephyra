@@ -1,0 +1,10 @@
+[package]
+name = "root-raise-repro"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Point this at an upstream checkout (or use `bbtree-mmap = "0.1.6"` from crates.io).
+bbtree-mmap = { path = "UPSTREAM/bbtree-mmap" }  # a bbtree checkout
+
+[workspace]

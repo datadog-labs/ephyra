@@ -26,13 +26,13 @@ use crate::common::{Fail, ensure, fail, range_panics};
 pub struct Budget(Arc<(AtomicUsize, AtomicUsize)>);
 
 impl Budget {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Budget(Arc::new((AtomicUsize::new(0), AtomicUsize::new(usize::MAX))))
     }
-    fn set(&self, left: usize) {
+    pub(crate) fn set(&self, left: usize) {
         self.0.1.store(left, Ordering::Relaxed);
     }
-    fn out(&self) -> usize {
+    pub(crate) fn out(&self) -> usize {
         self.0.0.load(Ordering::Relaxed)
     }
 }
