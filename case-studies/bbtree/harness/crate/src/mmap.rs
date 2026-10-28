@@ -28,10 +28,10 @@ static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 /// namespace and one shared /tmp, so a name from the process id collides
 /// across slots (one worker truncating another's mapped file: SIGBUS, torn
 /// reads).
-struct TempPath(PathBuf);
+pub struct TempPath(pub PathBuf);
 
 impl TempPath {
-    fn new() -> Self {
+    pub fn new() -> Self {
         use std::hash::{BuildHasher, Hasher};
         loop {
             let n = NEXT_FILE.fetch_add(1, Ordering::Relaxed);

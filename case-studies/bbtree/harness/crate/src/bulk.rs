@@ -89,12 +89,18 @@ impl Key for i128 {
 impl Key for String {
     /// A long shared prefix, then the number, zero-padded.
     fn of(n: u32) -> Self {
+        if crate::zkey::on() {
+            return String::from_utf8(crate::zkey::of_number(n, false)).expect("zkey keys are ASCII");
+        }
         format!("tenant/0042/user/{n:08}")
     }
 }
 impl Key for Vec<u8> {
     /// Variable length: a length byte first, so that byte order is number order.
     fn of(n: u32) -> Self {
+        if crate::zkey::on() {
+            return crate::zkey::of_number(n, false);
+        }
         let be = n.to_be_bytes();
         let skip = be.iter().take_while(|&&b| b == 0).count();
         let mut k = vec![b'k', (4 - skip) as u8];

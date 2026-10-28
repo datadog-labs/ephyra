@@ -23,7 +23,7 @@ use bbtree_store::bbtree::{AllocError, Allocator, Global, NodeConfig};
 use ephyra::{BoxGen, GenExt, gens};
 use serde::{Deserialize, Serialize};
 
-use crate::common::{Fail, ensure, fail};
+use crate::common::{Fail, ensure, fail, spawn_in};
 
 /// Counts pages out and scribbles over pages given back.
 #[derive(Clone, Default)]
@@ -172,14 +172,20 @@ where
                 }
             }
         }
+        // Bulk-loaded keys no thread writes are present for the whole run:
+        // gets find them, scans and ranges over them hand them out (a scan
+        // "as a map's scan": "an entry present for the whole scan is visited
+        // exactly once").
+        let stable: Vec<bool> = (0..keys).map(|n| n < bulk && !writers.contains_key(&n)).collect();
+        let missed = |lo: u16, hi: u16, seen: &std::collections::BTreeSet<Vec<u8>>| (lo..=hi).find(|&n| stable[n as usize] && !seen.contains(&key(n)));
         let start = std::sync::Barrier::new(plans.len());
         let outcomes: Vec<Result<Left, Fail>> = std::thread::scope(|scope| {
             let handles: Vec<_> = plans
                 .iter()
                 .enumerate()
                 .map(|(t, plan)| {
-                    let (store, start) = (&store, &start);
-                    scope.spawn(move || -> Result<Left, Fail> {
+                    let (store, start, stable, missed) = (&store, &start, &stable, &missed);
+                    spawn_in(scope, move || -> Result<Left, Fail> {
                         let mut left = BTreeMap::new();
                         start.wait();
                         for (i, op) in plan.iter().enumerate() {
@@ -198,14 +204,17 @@ where
                                     left.insert(k, None);
                                 }
                                 ThreadOp::Get(k) => {
-                                    if let Some(v) = store.get(&key(k)) {
-                                        check_value(&key(k), &v).map_err(ctx("storethreads__torn__get"))?;
+                                    match store.get(&key(k)) {
+                                        Some(v) => check_value(&key(k), &v).map_err(ctx("storethreads__torn__get"))?,
+                                        None if stable[k as usize] => return Err(ctx("storethreads__missing__get")(format!("key {k} (bulk-loaded, never written) not found"))),
+                                        None => {}
                                     }
                                 }
                                 ThreadOp::Scan { from, to, rev } => {
                                     let (lo, hi) = (key(from.min(to)), key(from.max(to)));
                                     let mut prev: Option<Vec<u8>> = None;
                                     let mut bad: Option<(&str, String)> = None;
+                                    let mut seen = std::collections::BTreeSet::new();
                                     let visit = |k: &[u8], v: &[u8]| {
                                         let ordered = prev.as_deref().is_none_or(|p| if rev { k < p } else { k > p });
                                         if !ordered || k < &lo[..] || k > &hi[..] {
@@ -217,6 +226,7 @@ where
                                             return ControlFlow::Break(());
                                         }
                                         prev = Some(k.to_vec());
+                                        seen.insert(k.to_vec());
                                         ControlFlow::Continue(())
                                     };
                                     let range = (Bound::Included(&lo[..]), Bound::Included(&hi[..]));
@@ -224,12 +234,16 @@ where
                                     if let Some((sig, why)) = bad {
                                         return Err(ctx(sig)(why));
                                     }
+                                    if let Some(n) = missed(from.min(to), from.max(to), &seen) {
+                                        return Err(ctx("storethreads__missing__scan")(format!("key {n} (bulk-loaded, never written) not visited")));
+                                    }
                                 }
                                 ThreadOp::Range { from, to, back_every } => {
                                     let (lo, hi) = (key(from.min(to)), key(from.max(to)));
                                     let mut it = store.range::<[u8], _>((Bound::Included(&lo[..]), Bound::Included(&hi[..])));
                                     let (mut front, mut back): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
                                     let mut step = 0u32;
+                                    let mut seen = std::collections::BTreeSet::new();
                                     loop {
                                         step += 1;
                                         let from_back = back_every != 0 && step % u32::from(back_every) == 0;
@@ -244,6 +258,7 @@ where
                                                 if from_back { "next_back" } else { "next" }
                                             )));
                                         }
+                                        seen.insert(k.clone());
                                         if from_back {
                                             back = Some(k)
                                         } else {
@@ -252,6 +267,9 @@ where
                                         if step > 100_000 {
                                             return Err(ctx("storethreads__runaway__range")("range handed out more than 100000 entries".into()));
                                         }
+                                    }
+                                    if let Some(n) = missed(from.min(to), from.max(to), &seen) {
+                                        return Err(ctx("storethreads__missing__range")(format!("key {n} (bulk-loaded, never written) not handed out")));
                                     }
                                 }
                             }
@@ -285,6 +303,12 @@ where
         });
         if let Some(e) = bad {
             return Err(fail("storethreads__torn__final", format!("after the threads: {e}")));
+        }
+        for n in (0..keys).filter(|&n| stable[n as usize]) {
+            let got = store.get(&key(n));
+            ensure(got.as_deref() == Some(&value(n, 0, n as u32 * 13 % 1500)[..]), "storethreads__missing__final", || {
+                format!("key {n} (bulk-loaded, never written) after the threads: {:?} bytes", got.as_ref().map(|v| v.len()))
+            })?;
         }
         for n in 0..keys {
             let Some(ws) = writers.get(&n) else { continue };

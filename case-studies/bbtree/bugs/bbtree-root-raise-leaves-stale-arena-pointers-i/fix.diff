@@ -1,0 +1,77 @@
+diff --git a/bbtree-mmap/tests/bbtree_map_file.rs b/bbtree-mmap/tests/bbtree_map_file.rs
+index 031def2..b6145e6 100644
+--- a/bbtree-mmap/tests/bbtree_map_file.rs
++++ b/bbtree-mmap/tests/bbtree_map_file.rs
+@@ -241,3 +241,22 @@ fn an_empty_map_round_trips() {
+     assert_eq!(disk.get(&1), None);
+     assert_eq!(disk.iter().count(), 0);
+ }
++
++/// The same entries make the same file, wherever the writer's arena lay:
++/// a root page that held a leaf of large values keeps no pointer to them.
++#[test]
++fn files_depend_on_the_entries_alone() {
++    let map: BTreeMap<[u8; 20], String> = (0..180u32)
++        .map(|number| {
++            let mut key = [0; 20];
++            key[..4].copy_from_slice(&number.to_be_bytes());
++            (key, "v".repeat((number as usize * 7919) % 5000))
++        })
++        .collect();
++    let (first, second) = (TestFile::new("first"), TestFile::new("second"));
++    BBTreeMapFile::<[u8; 20], String>::create(&first.0, &map).unwrap();
++    let elsewhere: Vec<Vec<u8>> = (0..5).map(|i| vec![i; 256 << i]).collect();
++    BBTreeMapFile::<[u8; 20], String>::create(&second.0, &map).unwrap();
++    drop(elsewhere);
++    assert!(std::fs::read(&first.0).unwrap() == std::fs::read(&second.0).unwrap());
++}
+diff --git a/bbtree/src/tree/node/page.rs b/bbtree/src/tree/node/page.rs
+index 9d372f4..4a2c76e 100644
+--- a/bbtree/src/tree/node/page.rs
++++ b/bbtree/src/tree/node/page.rs
+@@ -685,6 +685,28 @@ impl<K, V, S: InlineKeyStrategy<K>> NodePtr<K, V, S> {
+         node
+     }
+ 
++    /// Zeros the page's bytes from past its header, latch word included, up
++    /// to `end`, as a fresh page holds them: what a node of another kind
++    /// left there, and `initialize` doesn't overwrite, goes.
++    ///
++    /// # Safety
++    ///
++    /// The page is allocated with at least `end` bytes, the access is
++    /// exclusive, and nothing in those bytes needs dropping or freeing
++    /// anymore.
++    pub(super) unsafe fn zero_past_header(self, end: usize) {
++        let start = if Self::is_latched() {
++            size_of::<LatchedNodeHeader>()
++        } else if Self::has_inline_keys() {
++            size_of::<InlineKeyNodeHeader>()
++        } else {
++            size_of::<NodeHeader>()
++        };
++        // SAFETY: the bytes lie in the allocated page, which the caller has
++        // exclusive access to; the latch word, before `start`, is untouched.
++        unsafe { self.page().as_ptr().add(start).write_bytes(0, end - start) };
++    }
++
+     /// Moves the node of kind `Kind` here into the page at `dest`, a page
+     /// for a node of that kind. Every byte of its layout is copied raw, so
+     /// keys, values and edges move without being read. Returns the node's
+diff --git a/bbtree/src/tree/node/root_page.rs b/bbtree/src/tree/node/root_page.rs
+index 3f0b6b8..aec92f8 100644
+--- a/bbtree/src/tree/node/root_page.rs
++++ b/bbtree/src/tree/node/root_page.rs
+@@ -230,6 +230,12 @@ impl<K, V, S: InlineKeyStrategy<K>> RootPage<K, V, S> {
+     /// page's new handle.
+     pub(in crate::tree) fn raise(self, alloc: &impl PageAllocator) -> Self {
+         let child = self.move_node_out(alloc);
++        // The leaf's keys and values past the internal node's slots would
++        // stay, stale: a file map copies the root page whole, and depends on
++        // the entries alone (`design/15-index-file.md`).
++        // SAFETY: the root node's contents moved to `child`, and the access
++        // is exclusive; the node part of the page ends at the root area.
++        unsafe { self.node.zero_past_header(Self::area_offset()) };
+         // SAFETY: the root page is aligned to and as large as an internal
+         // node's, the access is exclusive, and the root node's contents
+         // moved to `child`: nothing in it needs dropping.

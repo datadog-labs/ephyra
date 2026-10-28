@@ -1,0 +1,47 @@
+diff --git a/bbtree/src/tree/latched/mod.rs b/bbtree/src/tree/latched/mod.rs
+index b03db9c..36d3774 100644
+--- a/bbtree/src/tree/latched/mod.rs
++++ b/bbtree/src/tree/latched/mod.rs
+@@ -365,15 +365,36 @@ impl<K, V, S: InlineKeyStrategy<K>> LatchedTree<K, V, S> {
+     /// pages back to `alloc`, the allocator they came from. The caller runs
+     /// it once no other thread reaches the tree.
+     pub(crate) fn destroy(&mut self, alloc: &impl Allocator) {
+-        if let Some(root_page) = self.root_page() {
++        let root_page = self.root_page();
++        if root_page.is_some() {
+             *self.root.get_mut() = ptr::null_mut();
+             *self.rightmost_leaf.get_mut() = ptr::null_mut();
+-            Tree::of_root_page(root_page).destroy(alloc);
+         }
+-        self.free.deallocate_all(
++        // The free pages go back even if a key's or value's `Drop` panics:
++        // the walk takes the rest apart, then the panic goes on.
++        let _free = DeallocateFree {
++            free: &mut self.free,
+             alloc,
+-            Leaf::<K, V, Latched<S>>::page_layout(),
+-            Internal::<K, V, Latched<S>>::page_layout(),
+-        );
++            leaf: Leaf::<K, V, Latched<S>>::page_layout(),
++            internal: Internal::<K, V, Latched<S>>::page_layout(),
++        };
++        if let Some(root_page) = root_page {
++            Tree::of_root_page(root_page).destroy(alloc);
++        }
++    }
++}
++
++/// Gives a destroyed tree's free pages back to its allocator when dropped,
++/// on unwind too.
++struct DeallocateFree<'t, A: Allocator> {
++    free: &'t mut FreeLists,
++    alloc: &'t A,
++    leaf: Layout,
++    internal: Layout,
++}
++
++impl<A: Allocator> Drop for DeallocateFree<'_, A> {
++    fn drop(&mut self) {
++        self.free.deallocate_all(self.alloc, self.leaf, self.internal);
+     }
+ }

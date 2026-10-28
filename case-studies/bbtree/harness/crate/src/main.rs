@@ -10,14 +10,28 @@
 //!   bbz gen <property> <seed> <n>      samples of a property's inputs
 //!   bbz list                           the properties, weights and chunk sizes
 
+mod annex;
 mod bulk;
+mod chaos;
 mod common;
 mod filemap;
 mod mmap;
+mod mmapmx;
+mod pagemx;
 mod store;
+mod storelin;
 mod storethreads;
 mod syncalloc;
+mod syncpanic;
+mod synclin;
 mod syncthreads;
+mod sametree;
+mod shlin;
+mod ukey;
+mod umodel;
+mod upanic;
+mod wal;
+mod zkey;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -196,6 +210,25 @@ fn registry() -> Vec<Prop> {
         p!("mmapdmg_bytes_bytes", "mmapdmg", 6, 60, 1, mmap::DamagedCase<Vec<u8>, Vec<u8>>, mmap::damaged_bytes_bytes_gen(), mmap::damaged_bytes_bytes),
         p!("mmapdmg_text_u64", "mmapdmg", 6, 60, 1, mmap::DamagedCase<String, u64>, mmap::damaged_text_u64_gen(), mmap::damaged_text_u64),
         p!("mmapdmg_u64_text", "mmapdmg", 6, 60, 1, mmap::DamagedCase<u64, String>, mmap::damaged_u64_text_gen(), mmap::damaged_u64_text),
+        // mmapmx: plain key types, value types and input paths for BBTreeMapFile / FileWriter
+        p!("mmapmx_arr3_u8", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<[u8; 3], u8, false>),
+        p!("mmapmx_arr16_f64", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<[u8; 16], f64, true>),
+        p!("mmapmx_arr20_arr5", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<[u8; 20], [u8; 5], true>),
+        p!("mmapmx_arr32_zst", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<[u8; 32], [u8; 0], true>),
+        p!("mmapmx_arr70_u128", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<[u8; 70], u128, false>),
+        p!("mmapmx_i8_f32", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<i8, f32, false>),
+        p!("mmapmx_u16_arr33", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<u16, [u8; 33], false>),
+        p!("mmapmx_i128_i16", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<i128, i16, true>),
+        p!("mmapmx_userid_f64", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<mmapmx::UserId, f64, true>),
+        p!("mmapmx_uk5w2_u8", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<mmapmx::Uk5W2, u8, true>),
+        p!("mmapmx_uk12w2_u128", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<mmapmx::Uk12W2, u128, true>),
+        p!("mmapmx_uk24w4_arr5", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<mmapmx::Uk24W4, [u8; 5], true>),
+        p!("mmapmx_uk70w8_i16", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<mmapmx::Uk70W8, i16, true>),
+        p!("mmapmx_uk9w4_zst", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run_file::<mmapmx::Uk9W4, [u8; 0], true>),
+        p!("mmapmx_arr20_text", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run::<[u8; 20], String, true>),
+        p!("mmapmx_uk12w2_bytes", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run::<mmapmx::Uk12W2, Vec<u8>, true>),
+        p!("mmapmx_i8_bytes", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run::<i8, Vec<u8>, false>),
+        p!("mmapmx_uk70w8_text", "mmapmx", 4, 150, 1, mmapmx::MxCase, mmapmx::gen_case(), mmapmx::run::<mmapmx::Uk70W8, String, true>),
         // bbtree-store, single-threaded with page refusals
         p!("store_default", "store", 6, 150, 1, store::Case, store::case(), store::run::<store::Defaults>),
         p!("store_small", "store", 6, 150, 1, store::Case, store::case(), store::run::<store::Small>),
@@ -204,9 +237,24 @@ fn registry() -> Vec<Prop> {
         // bbtree-store shared by threads
         p!("storethreads_default", "storethreads", 6, 100, 20, storethreads::Case, storethreads::case(), storethreads::run::<store::Defaults>),
         p!("storethreads_small", "storethreads", 6, 100, 20, storethreads::Case, storethreads::case(), storethreads::run::<storethreads::SmallInternals>),
+        // bbtree-store threads checked while they run: own keys against each thread's model, thread-local page refusals, hot keys
+        p!("storelin_default", "storelin", 8, 50, 20, storelin::Case, storelin::case(), storelin::run::<store::Defaults>),
+        p!("storelin_small", "storelin", 8, 50, 20, storelin::Case, storelin::case(), storelin::run::<store::Small>),
+        p!("storelin_big_heap", "storelin", 6, 50, 20, storelin::Case, storelin::case(), storelin::run::<store::BigHeap>),
+        p!("storelin_big_leaves", "storelin", 6, 50, 20, storelin::Case, storelin::case(), storelin::run::<store::BigLeaves>),
         // bbtree::BBTreeMap under page refusals
         p!("syncmap_alloc_u64", "syncmap", 8, 200, 1, syncalloc::Case, syncalloc::case(), syncalloc::run::<u64>),
         p!("syncmap_alloc_string", "syncmap", 8, 200, 1, syncalloc::Case, syncalloc::case(), syncalloc::run::<String>),
+        // panics in closures and in keys' and values' Ord/Clone/Drop: latches released, half changes kept, teardown order and counts
+        p!("syncpanic_pk_inline", "syncpanic", 6, 1000, 20, syncpanic::Case, syncpanic::case(), syncpanic::run::<syncpanic::PK, bbtree::WithInlineKey, false>),
+        p!("syncpanic_pk_inline_narrow", "syncpanic", 6, 1000, 20, syncpanic::Case, syncpanic::case(), syncpanic::run::<syncpanic::PK, bbtree::Configured<bbtree::WithInlineKey, syncthreads::Narrow>, false>),
+        p!("syncpanic_u64", "syncpanic", 4, 1000, 20, syncpanic::Case, syncpanic::case(), syncpanic::run::<u64, Auto, false>),
+        p!("syncpanic_string", "syncpanic", 4, 1000, 20, syncpanic::Case, syncpanic::case(), syncpanic::run::<String, Auto, false>),
+        p!("syncpanic_string_inline_narrow", "syncpanic", 3, 1000, 20, syncpanic::Case, syncpanic::case(), syncpanic::run::<String, bbtree::Configured<bbtree::WithInlineKey, syncthreads::Narrow>, false>),
+        // the same with get_or_insert's closure panicking on new entries (it runs inside a split)
+        p!("syncvacant_u64", "syncvacant", 2, 100, 20, syncpanic::Case, syncpanic::case(), syncpanic::run::<u64, Auto, true>),
+        p!("syncvacant_pk_inline_narrow", "syncvacant", 2, 100, 20, syncpanic::Case, syncpanic::case(), syncpanic::run::<syncpanic::PK, bbtree::Configured<bbtree::WithInlineKey, syncthreads::Narrow>, true>),
+        p!("syncpanic_store", "syncpanic", 5, 1000, 20, syncpanic::SCase, syncpanic::scase(), syncpanic::run_store),
         // unsync map at large sizes, removal-heavy
         p!("bulkmap_u64", "bulkmap", 3, 20, 1, bulk::Case, bulk::case(), bulk::run::<u64, Auto>),
         p!("bulkmap_i128", "bulkmap", 3, 20, 1, bulk::Case, bulk::case(), bulk::run::<i128, Auto>),
@@ -218,11 +266,225 @@ fn registry() -> Vec<Prop> {
         p!("bulkmap_string_inline_narrow", "bulkmap", 3, 20, 1, bulk::Case, bulk::case(), bulk::run::<String, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
         p!("bulkmap_bytes_wide", "bulkmap", 3, 20, 1, bulk::Case, bulk::case(), bulk::run::<Vec<u8>, bbtree::Configured<Auto, bulk::Wide>>),
         p!("bulkmap_i128_wide", "bulkmap", 3, 20, 1, bulk::Case, bulk::case(), bulk::run::<i128, bbtree::Configured<Auto, bulk::Wide>>),
+        // unsync map and set: a stateful model over the entry API, mutable and
+        // consuming walks, clone (with panics), set algebra and relations
+        p!("umodel_u64", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<u64, umodel::Val<0>, Auto>),
+        p!("umodel_i128_pad3", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<i128, umodel::Val<3>, Auto>),
+        p!("umodel_arr20", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<[u8; 20], umodel::Val<0>, Auto>),
+        p!("umodel_string", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<String, umodel::Val<0>, Auto>),
+        p!("umodel_bytes_inline", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<Vec<u8>, umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("umodel_boxbytes_inline_narrow", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<Box<[u8]>, umodel::Val<3>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("umodel_string_inline_pad40", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<String, umodel::Val<40>, bbtree::WithInlineKey>),
+        p!("umodel_u64_narrow_pad40", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<u64, umodel::Val<40>, bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("umodel_i128_wide", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<i128, umodel::Val<0>, bbtree::Configured<Auto, bulk::Wide>>),
+        // keys with a tag Ord ignores: which of two equal keys the map keeps (insert, entry, set replace, append)
+        p!("umodel_tagstr_inline", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<umodel::Tagged, umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("umodel_tagstr_inline_narrow_pad3", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<umodel::Tagged, umodel::Val<3>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("umodel_tagstr_plain", "umodel", 3, 50, 1, umodel::Case, umodel::case(), umodel::run::<umodel::Tagged, umodel::Val<0>, Auto>),
+        p!("umodel_tagu64_inline_narrow", "umodel", 5, 50, 1, umodel::Case, umodel::case(), umodel::run::<umodel::TagU64, umodel::Val<0>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("umodel_sync_tagstr_inline", "umodel", 4, 50, 1, umodel::Case, umodel::case(), umodel::run_sync::<umodel::Tagged, umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("umodel_sync_tagu64_inline_pad3", "umodel", 4, 50, 1, umodel::Case, umodel::case(), umodel::run_sync::<umodel::TagU64, umodel::Val<3>, bbtree::WithInlineKey>),
+        p!("umodel_sync_u64_pad3", "umodel", 4, 50, 1, umodel::Case, umodel::case(), umodel::run_sync::<u64, umodel::Val<3>, Auto>),
+        p!("umodel_sync_string", "umodel", 4, 50, 1, umodel::Case, umodel::case(), umodel::run_sync::<String, umodel::Val<0>, Auto>),
+        p!("umodel_sync_bytes_inline_narrow", "umodel", 4, 50, 1, umodel::Case, umodel::case(), umodel::run_sync::<Vec<u8>, umodel::Val<0>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        // typemx: the umodel model over key and value types no other
+        // property uses (node layouts of tiny, huge and over-aligned slots).
+        p!("typemx_u8_a64", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<u8, umodel::Val<1, umodel::A64>, Auto>),
+        p!("typemx_i16_big", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<i16, umodel::Val<300>, Auto>),
+        p!("typemx_u32_a16", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<u32, umodel::Val<0, umodel::A16>, Auto>),
+        p!("typemx_char", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<char, umodel::Val<0>, Auto>),
+        p!("typemx_bool_a128", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<bool, umodel::Val<0, umodel::A128>, Auto>),
+        p!("typemx_unit", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<(), umodel::Val<2>, Auto>),
+        p!("typemx_tuple_narrow", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<(u8, u16), umodel::Val<0>, bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("typemx_i16_wide", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<i16, umodel::Val<0>, bbtree::Configured<Auto, bulk::Wide>>),
+        p!("typemx_optu64_pad130", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<Option<u64>, umodel::Val<130>, Auto>),
+        p!("typemx_k64", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<umodel::K64, umodel::Val<0>, Auto>),
+        p!("typemx_k64_a128_wide", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<umodel::K64, umodel::Val<5, umodel::A128>, bbtree::Configured<Auto, bulk::Wide>>),
+        p!("typemx_arr3_inline", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<[u8; 3], umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("typemx_arr3_a64", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<[u8; 3], umodel::Val<0, umodel::A64>, Auto>),
+        p!("typemx_arr300_inline", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<[u8; 300], umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("typemx_arr64_big", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<[u8; 64], umodel::Val<300>, Auto>),
+        p!("typemx_u64_big", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<u64, umodel::Val<300>, Auto>),
+        p!("typemx_u64_a128_narrow", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<u64, umodel::Val<0, umodel::A128>, bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("typemx_arr16_a64", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm::<[u8; 16], umodel::Val<1, umodel::A64>, Auto>),
+        p!("typemx_sync_u64_big", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm_sync::<u64, umodel::Val<300>, Auto>),
+        p!("typemx_sync_arr3_inline_a64", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm_sync::<[u8; 3], umodel::Val<1, umodel::A64>, bbtree::WithInlineKey>),
+        p!("typemx_sync_arr20_a128", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm_sync::<[u8; 20], umodel::Val<0, umodel::A128>, Auto>),
+        p!("typemx_sync_arr300_inline", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm_sync::<[u8; 300], umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("typemx_sync_arr3_inline_big", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm_sync::<[u8; 3], umodel::Val<300>, bbtree::WithInlineKey>),
+        p!("typemx_sync_string_a64", "typemx", 4, 50, 1, umodel::Case, umodel::case(), umodel::tm_sync::<String, umodel::Val<0, umodel::A64>, Auto>),
         // bbtree::BBTreeMap shared by threads, large trees
-        p!("syncthreads_u64", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<u64, Auto>),
-        p!("syncthreads_string", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<String, Auto>),
-        p!("syncthreads_u64_narrow", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<u64, bbtree::Configured<Auto, syncthreads::Narrow>>),
-        p!("syncthreads_string_narrow", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<String, bbtree::Configured<Auto, syncthreads::Narrow>>),
+        p!("syncthreads_u64", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<u64, Auto, false>),
+        p!("syncthreads_string", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<String, Auto, false>),
+        p!("syncthreads_u64_narrow", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<u64, bbtree::Configured<Auto, syncthreads::Narrow>, false>),
+        // the same with keys outside the shared prefix: threads shrink it mid-run
+        p!("syncthreads_u64_shrink", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<u64, Auto, true>),
+        p!("syncthreads_string_shrink", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<String, Auto, true>),
+        p!("syncthreads_string_shrink_narrow", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<String, bbtree::Configured<Auto, syncthreads::Narrow>, true>),
+        p!("syncthreads_string_inline_shrink", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<String, bbtree::WithInlineKey, true>),
+        // bbtree_store::wal: lost outcomes, rival writers, damage, against the documented layout
+        p!("wal_max1", "wal", 8, 200, 1, wal::Case, wal::case(), wal::run::<1>),
+        p!("wal_max2", "wal", 8, 200, 1, wal::Case, wal::case(), wal::run::<2>),
+        p!("wal_max3", "wal", 8, 200, 1, wal::Case, wal::case(), wal::run::<3>),
+        p!("wal_max7", "wal", 8, 200, 1, wal::Case, wal::case(), wal::run::<7>),
+        p!("wal_max10000", "wal", 8, 200, 1, wal::Case, wal::case(), wal::run::<10_000>),
+        p!("syncthreads_string_narrow", "syncthreads", 4, 8, 20, syncthreads::Case, syncthreads::case(), syncthreads::run::<String, bbtree::Configured<Auto, syncthreads::Narrow>, false>),
+        // bbtree::BBTreeMap with a leaf annex: update_or_insert_with_leaf / remove_with_leaf, a probe annex through splits, merges, teardown
+        p!("annex_u64", "annex", 5, 60, 1, annex::Case, annex::case(), annex::run::<u64, Auto>),
+        p!("annex_string", "annex", 5, 60, 1, annex::Case, annex::case(), annex::run::<String, Auto>),
+        p!("annex_string_narrow", "annex", 5, 60, 1, annex::Case, annex::case(), annex::run::<String, bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("annex_bytes_inline", "annex", 5, 60, 1, annex::Case, annex::case(), annex::run::<Vec<u8>, bbtree::WithInlineKey>),
+        p!("annex_threads_u64", "annex", 4, 10, 20, annex::TCase, annex::tcase(), annex::run_threads::<u64, Auto>),
+        p!("annex_threads_string_narrow", "annex", 4, 10, 20, annex::TCase, annex::tcase(), annex::run_threads::<String, bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("annex_threads_bytes_inline", "annex", 4, 10, 20, annex::TCase, annex::tcase(), annex::run_threads::<Vec<u8>, bbtree::WithInlineKey>),
+        // bbtree::BBTreeMap threads checked while they run: own keys against each thread's model, hot counters conserved and monotone
+        p!("synclin_u64_w4", "synclin", 4, 8, 20, synclin::Case, synclin::case(), synclin::run::<u64, Auto, 4, false>),
+        p!("synclin_u64_narrow_w3", "synclin", 4, 8, 20, synclin::Case, synclin::case(), synclin::run::<u64, bbtree::Configured<Auto, syncthreads::Narrow>, 3, false>),
+        p!("synclin_u64_shrink_w8", "synclin", 3, 8, 20, synclin::Case, synclin::case(), synclin::run::<u64, Auto, 8, true>),
+        p!("synclin_string_shrink_w8", "synclin", 4, 8, 20, synclin::Case, synclin::case(), synclin::run::<String, Auto, 8, true>),
+        p!("synclin_string_narrow_w3", "synclin", 3, 8, 20, synclin::Case, synclin::case(), synclin::run::<String, bbtree::Configured<Auto, syncthreads::Narrow>, 3, false>),
+        p!("synclin_string_inline_shrink_w4", "synclin", 3, 8, 20, synclin::Case, synclin::case(), synclin::run::<String, bbtree::WithInlineKey, 4, true>),
+        // user InlineKey impls under WithInlineKey: every width, hash tags, cmp_from, cmp_prefix; call premises checked
+        p!("ukey_umodel_w2", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel::<2, 0>),
+        p!("ukey_umodel_w4_tag", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel::<4, 1>),
+        p!("ukey_umodel_w8_cmp", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel::<8, 2>),
+        p!("ukey_umodel_w8_all", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel::<8, 7>),
+        p!("ukey_umodel_w2_tag_cmp", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel::<2, 3>),
+        p!("ukey_umodel_w4_cmp_prefix", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel::<4, 6>),
+        p!("ukey_umodel_narrow_w8_tag_cmp", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel_narrow::<8, 3>),
+        p!("ukey_umodel_narrow_w2_tag_prefix", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel_narrow::<2, 5>),
+        p!("ukey_umodel_sync_w4_tag_cmp", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel_sync::<4, 3>),
+        p!("ukey_umodel_sync_w8", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel_sync::<8, 0>),
+        p!("ukey_umodel_sync_w2_all", "ukey", 5, 50, 1, umodel::Case, umodel::case(), ukey::umodel_sync::<2, 7>),
+        p!("ukey_annex_w2_tag", "ukey", 5, 60, 1, annex::Case, annex::case(), ukey::annex::<2, 1>),
+        p!("ukey_annex_w8_cmp_prefix", "ukey", 5, 60, 1, annex::Case, annex::case(), ukey::annex::<8, 6>),
+        p!("ukey_annex_threads_w4_tag_cmp", "ukey", 5, 10, 20, annex::TCase, annex::tcase(), ukey::annex_threads::<4, 3>),
+        p!("ukey_synclin_w4_cmp", "ukey", 5, 8, 20, synclin::Case, synclin::case(), ukey::synclin::<4, 2>),
+        p!("ukey_synclin_w8_tag_prefix", "ukey", 5, 8, 20, synclin::Case, synclin::case(), ukey::synclin::<8, 5>),
+        p!("ukey_bulk_w2_cmp", "ukey", 5, 20, 1, bulk::Case, bulk::case(), ukey::bulk::<2, 2>),
+        p!("ukey_bulk_w8_tag_prefix", "ukey", 5, 20, 1, bulk::Case, bulk::case(), ukey::bulk::<8, 5>),
+        // shlin: threads writing and removing the same keys, each key's history checked for linearizability
+        p!("shlin_u64_w3", "shlin", 4, 60, 20, shlin::Case, shlin::case(), shlin::run::<u64, Auto, 3, false>),
+        p!("shlin_u64_narrow_w2", "shlin", 4, 60, 20, shlin::Case, shlin::case(), shlin::run::<u64, bbtree::Configured<Auto, syncthreads::Narrow>, 2, false>),
+        p!("shlin_u64_shrink_w4", "shlin", 3, 60, 20, shlin::Case, shlin::case(), shlin::run::<u64, Auto, 4, true>),
+        p!("shlin_string_shrink_w3", "shlin", 4, 60, 20, shlin::Case, shlin::case(), shlin::run::<String, Auto, 3, true>),
+        p!("shlin_string_inline_narrow_w2", "shlin", 3, 60, 20, shlin::Case, shlin::case(), shlin::run::<String, bbtree::Configured<bbtree::WithInlineKey, syncthreads::Narrow>, 2, false>),
+        p!("shlin_u64_w130", "shlin", 2, 60, 20, shlin::Case, shlin::case(), shlin::run::<u64, Auto, 130, false>),
+        // shlinr: the shlin threads on an allocator that refuses pages to each thread at its own rate
+        p!("shlinr_u64_w3", "shlinr", 4, 60, 20, shlin::RCase, shlin::rcase(), shlin::run_refuse::<u64, Auto, 3, false>),
+        p!("shlinr_u64_narrow_w2", "shlinr", 4, 60, 20, shlin::RCase, shlin::rcase(), shlin::run_refuse::<u64, bbtree::Configured<Auto, syncthreads::Narrow>, 2, false>),
+        p!("shlinr_string_shrink_w3", "shlinr", 4, 60, 20, shlin::RCase, shlin::rcase(), shlin::run_refuse::<String, Auto, 3, true>),
+        p!("shlinr_string_inline_narrow_w2", "shlinr", 3, 60, 20, shlin::RCase, shlin::rcase(), shlin::run_refuse::<String, bbtree::Configured<bbtree::WithInlineKey, syncthreads::Narrow>, 2, false>),
+        p!("shlin_store_default_short", "shlin", 3, 60, 20, shlin::Case, shlin::case(), shlin::run_store::<store::Defaults, 0>),
+        p!("shlin_store_small_prefix", "shlin", 3, 60, 20, shlin::Case, shlin::case(), shlin::run_store::<store::Small, 1>),
+        p!("shlin_store_big_heap_long", "shlin", 2, 60, 20, shlin::Case, shlin::case(), shlin::run_store::<store::BigHeap, 2>),
+        p!("shlin_store_big_leaves_shrink", "shlin", 2, 60, 20, shlin::Case, shlin::case(), shlin::run_store::<store::BigLeaves, 3>),
+        // sametree: insert_many / extend / clone give the same nodes as one insert at a time (design/12, tree/clone.rs)
+        p!("sametree_u64", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<u64, umodel::Val<0>, Auto>),
+        p!("sametree_u64_narrow_pad3", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<u64, umodel::Val<3>, bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("sametree_i128_wide", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<i128, umodel::Val<0>, bbtree::Configured<Auto, bulk::Wide>>),
+        p!("sametree_arr20", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<[u8; 20], umodel::Val<0>, Auto>),
+        p!("sametree_string", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<String, umodel::Val<0>, Auto>),
+        p!("sametree_string_inline_pad40", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<String, umodel::Val<40>, bbtree::WithInlineKey>),
+        p!("sametree_bytes_inline_narrow", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<Vec<u8>, umodel::Val<0>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("sametree_tagstr_inline", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<umodel::Tagged, umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("sametree_tagu64_inline_narrow", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<umodel::TagU64, umodel::Val<0>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("sametree_u8_a64", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<u8, umodel::Val<1, umodel::A64>, Auto>),
+        p!("sametree_i16_wide", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<i16, umodel::Val<0>, bbtree::Configured<Auto, bulk::Wide>>),
+        p!("sametree_unit", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<(), umodel::Val<2>, Auto>),
+        p!("sametree_arr3_inline", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<[u8; 3], umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("sametree_arr300_inline", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<[u8; 300], umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("sametree_k64_a128_wide", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<umodel::K64, umodel::Val<5, umodel::A128>, bbtree::Configured<Auto, bulk::Wide>>),
+        p!("sametree_ukey_w4_tag", "sametree", 3, 30, 1, sametree::Case, sametree::case(), ukey::sametree::<4, 1>),
+        p!("sametree_ukey_w8_all", "sametree", 3, 30, 1, sametree::Case, sametree::case(), ukey::sametree::<8, 7>),
+        p!("sametree_ukey_narrow_w8_tag_cmp", "sametree", 3, 30, 1, sametree::Case, sametree::case(), ukey::sametree_narrow::<8, 3>),
+        p!("sametree_ukey_narrow_w2_tag_prefix", "sametree", 3, 30, 1, sametree::Case, sametree::case(), ukey::sametree_narrow::<2, 5>),
+        // upanic: panics in an unsync map's user code (Ord, InlineKey, Drop, closures, extend's iterator) against the exact states the docs promise after one
+        p!("upanic_int_auto", "upanic", 9, 40, 1, upanic::Case, upanic::case(), upanic::run::<upanic::IntK, Auto>),
+        p!("upanic_int_narrow", "upanic", 8, 40, 1, upanic::Case, upanic::case(), upanic::run::<upanic::IntK, bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("upanic_str_inline", "upanic", 9, 40, 1, upanic::Case, upanic::case(), upanic::run::<upanic::StrK, bbtree::WithInlineKey>),
+        p!("upanic_str_inline_narrow", "upanic", 8, 40, 1, upanic::Case, upanic::case(), upanic::run::<upanic::StrK, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("upanic_ik_inline", "upanic", 9, 40, 1, upanic::Case, upanic::case(), upanic::run::<upanic::IkK, bbtree::WithInlineKey>),
+        p!("upanic_ik_inline_narrow", "upanic", 8, 40, 1, upanic::Case, upanic::case(), upanic::run::<upanic::IkK, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("upanic_ik_inline_wide", "upanic", 6, 40, 1, upanic::Case, upanic::case(), upanic::run::<upanic::IkK, bbtree::Configured<bbtree::WithInlineKey, bulk::Wide>>),
+        // sametree with keys whose Ord panics at an armed call (D48: only soundness after)
+        p!("sametree_bomb_u64_plain", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<sametree::BombKey, umodel::Val<0>, Auto>),
+        p!("sametree_bomb_str_inline", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<sametree::BombStr, umodel::Val<3>, bbtree::WithInlineKey>),
+        p!("sametree_bomb_str_inline_narrow", "sametree", 3, 30, 1, sametree::Case, sametree::case(), sametree::run::<sametree::BombStr, umodel::Val<0>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        // pagemx: the umodel/sametree/bulkmap/filemap/store/synclin models under node configs of 16 KiB-256 KiB leaves and 16-64 KiB internal nodes (capacities at the 1023-key cap)
+        p!("pagemx_umodel_u64_l16k", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<u64, umodel::Val<0>, pagemx::A<pagemx::L16K>>),
+        p!("pagemx_umodel_i16_huge", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<i16, umodel::Val<0>, pagemx::A<pagemx::Huge>>),
+        p!("pagemx_umodel_u32_i64k", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<u32, umodel::Val<0>, pagemx::A<pagemx::I64K>>),
+        p!("pagemx_umodel_string_l64ktiny", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<String, umodel::Val<0>, pagemx::A<pagemx::L64KTiny>>),
+        p!("pagemx_umodel_bytes_inline_huge", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<Vec<u8>, umodel::Val<0>, pagemx::I<pagemx::Huge>>),
+        p!("pagemx_umodel_tagstr_inline_mixed", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<umodel::Tagged, umodel::Val<0>, pagemx::I<pagemx::Mixed>>),
+        p!("pagemx_umodel_arr20_mixed_pad40", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<[u8; 20], umodel::Val<40>, pagemx::A<pagemx::Mixed>>),
+        p!("pagemx_umodel_u8_l64ktiny", "pagemx", 2, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<u8, umodel::Val<0>, pagemx::A<pagemx::L64KTiny>>),
+        p!("pagemx_umodel_i128_i64k_pad3", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel::<i128, umodel::Val<3>, pagemx::A<pagemx::I64K>>),
+        p!("pagemx_umodel_sync_u64_huge", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel_sync::<u64, umodel::Val<0>, pagemx::A<pagemx::Huge>>),
+        p!("pagemx_umodel_sync_string_inline_l64ktiny", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel_sync::<String, umodel::Val<0>, pagemx::I<pagemx::L64KTiny>>),
+        p!("pagemx_umodel_sync_arr32_i64k", "pagemx", 3, 50, 1, umodel::Case, umodel::case(), pagemx::umodel_sync::<[u8; 32], umodel::Val<0>, pagemx::A<pagemx::I64K>>),
+        p!("pagemx_sametree_u64_huge", "pagemx", 3, 30, 1, sametree::Case, sametree::case(), pagemx::sametree::<u64, umodel::Val<0>, pagemx::A<pagemx::Huge>>),
+        p!("pagemx_sametree_string_inline_mixed", "pagemx", 3, 30, 1, sametree::Case, sametree::case(), pagemx::sametree::<String, umodel::Val<0>, pagemx::I<pagemx::Mixed>>),
+        p!("pagemx_sametree_u32_l64ktiny", "pagemx", 3, 30, 1, sametree::Case, sametree::case(), pagemx::sametree::<u32, umodel::Val<0>, pagemx::A<pagemx::L64KTiny>>),
+        p!("pagemx_sametree_i16_i64k", "pagemx", 3, 30, 1, sametree::Case, sametree::case(), pagemx::sametree::<i16, umodel::Val<0>, pagemx::A<pagemx::I64K>>),
+        p!("pagemx_bulk_u64_l64ktiny", "pagemx", 3, 20, 1, bulk::Case, bulk::case(), pagemx::bulk::<u64, pagemx::A<pagemx::L64KTiny>>),
+        p!("pagemx_bulk_string_huge", "pagemx", 3, 20, 1, bulk::Case, bulk::case(), pagemx::bulk::<String, pagemx::A<pagemx::Huge>>),
+        p!("pagemx_bulk_u32_i64k", "pagemx", 3, 20, 1, bulk::Case, bulk::case(), pagemx::bulk::<u32, pagemx::A<pagemx::I64K>>),
+        p!("pagemx_bulk_arr16_mixed", "pagemx", 3, 20, 1, bulk::Case, bulk::case(), pagemx::bulk::<[u8; 16], pagemx::A<pagemx::Mixed>>),
+        p!("pagemx_bulk_bytes_inline_l16k", "pagemx", 3, 20, 1, bulk::Case, bulk::case(), pagemx::bulk::<Vec<u8>, pagemx::I<pagemx::L16K>>),
+        p!("pagemx_filemap_u64_u8_huge", "pagemx", 2, 200, 1, FR, frg(), pagemx::filemap::<u64, u8, pagemx::A<pagemx::Huge>>),
+        p!("pagemx_filemap_u16_u64_l64ktiny", "pagemx", 2, 200, 1, FR, frg(), pagemx::filemap::<u16, u64, pagemx::A<pagemx::L64KTiny>>),
+        p!("pagemx_filemap_arr20_u32_i64k", "pagemx", 2, 200, 1, FR, frg(), pagemx::filemap::<[u8; 20], u32, pagemx::A<pagemx::I64K>>),
+        p!("pagemx_filemap_u32_arr3_mixed", "pagemx", 2, 200, 1, FR, frg(), pagemx::filemap::<u32, [u8; 3], pagemx::A<pagemx::Mixed>>),
+        p!("pagemx_store_huge", "pagemx", 3, 150, 1, store::Case, store::case(), pagemx::store::<pagemx::StoreHuge>),
+        p!("pagemx_store_mixed", "pagemx", 3, 150, 1, store::Case, store::case(), pagemx::store::<pagemx::Mixed>),
+        p!("pagemx_long_auto", "pagemx", 2, 30, 1, pagemx::LongCase, pagemx::long_case(), pagemx::long_unsync::<Auto>),
+        p!("pagemx_long_inline_l64ktiny", "pagemx", 2, 30, 1, pagemx::LongCase, pagemx::long_case(), pagemx::long_unsync::<pagemx::I<pagemx::L64KTiny>>),
+        p!("pagemx_long_auto_narrow", "pagemx", 2, 30, 1, pagemx::LongCase, pagemx::long_case(), pagemx::long_unsync::<bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("pagemx_long_sync_auto", "pagemx", 2, 30, 1, pagemx::LongCase, pagemx::long_case(), pagemx::long_sync::<Auto>),
+        p!("pagemx_long_sync_inline_narrow", "pagemx", 2, 30, 1, pagemx::LongCase, pagemx::long_case(), pagemx::long_sync::<bbtree::Configured<bbtree::WithInlineKey, syncthreads::Narrow>>),
+        p!("pagemx_synclin_u64_huge_w4", "pagemx", 3, 8, 20, synclin::Case, synclin::case(), pagemx::synclin::<u64, pagemx::A<pagemx::Huge>, 4, false>),
+        p!("pagemx_synclin_string_l64ktiny_shrink_w3", "pagemx", 3, 8, 20, synclin::Case, synclin::case(), pagemx::synclin::<String, pagemx::A<pagemx::L64KTiny>, 3, true>),
+        p!("pagemx_synclin_u64_i64k_w2", "pagemx", 3, 8, 20, synclin::Case, synclin::case(), pagemx::synclin::<u64, pagemx::A<pagemx::I64K>, 2, false>),
+        // values of 2.4 KB and 1 KB: leaves of 12 entries over several pages, copied whole by get_copied
+        p!("synclin_u64_w300", "synclin", 3, 8, 20, synclin::Case, synclin::case(), synclin::run::<u64, Auto, 300, false>),
+        p!("synclin_string_shrink_w130", "synclin", 3, 8, 20, synclin::Case, synclin::case(), synclin::run::<String, Auto, 130, true>),
+        // synclinr: the synclin threads on an allocator that refuses pages to each thread at its own rate
+        p!("synclinr_u64_w4", "synclinr", 4, 8, 20, synclin::RCase, synclin::rcase(), synclin::run_refuse::<u64, Auto, 4, false>),
+        p!("synclinr_u64_narrow_w3", "synclinr", 4, 8, 20, synclin::RCase, synclin::rcase(), synclin::run_refuse::<u64, bbtree::Configured<Auto, syncthreads::Narrow>, 3, false>),
+        p!("synclinr_string_shrink_w8", "synclinr", 4, 8, 20, synclin::RCase, synclin::rcase(), synclin::run_refuse::<String, Auto, 8, true>),
+        p!("synclinr_string_narrow_w3", "synclinr", 3, 8, 20, synclin::RCase, synclin::rcase(), synclin::run_refuse::<String, bbtree::Configured<Auto, syncthreads::Narrow>, 3, false>),
+        p!("synclinr_string_inline_shrink_w4", "synclinr", 3, 8, 20, synclin::RCase, synclin::rcase(), synclin::run_refuse::<String, bbtree::WithInlineKey, 4, true>),
+        p!("synclinr_u64_w300", "synclinr", 3, 8, 20, synclin::RCase, synclin::rcase(), synclin::run_refuse::<u64, Auto, 300, false>),
+        // zkey: the exact oracles over trie-preorder byte strings ({0, 1, 'a', 0x7f}: empty, prefix-of-each-other, trailing-zero keys; prefixes of the shared prefix)
+        p!("zumodel_string", "zumodel", 4, 50, 1, umodel::Case, umodel::case(), zkey::umodel::<String, umodel::Val<0>, Auto>),
+        p!("zumodel_bytes_inline", "zumodel", 4, 50, 1, umodel::Case, umodel::case(), zkey::umodel::<Vec<u8>, umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("zumodel_boxbytes_inline_narrow", "zumodel", 4, 50, 1, umodel::Case, umodel::case(), zkey::umodel::<Box<[u8]>, umodel::Val<3>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("zumodel_string_inline_pad40", "zumodel", 3, 50, 1, umodel::Case, umodel::case(), zkey::umodel::<String, umodel::Val<40>, bbtree::WithInlineKey>),
+        p!("zumodel_tagstr_inline_narrow", "zumodel", 4, 50, 1, umodel::Case, umodel::case(), zkey::umodel::<umodel::Tagged, umodel::Val<0>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("zumodel_bytes_wide", "zumodel", 3, 50, 1, umodel::Case, umodel::case(), zkey::umodel::<Vec<u8>, umodel::Val<0>, bbtree::Configured<Auto, bulk::Wide>>),
+        p!("zumodel_sync_string", "zumodel", 4, 50, 1, umodel::Case, umodel::case(), zkey::umodel_sync::<String, umodel::Val<0>, Auto>),
+        p!("zumodel_sync_bytes_inline_narrow", "zumodel", 4, 50, 1, umodel::Case, umodel::case(), zkey::umodel_sync::<Vec<u8>, umodel::Val<0>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("zumodel_sync_tagstr_inline", "zumodel", 3, 50, 1, umodel::Case, umodel::case(), zkey::umodel_sync::<umodel::Tagged, umodel::Val<0>, bbtree::WithInlineKey>),
+        p!("zsametree_string", "zsametree", 3, 30, 1, sametree::Case, sametree::case(), zkey::sametree::<String, umodel::Val<0>, Auto>),
+        p!("zsametree_string_inline_pad40", "zsametree", 3, 30, 1, sametree::Case, sametree::case(), zkey::sametree::<String, umodel::Val<40>, bbtree::WithInlineKey>),
+        p!("zsametree_bytes_inline_narrow", "zsametree", 3, 30, 1, sametree::Case, sametree::case(), zkey::sametree::<Vec<u8>, umodel::Val<0>, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("zbulkmap_bytes", "zbulkmap", 3, 20, 1, bulk::Case, bulk::case(), zkey::bulk::<Vec<u8>, Auto>),
+        p!("zbulkmap_string_inline_narrow", "zbulkmap", 3, 20, 1, bulk::Case, bulk::case(), zkey::bulk::<String, bbtree::Configured<bbtree::WithInlineKey, bulk::Narrow>>),
+        p!("zbulkmap_string_narrow", "zbulkmap", 2, 20, 1, bulk::Case, bulk::case(), zkey::bulk::<String, bbtree::Configured<Auto, bulk::Narrow>>),
+        p!("zsyncthreads_string_shrink", "zsyncthreads", 3, 8, 20, syncthreads::Case, syncthreads::case(), zkey::syncthreads::<String, Auto, true>),
+        p!("zsyncthreads_string_inline_shrink", "zsyncthreads", 3, 8, 20, syncthreads::Case, syncthreads::case(), zkey::syncthreads::<String, bbtree::WithInlineKey, true>),
+        p!("zsynclin_string_shrink_w8", "zsynclin", 3, 8, 20, synclin::Case, synclin::case(), zkey::synclin::<String, Auto, 8, true>),
+        p!("zsynclin_string_inline_shrink_w4", "zsynclin", 3, 8, 20, synclin::Case, synclin::case(), zkey::synclin::<String, bbtree::WithInlineKey, 4, true>),
+        p!("zsynclin_string_narrow_w3", "zsynclin", 3, 8, 20, synclin::Case, synclin::case(), zkey::synclin::<String, bbtree::Configured<Auto, syncthreads::Narrow>, 3, false>),
+        p!("zshlin_string_shrink_w3", "zshlin", 4, 60, 20, shlin::Case, shlin::case(), zkey::shlin::<String, Auto, 3, true>),
+        p!("zshlin_string_inline_narrow_shrink_w2", "zshlin", 4, 60, 20, shlin::Case, shlin::case(), zkey::shlin::<String, bbtree::Configured<bbtree::WithInlineKey, syncthreads::Narrow>, 2, true>),
+        p!("zshlin_string_inline_w2", "zshlin", 3, 60, 20, shlin::Case, shlin::case(), zkey::shlin::<String, bbtree::WithInlineKey, 2, false>),
+        p!("zshlinr_string_shrink_w3", "zshlinr", 3, 60, 20, shlin::RCase, shlin::rcase(), zkey::shlinr::<String, Auto, 3, true>),
+        p!("zshlinr_string_inline_narrow_shrink_w2", "zshlinr", 3, 60, 20, shlin::RCase, shlin::rcase(), zkey::shlinr::<String, bbtree::Configured<bbtree::WithInlineKey, syncthreads::Narrow>, 2, true>),
+        p!("zsynclinr_string_shrink_w8", "zsynclinr", 3, 8, 20, synclin::RCase, synclin::rcase(), zkey::synclinr::<String, Auto, 8, true>),
+        p!("zsynclinr_string_inline_shrink_w4", "zsynclinr", 3, 8, 20, synclin::RCase, synclin::rcase(), zkey::synclinr::<String, bbtree::WithInlineKey, 4, true>),
     ]
 }
 
@@ -254,7 +516,16 @@ fn quiet_panics() {
 
 fn worker(seed: u64, deadline_ms: u128, inflight: &Path) -> ExitCode {
     quiet_panics();
-    let props = registry();
+    let mut props = registry();
+    // BBZ_ONLY=<family or name prefix>: only those properties (for trying
+    // one oracle out; never set in a search).
+    if let Ok(only) = std::env::var("BBZ_ONLY") {
+        props.retain(|p| p.family == only || p.name.starts_with(&only));
+    }
+    // the chaos build perturbs only threads' interleavings (chaos.rs)
+    if chaos::ACTIVE {
+        props.retain(|p| p.attempts > 1);
+    }
     let total: u32 = props.iter().map(|p| p.weight).sum();
     let left_ms = deadline_ms.saturating_sub(epoch_ms());
     let mut ctx = Ctx {
