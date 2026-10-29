@@ -5,8 +5,9 @@ All notable changes to `ephyra` are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing has been released yet; the [README](README.md) describes the library
-as it stands.
+## [0.2.0] - 2026-10-30
+
+The first release on crates.io.
 
 ### Added
 

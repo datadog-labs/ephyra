@@ -11,11 +11,10 @@ generator, combinator, setting and loop step, and what does not exist);
 
 ```toml
 [dev-dependencies]
-ephyra = { git = "https://github.com/datadog-labs/ephyra" }
+ephyra = "0.2"
 ```
 
-`cargo install --git https://github.com/datadog-labs/ephyra ephyra-cli`
-installs the `ephyra` command. Put property tests where the project keeps
+`cargo install ephyra-cli` installs the `ephyra` command. Put property tests where the project keeps
 its tests, or in a separate crate if the user prefers; don't change the
 project's own manifests or lock files without asking.
 
