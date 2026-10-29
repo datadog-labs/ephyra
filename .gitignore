@@ -27,6 +27,7 @@ work/
 /turso/
 /cedar/
 /bbtree/
+/sqlparser/
 /case-studies/sqlite/vendor/*
 !/case-studies/sqlite/vendor/fetch.sh
 .pg/

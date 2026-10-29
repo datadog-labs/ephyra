@@ -1,0 +1,108 @@
+From 5e58eb3a5cb49eba87da3e7fd5d20a0260897b20 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 28 Oct 2026 09:17:49 -0400
+Subject: [PATCH] flambda: do not fail on non-float members of a float array in
+ dead code
+
+After inlining, a branch that GADT refinement makes unreachable can still
+build a float array or float record from a member that is not a float,
+e.g. [ignore [| x |]] in the [Float] branch of
+
+  let f (type a) (t : a t) (x : a) =
+    match t with Float -> ignore [| x |] | Int -> ()
+  in f Int 0
+
+Lift_constants lifted that block as a constant before the branch was
+removed and stopped with "Bad definition for float array member". The
+block can never be allocated at run time, so use any float for such
+members.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ middle_end/flambda/lift_constants.ml          | 18 +++++++++----
+ .../tests/flambda/gadt_dead_float_array.ml    | 25 +++++++++++++++++++
+ .../flambda/gadt_dead_float_array.reference   |  1 +
+ 3 files changed, 39 insertions(+), 5 deletions(-)
+ create mode 100644 testsuite/tests/flambda/gadt_dead_float_array.ml
+ create mode 100644 testsuite/tests/flambda/gadt_dead_float_array.reference
+
+diff --git a/middle_end/flambda/lift_constants.ml b/middle_end/flambda/lift_constants.ml
+index 66caca8..2bbf644 100644
+--- a/middle_end/flambda/lift_constants.ml
++++ b/middle_end/flambda/lift_constants.ml
+@@ -300,9 +300,20 @@ let translate_definition_and_resolve_alias inconstants
+         [Array (Pfloatarray, _, _)]
+        (which references its contents via variables; it does not contain
+         manifest floats). *)
++    (* A member may be bound to a constant that is not a float when the
++       array is allocated in dead code where GADT type refinement gives a
++       non-float value the type [float], e.g. the [WF] branch of
++       [match w with WF -> [| (x : a) |] | ...] specialised to [w = WS] and
++       a string [x].  Lifting happens before such branches are removed;
++       since the array can never be allocated at runtime, any float will
++       do for these members. *)
++    let unreachable_float_member = 0. in
+     let find_float_var_definition var =
+       match Variable.Tbl.find var_to_definition_tbl var with
+       | Allocated_const (Normal (Float f)) -> f
++      | Allocated_const (Normal _) | Const _ | Block _
++      | Set_of_closures _ | Project_closure _
++      | Move_within_set_of_closures _ -> unreachable_float_member
+       | const_defining_value ->
+           Misc.fatal_errorf "Bad definition for float array member %a: %a"
+             Variable.print var
+@@ -312,11 +323,8 @@ let translate_definition_and_resolve_alias inconstants
+     let find_float_symbol_definition sym =
+       match Symbol.Map.find sym symbol_definition_map with
+       | Allocated_const (Float f) -> f
+-      | const_defining_value ->
+-          Misc.fatal_errorf "Bad definition for float array member %a: %a"
+-            Symbol.print sym
+-            Flambda.print_constant_defining_value
+-            const_defining_value
++      | Allocated_const _ | Block _ | Set_of_closures _
++      | Project_closure _ -> unreachable_float_member
+     in
+     let floats =
+       List.map (fun var ->
+diff --git a/testsuite/tests/flambda/gadt_dead_float_array.ml b/testsuite/tests/flambda/gadt_dead_float_array.ml
+new file mode 100644
+index 0000000..0e93cdb
+--- /dev/null
++++ b/testsuite/tests/flambda/gadt_dead_float_array.ml
+@@ -0,0 +1,25 @@
++(* TEST
++ native;
++*)
++
++(* After inlining [f], the [Float] branch is dead but still builds a float
++   array (or float record) from a member that is not a float. Lifting it as
++   a constant used to fail with "Bad definition for float array member". *)
++
++type _ t = Int : int t | Float : float t | Str : string t
++type r = { x : float }
++
++let () =
++  let f (type a) (t : a t) (x : a) =
++    match t with Float -> ignore [| x |] | Int -> () | Str -> ()
++  in
++  f Int 0;
++  let g (type a) (t : a t) (x : a) =
++    match t with Float -> ignore (Some { x }) | Int -> () | Str -> ()
++  in
++  g Int 0;
++  let h (type a) (t : a t) (x : a) =
++    match t with Float -> ignore [| x |] | Int -> () | Str -> ()
++  in
++  h Str "s";
++  print_endline "ok"
+diff --git a/testsuite/tests/flambda/gadt_dead_float_array.reference b/testsuite/tests/flambda/gadt_dead_float_array.reference
+new file mode 100644
+index 0000000..9766475
+--- /dev/null
++++ b/testsuite/tests/flambda/gadt_dead_float_array.reference
+@@ -0,0 +1 @@
++ok
+-- 
+2.56.0
+
