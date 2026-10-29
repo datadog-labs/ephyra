@@ -3,9 +3,9 @@ resolver = "2"
 members = ["crates/*"]
 # Standalone example crate: needs coverage rustflags, built on its own.
 # Case studies are crates (and workspaces) of their own.
-# turso/, cedar/ and bbtree/ are the checkouts turso/differential, cedar/generator and
-# bbtree/properties build against.
-exclude = ["examples/locate-demo", "case-studies", "turso", "cedar", "bbtree"]
+# turso/, cedar/, bbtree/ and sqlparser/ are checkouts of the systems some case studies
+# build against.
+exclude = ["examples/locate-demo", "case-studies", "turso", "cedar", "bbtree", "sqlparser"]
 
 [workspace.package]
 repository = "https://github.com/datadog-labs/ephyra"

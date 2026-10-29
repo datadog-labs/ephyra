@@ -1,0 +1,11 @@
+[package]
+name = "repro-regexp-rlike-null-pattern"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# main at the tested commit; "=0.63.0" (crates.io) reproduces too unless FACTS.md says otherwise
+sqlparser = { git = "https://github.com/apache/datafusion-sqlparser-rs", rev = "e15e9abf8e98daa45306068b84ddb9c916adaa34" }
+
+[workspace]

@@ -1,0 +1,84 @@
+From 0367eb7caa95f4dfbad713ef3c861618d4938e2a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alperen=20Kele=C5=9F?= <alpkeles99@gmail.com>
+Date: Wed, 28 Oct 2026 11:44:23 -0400
+Subject: [PATCH] matching: do not merge an or-pattern row that binds variables
+ into the previous row's handler
+
+precompile_or shares one or-handler between adjacent rows whose head
+or-patterns are equivalent, but the handler only binds the variables of
+the first row. When a later row binds its own variables, e.g. the
+redundant second case of
+
+  let f x = match x with (`B m | `C m), _ -> 1 | (`B n | `C n), (1 | 2) -> n
+
+its action ends up in a dead handler that refers to an unbound n
+(-drawlambda: (catch 1 with (3) n)). The batch compilers drop it, but
+the toplevel resolves free identifiers as globals and fails with
+"Fatal error: n unbound at toplevel". Only merge rows whose or-pattern
+binds no variables.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ lambda/matching.ml                                  | 13 ++++++++++++-
+ .../or_pattern_merged_rows.compilers.reference      |  8 ++++++++
+ .../tests/tool-toplevel/or_pattern_merged_rows.ml   |  9 +++++++++
+ 3 files changed, 29 insertions(+), 1 deletion(-)
+ create mode 100644 testsuite/tests/tool-toplevel/or_pattern_merged_rows.compilers.reference
+ create mode 100644 testsuite/tests/tool-toplevel/or_pattern_merged_rows.ml
+
+diff --git a/lambda/matching.ml b/lambda/matching.ml
+index 93d2245..fd4f168 100644
+--- a/lambda/matching.ml
++++ b/lambda/matching.ml
+@@ -1808,7 +1808,18 @@ and precompile_or (cls : Simple.clause list) ors args def k =
+               new_to_catch )
+         | `Or _ ->
+             let orp = General.erase p in
+-            let others, rem = extract_equiv_head orp rem in
++            (* The handler only binds the variables of [orp], so a row
++               whose or-pattern binds variables cannot share it: its
++               action would refer to unbound identifiers. *)
++            let rec extract_equiv_head_nobind = function
++              | (((q, _), _) as cl) :: rem
++                when (let q = General.erase q in
++                      Typedtree.pat_bound_idents q = [] && equiv_pat orp q) ->
++                  let others, rem = extract_equiv_head_nobind rem in
++                  (cl :: others, rem)
++              | l -> ([], l)
++            in
++            let others, rem = extract_equiv_head_nobind rem in
+             let orpm =
+               { cases =
+                   (patl, action)
+diff --git a/testsuite/tests/tool-toplevel/or_pattern_merged_rows.compilers.reference b/testsuite/tests/tool-toplevel/or_pattern_merged_rows.compilers.reference
+new file mode 100644
+index 0000000..94d31a9
+--- /dev/null
++++ b/testsuite/tests/tool-toplevel/or_pattern_merged_rows.compilers.reference
+@@ -0,0 +1,8 @@
++Line 8, characters 47-69:
++8 | let f x = match x with (`B m | `C m), _ -> 1 | (`B n | `C n), (1 | 2) -> n;;
++                                                   ^^^^^^^^^^^^^^^^^^^^^^
++Warning 11 [redundant-case]: this match case is unused.
++
++val f : [< `B of int | `C of int ] * int -> int = <fun>
++- : int = 1
++
+diff --git a/testsuite/tests/tool-toplevel/or_pattern_merged_rows.ml b/testsuite/tests/tool-toplevel/or_pattern_merged_rows.ml
+new file mode 100644
+index 0000000..1bc2579
+--- /dev/null
++++ b/testsuite/tests/tool-toplevel/or_pattern_merged_rows.ml
+@@ -0,0 +1,9 @@
++(* TEST
++ toplevel;
++*)
++
++(* A redundant row whose or-pattern is equivalent to the one of the row
++   above used to leave its variables unbound in the generated code,
++   making the toplevel fail with "n unbound at toplevel". *)
++let f x = match x with (`B m | `C m), _ -> 1 | (`B n | `C n), (1 | 2) -> n;;
++f (`C 3, 1);;
+-- 
+2.56.0
+
