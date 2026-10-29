@@ -46,5 +46,22 @@
   "sig": "fp__no-matching-overload",
   "msg": "No overload of function",
   "note": "ty#4828 via max(first(...)) into an overloaded call; broad matcher, revisit"
+ },
+ {
+  "name": "typeddict-union-dict-literal-list-context",
+  "sig": "fp__",
+  "msg": "found `dict[",
+  "also": [
+   "TD",
+   "list[float]]",
+   "list[int]"
+  ],
+  "note": "upstream ty#4829 (open): dict literal against a union containing a TypedDict and dict[K, list[float]] infers inner lists without context; also hits return values (clusters/fp-invalid-return-type)"
+ },
+ {
+  "name": "generic-alias-param-comprehension-context",
+  "sig": "meta__alias__",
+  "msg": "found `list[Never]`",
+  "note": "the known generic-alias-param-comprehension-context bug, reached through the alias rewrite (a generic `type _Ak[T] = list[T]` parameter)"
  }
 ]

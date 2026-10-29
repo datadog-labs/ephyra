@@ -12,18 +12,64 @@ library's own README and the [changelog](crates/ephyra/CHANGELOG.md).
 "Let's test `<my project>` with ephyra; start from
 https://github.com/datadog-labs/ephyra/blob/main/STARTUP.md".
 
-## Workspace
+## Using
 
-| Crate | Purpose | Status |
-|---|---|---|
-| [`crates/ephyra`](crates/ephyra) | The library: generators with verified shrinkers and mutators, targeted and coverage-guided search, seed replay, regressions, JSON reports, in-process coverage and fault localization | 0.2 (API not yet frozen) |
-| [`crates/ephyra-cli`](crates/ephyra-cli) | The `ephyra` command: runs suites into one artifact directory, checks generators and strategies found in the source, and serves a local page for exploring and rerunning them | 0.2 |
-| [`crates/ephyra-macros`](crates/ephyra-macros) | `#[derive(Arbitrary)]`, `#[ephyra::shrinker]`, `#[ephyra::test]` and `#[ephyra::generator]`, re-exported by `ephyra` | 0.2 |
-| [`examples/locate-demo`](examples/locate-demo) | Standalone example of fault localization on the 0.2 core | Builds against `ephyra` with `-C instrument-coverage` |
-| [`crates/ephyra-datadog`](crates/ephyra-datadog) | Sends test cases to Datadog as metrics over every run, with a dashboard | Unreleased |
-| [`case-studies/`](case-studies) | ephyra applied to real systems; see below | Research |
+ephyra is not on crates.io yet; depend on it from this repository:
+
+```toml
+[dev-dependencies]
+ephyra = { git = "https://github.com/datadog-labs/ephyra" }
+```
+
+Write a property as a test:
+
+```rust
+use ephyra::prelude::*;
+
+#[ephyra::test]
+fn sorting_keeps_every_element(mut v: Vec<i32>) -> bool {
+    let mut expected = v.clone();
+    expected.sort();
+    v.sort();
+    v == expected
+}
+```
+
+`cargo test` runs it. A failure prints the shrunk counterexample and an
+`EPHYRA_REPLAY=<seed>:<iteration>` line that reruns exactly that case, and is
+remembered in `.ephyra/regressions/` so the next run tries it first. Settings
+such as the number of tests (`EPHYRA_TESTS`), the seed (`EPHYRA_SEED`) or a
+time budget (`EPHYRA_BUDGET_MS`) can be changed from the environment without
+touching the code.
+
+The `ephyra` command runs suites into one artifact directory, checks the
+generators it finds in the source, and serves a local page for exploring the
+results:
+
+```bash
+cargo install --git https://github.com/datadog-labs/ephyra ephyra-cli
+ephyra guide          # how to write generators
+ephyra test           # run the suite; artifacts in .ephyra/
+```
+
+To see a failure report and the targeted search from a checkout:
+
+```bash
+cargo run -p ephyra --example bst -- --bug
+cargo run -p ephyra --example sort_performance
+```
+
+Next: [the library's README](crates/ephyra/README.md) for generators,
+shrinkers and mutators, [API.md](API.md) for every generator, combinator and
+setting, and [CONTRIBUTING.md](CONTRIBUTING.md) to work on ephyra itself.
 
 ## Case studies
+
+![Bugs the case studies found and reported, one row per project: each dot is a bug, placed at how long it had been in the code when it was found, over a bar for the project's history.](case-studies/bug-ages.svg)
+
+Each dot is a bug found with ephyra and reported upstream, placed at how long
+it had been in the project's code when it was found; the bar behind each row is
+the project's history since its first commit.
 
 [`case-studies/`](case-studies) holds projects that test real systems with
 ephyra, one directory per target system: a crate per component, and `bugs/`
@@ -50,23 +96,6 @@ Some case studies build against code that is not in this repository:
 SQLite trunk that the SQLite and Turso ones patch in, and `turso/differential`
 and `cedar/generator` need a checkout of Turso or Cedar at the repository root
 (their READMEs give the revision).
-
-## Developing
-
-```bash
-cargo test --workspace                                   # stable toolchain, MSRV 1.88
-cargo clippy --workspace --all-targets -- -D warnings
-cargo +nightly-2026-03-26 fmt --all                      # the pinned nightly CI uses; rustfmt.toml needs nightly options
-cargo run -p ephyra --example bst -- --bug            # see a failure report
-cargo run -p ephyra --example sort_performance        # see the targeted phase
-cargo test -p ephyra --test reports                    # report snapshots; review drift with `cargo insta review`
-RUSTFLAGS="-C instrument-coverage" RUST_TEST_THREADS=1 cargo test -p ephyra --features coverage   # instrumented mode
-ci/package-smoke.sh                                       # build and test a consumer against the packaged crates
-cargo run -p ephyra-cli -- test --features coverage   # artifacts into .ephyra/; see crates/ephyra-cli
-```
-
-The report text and JSON are snapshot-tested under `crates/ephyra/tests/reports/`;
-a change to what a report says fails CI until the new snapshot is accepted.
 
 ## License
 

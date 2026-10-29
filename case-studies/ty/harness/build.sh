@@ -34,10 +34,30 @@ if [ -z "$PY" ]; then
 fi
 [ -n "$PY" ] || { echo "no python3.13: set TYZ_PY or install one under work/.python (uv python install 3.13)" >&2; exit 1; }
 "$PY" -c 'import sys; assert sys.version_info >= (3, 13), sys.version' || { echo "$PY is older than 3.13" >&2; exit 1; }
-ln -sfn "$PY" "$BUILD/bin/py"
+# A virtual environment with pydantic (the generator's pydantic models; ty's dedicated support
+# finds it through VIRTUAL_ENV, which tyz sets to <build>/venv). bin/py runs its python: a symlink
+# would not find the venv's pyvenv.cfg. Public PyPI, pinned to the versions of ty's mdtests.
+PYD_REQ="pydantic==2.13.4 pydantic-settings==2.14.2"
+if ! [ -f "$BUILD/venv/.req" ] || [ "$(cat "$BUILD/venv/.req")" != "$PYD_REQ" ] || ! "$BUILD/venv/bin/python" -I -c 'import pydantic' 2> /dev/null; then
+  rm -rf "$BUILD/venv"
+  "$PY" -m venv "$BUILD/venv"
+  # shellcheck disable=SC2086
+  "$BUILD/venv/bin/python" -m pip install -q --isolated --disable-pip-version-check --no-cache-dir \
+    --index-url "${TYZ_PIP_INDEX:-https://pypi.org/simple}" $PYD_REQ
+  echo "$PYD_REQ" > "$BUILD/venv/.req"
+fi
+rm -f "$BUILD/bin/py"
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$BUILD/venv/bin/python" > "$BUILD/bin/py.new"
+chmod +x "$BUILD/bin/py.new"
+mv "$BUILD/bin/py.new" "$BUILD/bin/py"
 
 # --- ty ------------------------------------------------------------------------------------------
-# cargo runs from <src-dir> so rustup picks ruff's rust-toolchain.toml.
+# cargo runs from <src-dir> so rustup picks ruff's rust-toolchain.toml. If that toolchain cannot be
+# installed or is broken (the loop's RUSTUP_HOME is read-only), use the default stable toolchain.
+if [ -z "${RUSTUP_TOOLCHAIN:-}" ] && ! (cd "$SRC" && rustc -V > /dev/null 2>&1); then
+  echo "ruff's pinned toolchain is unusable here: using stable" >&2
+  export RUSTUP_TOOLCHAIN=stable
+fi
 HOST="$(cd "$SRC" && rustc -vV | sed -n 's/^host: //p')"
 export CARGO_PROFILE_RELEASE_LTO=false
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -61,6 +81,28 @@ else
   mv "$BUILD/bin/ty.new" "$BUILD/bin/ty"
 fi
 "$BUILD/bin/ty" --version
+
+# --- tyinc (incremental vs fresh checks, in-process against <src-dir>'s ty_project) -------------
+# Its own workspace with ruff's Cargo.lock, built with ruff's toolchain and the same flags as bin/ty.
+ICRATE="$BUILD/tyinc-crate"
+mkdir -p "$ICRATE/src"
+cmp -s "$HERE/tyinc/src/main.rs" "$ICRATE/src/main.rs" || cp "$HERE/tyinc/src/main.rs" "$ICRATE/src/"
+sed -e "s#@SRC@#$SRC#g" "$HERE/tyinc/Cargo.toml.in" > "$ICRATE/Cargo.toml.new"
+cmp -s "$ICRATE/Cargo.toml.new" "$ICRATE/Cargo.toml" || mv "$ICRATE/Cargo.toml.new" "$ICRATE/Cargo.toml"
+rm -f "$ICRATE/Cargo.toml.new"
+[ -f "$ICRATE/Cargo.lock" ] || cp "$SRC/Cargo.lock" "$ICRATE/Cargo.lock"
+TC="${RUSTUP_TOOLCHAIN:-$(cd "$SRC" && rustup show active-toolchain | awk '{print $1}')}"
+if [ "$MODE" = coverage ]; then
+  (cd "$ICRATE" && RUSTUP_TOOLCHAIN="$TC" RUSTFLAGS="${RUSTFLAGS:-} -C instrument-coverage" LLVM_PROFILE_FILE="$BUILD/profraw-build/%m_%p.profraw" \
+    cargo build --release --target "$HOST" --target-dir "$BUILD/target-tyinc-cov" 2>&1 | tail -n 20)
+  cp "$BUILD/target-tyinc-cov/$HOST/release/tyinc" "$BUILD/bin/tyinc.new"
+  printf '{"objects": ["%s", "%s"], "profdata": "%s", "cov": "%s"}\n' \
+    "$BUILD/bin/ty" "$BUILD/bin/tyinc" "$TOOLS/llvm-profdata" "$TOOLS/llvm-cov" > "$BUILD/coverage.json"
+else
+  (cd "$ICRATE" && RUSTUP_TOOLCHAIN="$TC" cargo build --release --target-dir "$BUILD/target-tyinc" 2>&1 | tail -n 20)
+  cp "$BUILD/target-tyinc/release/tyinc" "$BUILD/bin/tyinc.new"
+fi
+mv "$BUILD/bin/tyinc.new" "$BUILD/bin/tyinc"
 
 # --- tyz -----------------------------------------------------------------------------------------
 CRATE="$BUILD/crate"
