@@ -14,11 +14,9 @@ https://github.com/datadog-labs/ephyra/blob/main/STARTUP.md".
 
 ## Using
 
-ephyra is not on crates.io yet; depend on it from this repository:
-
 ```toml
 [dev-dependencies]
-ephyra = { git = "https://github.com/datadog-labs/ephyra" }
+ephyra = "0.2"
 ```
 
 Write a property as a test:
@@ -47,7 +45,7 @@ generators it finds in the source, and serves a local page for exploring the
 results:
 
 ```bash
-cargo install --git https://github.com/datadog-labs/ephyra ephyra-cli
+cargo install ephyra-cli
 ephyra guide          # how to write generators
 ephyra test           # run the suite; artifacts in .ephyra/
 ```

@@ -317,7 +317,7 @@ runs on a failure with coverage on and adds `suspects` to the report
 
 ## The `ephyra` command
 
-`cargo install --git https://github.com/datadog-labs/ephyra ephyra-cli`.
+`cargo install ephyra-cli`.
 
 | Command | Does |
 |---|---|
