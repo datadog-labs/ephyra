@@ -59,6 +59,32 @@ pub enum ClassKind {
     Plain,
     Dataclass { frozen: bool, slots: bool, kw_only: bool },
     NamedTuple,
+    /// A pydantic `BaseModel` (settings in `Class::pyd`).
+    Pydantic,
+}
+
+/// Pydantic model settings (dedicated/pydantic.rs in ty). Config keys are inherited by
+/// subclasses and overridden per key; `None` is "not set here".
+#[derive(Clone, Debug, Default)]
+pub struct Pyd {
+    pub frozen: Option<bool>,
+    /// `extra=`: "allow", "forbid", "ignore".
+    pub extra: Option<&'static str>,
+    /// `(validate_by_name, validate_by_alias, populate_by_name)` as written.
+    pub by_name: (Option<bool>, Option<bool>, Option<bool>),
+    pub strict: Option<bool>,
+    /// 0: `model_config = ConfigDict(...)`, 1: class keywords, 2: `model_config = {...}`.
+    pub cfg_style: u8,
+    /// Own fields with an alias (`<field>_al`), as `Field(alias=)` or in `Annotated`.
+    pub aliases: Vec<String>,
+    /// Own fields with a default: 0 `= v`, 1 `= Field(default=v)`, 2 `= Field(v)`.
+    pub defaults: Vec<(String, u8)>,
+    /// Own fields with `Field(frozen=True)`.
+    pub frozen_fields: Vec<String>,
+    /// Own fields with `Field(strict=)`/`Annotated[T, Strict(..)]`.
+    pub strict_fields: Vec<(String, bool)>,
+    /// A root model that is a `pydantic_settings.BaseSettings` (config in `SettingsConfigDict`).
+    pub settings: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -101,6 +127,7 @@ pub struct Class {
     /// Plain classes only: extra attributes (name, type, kind).
     pub extras: Vec<(String, Ty, Extra)>,
     pub slots: bool,
+    pub pyd: Pyd,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,6 +137,8 @@ pub enum Extra {
     ClassVar,
     /// An instance of descriptor class `D<k>`.
     Descriptor(usize),
+    /// A pydantic private attribute (`_pv<k>: T = v`, not a field; writable even when frozen).
+    Private,
 }
 
 #[derive(Clone, Debug)]
@@ -448,6 +477,131 @@ impl Model {
         let mut chain = self.ancestors(c);
         chain.reverse();
         chain.iter().flat_map(|&k| self.classes[k].fields.clone()).collect()
+    }
+
+    /// A field type pydantic validates without changing what the model says about the value.
+    fn pyd_safe(&self, t: &Ty) -> bool {
+        match t {
+            Ty::Proto(_) | Ty::Var(_) | Ty::TypedDict(_) => false,
+            Ty::Union(ts) | Ty::Tuple(ts) => ts.iter().all(|t| self.pyd_safe(t)),
+            Ty::TupleVar(t) | Ty::List(t) | Ty::Set(t) => self.pyd_safe(t),
+            Ty::Dict(k, v) => self.pyd_safe(k) && self.pyd_safe(v),
+            Ty::Callable(ps, r) => ps.iter().all(|t| self.pyd_safe(t)) && self.pyd_safe(r),
+            Ty::Class(_, a) => a.is_empty(),
+            _ => true,
+        }
+    }
+
+    /// A field type whose generated values pass pydantic's strict mode (no bool for an int,
+    /// no int for a float, no tuple subclass for a tuple).
+    fn strict_safe(&self, t: &Ty) -> bool {
+        match t {
+            Ty::Str | Ty::Bytes | Ty::Lit(_) | Ty::Enum(_) | Ty::None | Ty::Type(_) => true,
+            Ty::Class(_, a) => a.is_empty(),
+            Ty::Union(ts) => ts.iter().all(|t| self.strict_safe(t)),
+            Ty::List(t) => self.strict_safe(t),
+            _ => false,
+        }
+    }
+
+    /// Whether a pydantic field of this type needs `arbitrary_types_allowed` (a plain class).
+    fn pyd_arbitrary(&self, t: &Ty) -> bool {
+        match t {
+            Ty::Class(c, _) => self.classes[*c].kind == ClassKind::Plain,
+            Ty::Union(ts) | Ty::Tuple(ts) => ts.iter().any(|t| self.pyd_arbitrary(t)),
+            Ty::TupleVar(t) | Ty::List(t) | Ty::Set(t) => self.pyd_arbitrary(t),
+            Ty::Dict(k, v) => self.pyd_arbitrary(k) || self.pyd_arbitrary(v),
+            Ty::Callable(ps, r) => ps.iter().any(|t| self.pyd_arbitrary(t)) || self.pyd_arbitrary(r),
+            _ => false,
+        }
+    }
+
+    /// The nearest setting of a pydantic config key along `c`'s ancestors.
+    fn pyd_cfg<T>(&self, c: usize, f: impl Fn(&Pyd) -> Option<T>) -> Option<T> {
+        self.ancestors(c).into_iter().find_map(|k| f(&self.classes[k].pyd))
+    }
+
+    fn pyd_frozen_opt(&self, c: usize) -> Option<bool> {
+        self.pyd_cfg(c, |p| p.frozen)
+    }
+
+    fn pyd_strict_opt(&self, c: usize) -> Option<bool> {
+        self.pyd_cfg(c, |p| p.strict)
+    }
+
+    /// The field's own `strict=` setting, from the class that declares it.
+    fn pyd_field_strict(&self, c: usize, n: &str) -> Option<bool> {
+        self.ancestors(c).into_iter().find_map(|k| self.classes[k].pyd.strict_fields.iter().find(|(f, _)| f == n).map(|(_, s)| *s))
+    }
+
+    fn pyd_lax(&self, c: usize, n: &str) -> bool {
+        !self.pyd_field_strict(c, n).or(self.pyd_strict_opt(c)).unwrap_or(false)
+    }
+
+    /// Whether `c.n` can be assigned to (not frozen, model-wide or per field).
+    fn pyd_writable(&self, c: usize, n: &str) -> bool {
+        !self.pyd_frozen_opt(c).unwrap_or(false) && !self.ancestors(c).iter().any(|&k| self.classes[k].pyd.frozen_fields.iter().any(|f| f == n))
+    }
+
+    /// (by alias, by name): how the constructor may name an aliased field.
+    fn pyd_by(&self, c: usize) -> (bool, bool) {
+        let vbn = self.pyd_cfg(c, |p| p.by_name.0.or(p.by_name.2));
+        let by_alias = self.pyd_cfg(c, |p| p.by_name.1).unwrap_or(true);
+        (by_alias, vbn.unwrap_or(!by_alias))
+    }
+
+    fn pyd_has_alias(&self, c: usize, n: &str) -> bool {
+        self.ancestors(c).iter().any(|&k| self.classes[k].pyd.aliases.iter().any(|f| f == n))
+    }
+
+    fn pyd_has_default(&self, c: usize, n: &str) -> bool {
+        self.ancestors(c).iter().any(|&k| {
+            let k = &self.classes[k];
+            k.pyd.defaults.iter().any(|(f, _)| f == n) || (k.factory_last && k.fields.last().is_some_and(|(f, _)| f == n))
+        })
+    }
+
+    /// A value pydantic converts to `t` in lax mode (its conversion table), if there is one.
+    fn lax_expr(&mut self, g: &mut Source, t: &Ty, sc: &Scope, d: usize) -> Option<String> {
+        let int_enums: Vec<String> = self.enums.iter().filter(|e| !e.str_values).map(|e| format!("{}.{}", e.name, e.members[0])).collect();
+        let any_enums: Vec<String> = self.enums.iter().map(|e| format!("{}.{}", e.name, e.members[e.members.len() - 1])).collect();
+        let n = g.int(-3..=99i64);
+        Some(match t {
+            Ty::Int => match g.int(0..=3u8) {
+                0 => format!("\"{n}\""),
+                1 => format!("b\"{n}\""),
+                2 if !int_enums.is_empty() => g.pick(&int_enums).clone(),
+                _ => format!("{n}.0"),
+            },
+            Ty::Float => g.pick(&["\"1.5\"", "b\"-2.25\"", "True", "7", "\"3\""]).to_string(),
+            Ty::Str => match g.int(0..=1u8) {
+                0 if !any_enums.is_empty() => g.pick(&any_enums).clone(),
+                _ => g.pick(&["b\"ab\"", "b\"\"", "bytearray(b\"xy\")"]).to_string(),
+            },
+            Ty::Bool => g.pick(&["1", "0", "\"true\"", "\"off\"", "b\"yes\"", "1.0"]).to_string(),
+            Ty::Bytes => g.pick(&["\"ab\"", "\"\"", "bytearray(b\"q\")"]).to_string(),
+            Ty::List(e) => {
+                let e = (**e).clone();
+                let xs: Vec<String> = (0..g.int(0..=2usize)).map(|_| self.lax_expr(g, &e, sc, d).unwrap_or_else(|| self.expr(g, &e, sc, d + 1))).collect();
+                if g.bool() { format!("({}{})", xs.join(", "), if xs.len() == 1 { "," } else { "" }) } else { format!("[{}]", xs.join(", ")) }
+            }
+            Ty::TupleVar(e) => {
+                let e = (**e).clone();
+                let xs: Vec<String> = (0..g.int(0..=2usize)).map(|_| self.lax_expr(g, &e, sc, d).unwrap_or_else(|| self.expr(g, &e, sc, d + 1))).collect();
+                format!("[{}]", xs.join(", "))
+            }
+            Ty::Dict(k, v) if **k == Ty::Str => {
+                let v = (**v).clone();
+                let x = self.lax_expr(g, &v, sc, d)?;
+                format!("{{\"k\": {x}}}")
+            }
+            Ty::Union(ts) => {
+                let ts = ts.clone();
+                let m = g.pick(&ts).clone();
+                return self.lax_expr(g, &m, sc, d);
+            }
+            _ => return None,
+        })
     }
 
     /// Methods visible on `c`, most derived first, one per name.
@@ -818,7 +972,13 @@ impl Model {
                 if depth > 0 && g.bool_with(0.25) {
                     let src = self.ty(g, 0, &[]);
                     let x = self.fresh("x");
-                    let it = self.expr(g, &Ty::List(Box::new(src.clone())), sc, d);
+                    let mut it = self.expr(g, &Ty::List(Box::new(src.clone())), sc, d);
+                    // A bare `[]` iterates `Unknown`, not `src`: `isinstance` in the condition
+                    // then narrows `x` to `Unknown & float` and `abs(x)` is a genuine `float`
+                    // (triage fp-invalid-assignment). Iterate one element of `src` instead.
+                    if it == "[]" {
+                        it = format!("[{}]", self.expr(g, &src, sc, d));
+                    }
                     let mut inner = sc.clone();
                     inner.bind(x.clone(), src, false);
                     let e = self.expr(g, t, &inner, d);
@@ -916,6 +1076,36 @@ impl Model {
     fn construct(&mut self, g: &mut Source, c: usize, args: &[Ty], sc: &Scope, d: usize) -> String {
         let cls = self.classes[c].clone();
         let fields: Vec<(String, Ty)> = self.all_fields(c).into_iter().map(|(n, t)| (n, self.subst(c, args, &t))).collect();
+        if cls.kind == ClassKind::Pydantic {
+            // Keyword-only; an aliased field by its alias or its name as the config allows;
+            // fields with defaults may be left out; lax fields sometimes get a value pydantic
+            // converts (ty widens their parameters to `LaxInt` and the like).
+            let (by_alias, by_name) = self.pyd_by(c);
+            let mut vals: Vec<String> = Vec::new();
+            let raw = self.all_fields(c);
+            for ((n, t), (_, rt)) in fields.iter().zip(&raw) {
+                if self.pyd_has_default(c, n) && g.bool_with(0.4) {
+                    continue;
+                }
+                let key = if self.pyd_has_alias(c, n) && by_alias && (!by_name || g.bool()) { format!("{n}_al") } else { n.clone() };
+                // Not for a type variable's field: an unspecialized model validates it as `Any`.
+                let lax = if self.pyd_lax(c, n) && !contains_var(rt) && g.bool_with(0.3) { self.lax_expr(g, t, sc, d) } else { None };
+                let v = match lax { Some(v) => v, None => self.expr(g, t, sc, d) };
+                vals.push(format!("{key}={v}"));
+            }
+            // (BaseSettings forbids extra arguments unless told otherwise. ty rejects them on
+            // settings even with `extra="allow"`: rarely there, so it does not hide the rest.)
+            let settings = self.ancestors(c).iter().any(|&k| self.classes[k].pyd.settings);
+            if self.pyd_cfg(c, |p| p.extra) == Some("allow") && g.bool_with(if settings { 0.03 } else { 0.4 }) {
+                vals.push(format!("x_{}={}", g.int(0..=9u8), self.int_lit(g)));
+            }
+            if vals.len() > 1 && g.bool_with(0.3) {
+                let i = g.index(vals.len());
+                let v = vals.remove(i);
+                vals.push(v);
+            }
+            return format!("{}({})", cls.name, vals.join(", "));
+        }
         let kw = matches!(cls.kind, ClassKind::Dataclass { kw_only: true, .. });
         let vals: Vec<String> = fields
             .iter()
@@ -1533,6 +1723,13 @@ impl Model {
                     }
                 }
                 (Ty::Class(..), Ty::Class(..)) => None,
+                // A non-final class may have a subclass that also derives from a builtin:
+                // `isinstance(x, str)` on `C | Literal["b"]` keeps `(C & str) | Literal["b"]`.
+                // Only final checked classes (`bool`, enums) exclude it.
+                (Ty::Class(..), Ty::Bool | Ty::Enum(_)) => Some(false),
+                (Ty::Class(..), _) => None,
+                // IntEnum/StrEnum members are ints/strs.
+                (Ty::Enum(e), p) if self.enums[*e].flavour != "Enum" && !matches!(p, Ty::Enum(_)) => None,
                 (Ty::Class(i, _), Ty::Tuple(_) | Ty::TupleVar(_)) if self.classes[*i].kind == ClassKind::NamedTuple => None,
                 // A callable may be an instance of any non-final class.
                 (Ty::Callable(..), _) | (_, Ty::Callable(..)) => None,
@@ -1673,6 +1870,11 @@ impl Model {
         if v.ty == Ty::Bool {
             arms.push((format!("{p} is True"), None, None));
             arms.push((format!("{p}"), None, None));
+        } else if g.bool_with(0.5) {
+            // Truthiness narrowing (`~AlwaysFalsy`/`~AlwaysTruthy`), and the conditions ty then
+            // judges always true/false (the `truth__` oracle).
+            arms.push((format!("{p}"), None, None));
+            arms.push((format!("not {p}"), None, None));
         }
         if let Ty::Proto(pi) = &v.ty {
             if self.protos[*pi].runtime {
@@ -2001,8 +2203,14 @@ impl Model {
             } else {
                 None
             };
+            // Pydantic models subclass only pydantic models.
+            let pyd_bases: Vec<usize> = (0..self.classes.len()).filter(|&c| self.classes[c].kind == ClassKind::Pydantic && self.classes[c].tparams.is_empty()).collect();
+            let pyd_base = if base.is_none() && !pyd_bases.is_empty() && g.bool_with(0.35) { Some(*g.pick(&pyd_bases)) } else { None };
+            let base = base.or(pyd_base);
             let generic = base.is_none() && g.bool_with(0.25);
-            let kind = if base.is_some() || generic {
+            let kind = if pyd_base.is_some() || (generic && g.bool_with(0.3)) {
+                ClassKind::Pydantic
+            } else if base.is_some() || generic {
                 ClassKind::Plain
             } else {
                 let (sl, kw) = (g.bool(), g.bool());
@@ -2011,13 +2219,19 @@ impl Model {
                     (2, ClassKind::Dataclass { frozen: false, slots: false, kw_only: false }),
                     (1, ClassKind::Dataclass { frozen: true, slots: sl, kw_only: kw }),
                     (1, ClassKind::NamedTuple),
+                    (2, ClassKind::Pydantic),
                 ])
             };
+            let is_pyd = kind == ClassKind::Pydantic;
             let tparams: Vec<String> = if generic { (0..g.int(1..=2usize)).map(|i| ["T", "U"][i].to_string()).collect() } else { vec![] };
             let tv: Vec<(String, Option<Ty>)> = tparams.iter().map(|t| (t.clone(), None)).collect();
             let fields: Vec<(String, Ty)> = (0..g.int(if generic { tparams.len() } else { 0 }..=3usize))
                 .map(|i| {
-                    let t = if generic && i < tparams.len() { Ty::Var(tparams[i].clone()) } else { self.ty(g, 1, &[]) };
+                    let mut t = if generic && i < tparams.len() { Ty::Var(tparams[i].clone()) } else { self.ty(g, 1, &[]) };
+                    // pydantic validates fields: no protocols (isinstance raises for most).
+                    while is_pyd && !(self.pyd_safe(&t) || matches!(t, Ty::Var(_))) {
+                        t = self.ty(g, 1, &[]);
+                    }
                     (format!("f{k}_{i}"), t)
                 })
                 .collect();
@@ -2048,6 +2262,32 @@ impl Model {
                     }
                 }
             }
+            let mut pyd = Pyd::default();
+            if is_pyd {
+                let base_frozen = base.and_then(|b| self.pyd_frozen_opt(b)).unwrap_or(false);
+                // A subclass may thaw a frozen model, never freeze a mutable one: code that holds it
+                // as its base assigns to its fields (and its protocols' data members stay writable).
+                pyd.frozen = if base_frozen {
+                    if g.bool_with(0.3) { Some(false) } else { None }
+                } else if base.is_none() && g.bool_with(0.3) {
+                    Some(true)
+                } else if g.bool_with(0.1) {
+                    Some(false)
+                } else {
+                    None
+                };
+                pyd.extra = if g.bool_with(0.35) { Some(*g.pick(&["allow", "forbid", "ignore"])) } else { None };
+                pyd.by_name = *g.weighted(&[
+                    (4, (None, None, None)),
+                    (2, (Some(true), None, None)),
+                    (1, (None, None, Some(true))),
+                    (1, (None, Some(false), None)),
+                    (1, (Some(true), Some(false), None)),
+                    (1, (Some(true), Some(true), None)),
+                ]);
+                pyd.cfg_style = *g.weighted(&[(3, 0u8), (2, 1), (1, 2)]);
+                pyd.settings = base.is_none() && !generic && g.bool_with(0.15);
+            }
             let mut protos = Vec::new();
             for (pi, p) in self.protos.iter().enumerate() {
                 if g.bool_with(0.5) && !generic {
@@ -2058,7 +2298,7 @@ impl Model {
                     }
                     // Data members become fields of exactly the member's type; fields of
                     // frozen dataclasses and NamedTuples are read-only.
-                    let read_only = matches!(kind, ClassKind::NamedTuple | ClassKind::Dataclass { frozen: true, .. });
+                    let read_only = matches!(kind, ClassKind::NamedTuple | ClassKind::Dataclass { frozen: true, .. }) || (is_pyd && (pyd.frozen.or(base.and_then(|b| self.pyd_frozen_opt(b))).unwrap_or(false)));
                     if p.attrs.iter().any(|(_, _, ro)| !ro && read_only) {
                         continue;
                     }
@@ -2083,6 +2323,47 @@ impl Model {
             let _ = tv;
             let mut extras = Vec::new();
             let mut slots = false;
+            if is_pyd {
+                if g.bool_with(0.3) {
+                    extras.push((format!("cv{k}"), self.scalar(g), Extra::ClassVar));
+                }
+                if g.bool_with(0.3) {
+                    extras.push((format!("_pv{k}"), self.scalar(g), Extra::Private));
+                }
+                // Protocol data members are not given aliases, defaults or per-field settings.
+                let proto_attrs: Vec<String> = protos.iter().flat_map(|&p: &usize| self.protos[p].attrs.iter().map(|a| a.0.clone())).collect();
+                for (n, t) in &fields {
+                    if proto_attrs.contains(n) {
+                        continue;
+                    }
+                    if g.bool_with(0.25) {
+                        pyd.aliases.push(n.clone());
+                    }
+                    if !contains_var(t) && g.bool_with(0.3) {
+                        pyd.defaults.push((n.clone(), g.int(0..=2u8)));
+                    }
+                    if g.bool_with(0.15) {
+                        pyd.frozen_fields.push(n.clone());
+                    }
+                    // Per-field strictness applies to scalar schemas only (pydantic raises
+                    // "Unable to apply constraint 'strict'" for unions, literals, classes...).
+                    if matches!(t, Ty::Int | Ty::Str | Ty::Bool | Ty::Float | Ty::Bytes) && g.bool_with(0.2) {
+                        let strict = self.strict_safe(t) && g.bool_with(0.7);
+                        pyd.strict_fields.push((n.clone(), strict));
+                    }
+                }
+                // Model-wide strict only when every field takes its generated values strictly
+                // (lax fields opt out with `strict=False`).
+                let all: Vec<(String, Ty)> = base.map(|b| self.all_fields(b)).unwrap_or_default().into_iter().chain(fields.iter().cloned()).collect();
+                let lax_ok = |n: &String| pyd.strict_fields.iter().any(|(f, s)| f == n && !s) || base.is_some_and(|b| self.pyd_field_strict(b, n) == Some(false));
+                let strict_ok = all.iter().all(|(n, t)| self.strict_safe(t) || lax_ok(n));
+                let inherited = base.and_then(|b| self.pyd_strict_opt(b)).unwrap_or(false);
+                if strict_ok && g.bool_with(0.25) {
+                    pyd.strict = Some(true);
+                } else if (inherited && !strict_ok) || g.bool_with(0.1) {
+                    pyd.strict = Some(false);
+                }
+            }
             if kind == ClassKind::Plain && !generic {
                 for (i, (fname, ft)) in fields.iter().enumerate() {
                     if g.bool_with(0.3) {
@@ -2099,11 +2380,11 @@ impl Model {
                 slots = !fields.is_empty() && g.bool_with(0.3);
             }
             let is_dc = matches!(kind, ClassKind::Dataclass { .. });
-            let factory_last = is_dc && matches!(fields.last(), Some((_, Ty::List(_) | Ty::Dict(..) | Ty::Set(_)))) && g.bool_with(0.6);
+            let factory_last = (is_dc || is_pyd) && matches!(fields.last(), Some((_, Ty::List(_) | Ty::Dict(..) | Ty::Set(_)))) && g.bool_with(0.6);
             let initvar = is_dc && g.bool_with(0.3);
             let post_init = initvar || (is_dc && g.bool_with(0.3));
             let init_sub = base.is_none() && kind == ClassKind::Plain && !generic && g.bool_with(0.3);
-            self.classes.push(Class { name: format!("C{k}"), base, kind, tparams, fields, methods, protos, is_abstract: false, extras, slots, factory_last, initvar, post_init, init_sub });
+            self.classes.push(Class { name: format!("C{k}"), base, kind, tparams, fields, methods, protos, is_abstract: false, extras, slots, factory_last, initvar, post_init, init_sub, pyd });
         }
         for k in 0..g.int(0..=3usize) {
             let generic = g.bool_with(0.4);
@@ -2177,7 +2458,7 @@ impl Model {
         }
         // Not with data members: a field annotation does not override an inherited
         // protocol property (no setter, abstract), and dataclasses take it as a default.
-        let explicit_protos = cls.kind != ClassKind::NamedTuple && cls.protos.iter().all(|p| self.protos[*p].attrs.is_empty()) && g.bool_with(0.4);
+        let explicit_protos = !matches!(cls.kind, ClassKind::NamedTuple | ClassKind::Pydantic) && cls.protos.iter().all(|p| self.protos[*p].attrs.is_empty()) && g.bool_with(0.4);
         if explicit_protos {
             for p in &cls.protos {
                 bases.push(self.protos[*p].name.clone());
@@ -2191,8 +2472,110 @@ impl Model {
         if cls.base.is_some() && self.ancestors(c).iter().any(|&a| self.classes[a].init_sub) && g.bool_with(0.7) {
             bases.push(format!("tag={:?}", cls.name));
         }
+        // Pydantic config: `model_config = ConfigDict(...)`, a dict literal, or class keywords.
+        let mut pyd_body: Vec<Tree> = Vec::new();
+        if cls.kind == ClassKind::Pydantic {
+            if cls.base.is_none() {
+                bases.insert(0, if cls.pyd.settings { "BaseSettings".into() } else { "BaseModel".into() });
+            }
+            let p = &cls.pyd;
+            let mut cfg: Vec<(&str, String)> = Vec::new();
+            let b = |v: bool| if v { "True".to_string() } else { "False".to_string() };
+            if let Some(f) = p.frozen {
+                cfg.push(("frozen", b(f)));
+            }
+            if let Some(e) = p.extra {
+                cfg.push(("extra", format!("{e:?}")));
+            }
+            if let Some(v) = p.by_name.0 {
+                cfg.push(("validate_by_name", b(v)));
+            }
+            if let Some(v) = p.by_name.1 {
+                cfg.push(("validate_by_alias", b(v)));
+            }
+            if let Some(v) = p.by_name.2 {
+                cfg.push(("populate_by_name", b(v)));
+            }
+            if let Some(v) = p.strict {
+                cfg.push(("strict", b(v)));
+            }
+            if cls.fields.iter().any(|(_, t)| self.pyd_arbitrary(t)) {
+                cfg.push(("arbitrary_types_allowed", "True".into()));
+            }
+            if !cfg.is_empty() {
+                match p.cfg_style {
+                    1 => bases.extend(cfg.iter().map(|(k, v)| format!("{k}={v}"))),
+                    2 => pyd_body.push(node(format!("model_config = {{{}}}", join(cfg.iter().map(|(k, v)| format!("{k:?}: {v}")), ", ")))),
+                    _ => pyd_body.push(node(format!("model_config = {}({})", if self.ancestors(c).iter().any(|&k| self.classes[k].pyd.settings) { "SettingsConfigDict" } else { "ConfigDict" }, join(cfg.iter().map(|(k, v)| format!("{k}={v}")), ", ")))),
+                }
+            }
+            for (i, (n, t)) in cls.fields.iter().enumerate() {
+                let r = self.render(t);
+                let mut meta: Vec<String> = Vec::new();
+                if p.aliases.contains(n) {
+                    meta.push(format!("alias=\"{n}_al\""));
+                }
+                if p.frozen_fields.contains(n) {
+                    meta.push("frozen=True".into());
+                }
+                let strict = p.strict_fields.iter().find(|(f, _)| f == n).map(|(_, s)| *s);
+                let strict_marker = strict.is_some() && g.bool_with(0.4);
+                if let (Some(sv), false) = (strict, strict_marker) {
+                    meta.push(format!("strict={}", if sv { "True" } else { "False" }));
+                }
+                let factory = cls.factory_last && i + 1 == cls.fields.len();
+                let dflt = if factory { None } else { p.defaults.iter().find(|(f, _)| f == n).map(|(_, st)| *st) };
+                let in_annotated = !meta.is_empty() && g.bool_with(0.3);
+                let mut ann_parts: Vec<String> = Vec::new();
+                if strict_marker {
+                    ann_parts.push(if strict == Some(true) { "Strict()".into() } else { "Strict(False)".into() });
+                }
+                let mut rhs_field: Vec<String> = Vec::new();
+                if in_annotated {
+                    ann_parts.push(format!("Field({})", meta.join(", ")));
+                } else {
+                    rhs_field = meta;
+                }
+                let ann = if ann_parts.is_empty() { r } else { format!("Annotated[{r}, {}]", ann_parts.join(", ")) };
+                let rhs = if factory {
+                    let f = match t { Ty::List(_) => "list", Ty::Dict(..) => "dict", _ => "set" };
+                    rhs_field.insert(0, format!("default_factory={f}"));
+                    Some(format!("Field({})", rhs_field.join(", ")))
+                } else if let Some(st) = dflt {
+                    let v = self.expr(g, t, &Scope::default(), 0);
+                    // A value naming this class or a later one (`type[C0]` may be its subclass
+                    // C1) is not defined yet: compute it at instantiation instead.
+                    let later = v.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')).any(|w| w.strip_prefix('C').and_then(|d| d.parse::<usize>().ok()).is_some_and(|j| j >= c));
+                    let (v, st) = if later { (format!("default_factory=lambda: {v}"), 3) } else { (v, st) };
+                    match st {
+                        0 if rhs_field.is_empty() => Some(v),
+                        2 | 3 => {
+                            rhs_field.insert(0, v);
+                            Some(format!("Field({})", rhs_field.join(", ")))
+                        }
+                        _ => {
+                            rhs_field.insert(0, format!("default={v}"));
+                            Some(format!("Field({})", rhs_field.join(", ")))
+                        }
+                    }
+                } else if !rhs_field.is_empty() {
+                    Some(format!("Field({})", rhs_field.join(", ")))
+                } else {
+                    None
+                };
+                pyd_body.push(node(match rhs { Some(v) => format!("{n}: {ann} = {v}"), None => format!("{n}: {ann}") }));
+            }
+            for (n, t, x) in cls.extras.clone() {
+                let e = self.expr(g, &t, &Scope::default(), 0);
+                match x {
+                    Extra::ClassVar => pyd_body.push(node(format!("{n}: ClassVar[{}] = {e}", self.render(&t)))),
+                    Extra::Private => pyd_body.push(node(format!("{n}: {} = {e}", self.render(&t)))),
+                    _ => {}
+                }
+            }
+        }
         let head = if bases.is_empty() { format!("class {}{tps}:", cls.name) } else { format!("class {}{tps}({}):", cls.name, bases.join(", ")) };
-        let mut body: Vec<Tree> = Vec::new();
+        let mut body: Vec<Tree> = pyd_body;
         let self_sc = |m: &Model, extra: &[(String, Ty)]| {
             let mut s = Scope { tvars: cls.tparams.iter().map(|t| (t.clone(), None)).collect(), ..Scope::default() };
             for (n, t) in m.all_fields(c) {
@@ -2239,9 +2622,11 @@ impl Model {
                             body.push(node(format!("{n}: ClassVar[{r}] = {e}")));
                         }
                         Extra::Descriptor(d) => body.push(node(format!("{n} = D{d}()"))),
+                        Extra::Private => {}
                     }
                 }
             }
+            ClassKind::Pydantic => {}
             ClassKind::Dataclass { .. } | ClassKind::NamedTuple => {
                 for (i, (n, t)) in cls.fields.iter().enumerate() {
                     if cls.factory_last && i + 1 == cls.fields.len() {
@@ -2316,7 +2701,11 @@ impl Model {
             } else {
                 mb.push(node(format!("return {}", self.expr(g, &m.ret, &sc, 2))));
             }
+            // A pydantic property may be a `@computed_field` (decided by name, so that an
+            // override is one too).
+            let computed = cls.kind == ClassKind::Pydantic && m.name.bytes().map(u32::from).sum::<u32>() % 3 == 0;
             let deco = match m.kind {
+                MethodKind::Property if computed => vec![node("@computed_field"), node("@property")],
                 MethodKind::Property => vec![node("@property")],
                 MethodKind::Static => vec![node("@staticmethod")],
                 MethodKind::Class => vec![node("@classmethod")],
@@ -2908,15 +3297,16 @@ impl Model {
         let (p, c, args) = g.pick(&vs).clone();
         let mut opts: Vec<(String, Ty)> = Vec::new();
         let writable_fields = match self.classes[c].kind {
-            ClassKind::Plain | ClassKind::Dataclass { frozen: false, .. } => true,
+            ClassKind::Plain | ClassKind::Dataclass { frozen: false, .. } | ClassKind::Pydantic => true,
             _ => false,
         };
         if writable_fields {
             // Not fields behind a property setter: a setter call does not invalidate
             // ty's assignment narrowing of the field.
             let behind: Vec<String> = self.all_extras(c).into_iter().filter_map(|(_, _, x)| if let Extra::Setter(f) = x { Some(f) } else { None }).collect();
+            let pyd = self.classes[c].kind == ClassKind::Pydantic;
             for (n, t) in self.all_fields(c) {
-                if !behind.contains(&n) {
+                if !behind.contains(&n) && (!pyd || self.pyd_writable(c, &n)) {
                     opts.push((format!("{p}.{n}"), self.subst(c, &args, &t)));
                 }
             }
@@ -2970,8 +3360,15 @@ impl Model {
                 (format!("{x}: {} = {p}.get({n:?})", self.render(&Ty::opt(t.clone()))), Ty::opt(t.clone()))
             }
             7 if !ro => {
+                // ty keeps a narrowing of `p[n]` (from `p = {...}` or `p[n] = ...`) across
+                // `p.update(...)`: narrow/match.md "This deliberately documents the remaining
+                // unsoundness. Mutating the subject ... we retain them". Re-assign `p[n]` to the
+                // same value afterwards so the narrowing ty keeps is the runtime one.
                 let e = self.expr(g, &t, sc, 1);
-                out.push(node(format!("{p}.update({{{n:?}: {e}}})")));
+                let y = self.fresh("v");
+                out.push(node(format!("{y}: {r} = {e}")));
+                out.push(node(format!("{p}.update({{{n:?}: {y}}})")));
+                out.push(node(format!("{p}[{n:?}] = {y}")));
                 (format!("{x}: {} = {p}.get({n:?})", self.render(&Ty::opt(t.clone()))), Ty::opt(t.clone()))
             }
             8 if !req => {
@@ -3329,6 +3726,12 @@ impl Model {
             node("from typing import Annotated, ClassVar, Self, Final, Generic, Literal, ParamSpec, TypeVarTuple, NamedTuple, TypeVar, Unpack, overload, NotRequired, Protocol, ReadOnly, Required, TypeAlias, TypeAliasType, TypedDict, TypeGuard, TypeIs, final, override, runtime_checkable, Never, NoReturn"),
             node("from _rt import _probe"),
         ]);
+        if m.classes.iter().any(|c| c.kind == ClassKind::Pydantic) {
+            items.push(node("from pydantic import BaseModel, ConfigDict, Field, Strict, computed_field"));
+        }
+        if m.classes.iter().any(|c| c.pyd.settings) {
+            items.push(node("from pydantic_settings import BaseSettings, SettingsConfigDict"));
+        }
         m.no_alias.set(true);
         for a in m.aliases.clone() {
             let r = m.render(&a.target);

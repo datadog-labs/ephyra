@@ -20,8 +20,20 @@ _CLASSES: list[type] | None = None
 _BUILTINS = (int, str, float, bytes, bool, list, tuple, dict, set, frozenset)
 
 
+def _top(t: type) -> str:
+    """Every specialization of `t`: `Top[C[Any]]` for a generic class (a bare `C` is
+    `C[Unknown]`, whose negation is gradual), else the class name."""
+    tp = getattr(t, "__type_params__", ())
+    if not tp:
+        return t.__qualname__
+    import typing
+    args = ", ".join("*tuple[_t.Any, ...]" if isinstance(p, typing.TypeVarTuple) else "_t.Any" for p in tp)
+    return f"_tx.Top[{t.__qualname__}[{args}]]"
+
+
 def _program_classes() -> list[type]:
-    """Non-generic classes bound at module level in the running program. (Walking
+    """Classes bound at module level in the running program, generic ones included
+    (ty narrows `C0[int] | float` to `float & ~C0` on `p != 2`). (Walking
     `__subclasses__` would also find the class objects `@dataclass(slots=True)`
     replaces.)"""
     global _CLASSES
@@ -30,8 +42,9 @@ def _program_classes() -> list[type]:
         main = sys.modules.get("__main__")
         seen: list[type] = []
         for name, c in vars(main).items() if main else ():
-            if isinstance(c, type) and c.__module__ == "__main__" and c.__qualname__ == name:
-                if not getattr(c, "__type_params__", ()) and not isinstance(c, enum.EnumMeta):
+            # (Not pydantic's parametrized generic models, which it binds as `C[int]`.)
+            if isinstance(c, type) and c.__module__ == "__main__" and c.__qualname__ == name and name.isidentifier():
+                if not isinstance(c, enum.EnumMeta):
                     seen.append(c)
         _CLASSES = seen
     return _CLASSES
@@ -49,7 +62,7 @@ def _exact(v: object, nominal: str) -> str:
                 continue
         except TypeError:
             continue  # a protocol that is not runtime-checkable, a TypedDict
-        nots.append(f"_tx.Not[{c.__qualname__}]")
+        nots.append(f"_tx.Not[{_top(c)}]")
     # A value that is truthy now is not always falsy (and the reverse), which is
     # what truthiness narrowing (`C & ~AlwaysFalsy`) relies on.
     try:
@@ -70,9 +83,17 @@ def _render(v: object, depth: int = 0) -> str:
     if t is bool or t is int:
         return f"_t.Literal[{v!r}]"
     if t is str:
-        return f"_t.Literal[{v!r}]" if len(v) <= 40 and v.isascii() else "str"
+        # Always a literal: ty narrows `str` on `!=`/`not in` to `str & ~Literal[...]`, which a
+        # plain `str` rendering is not assignable to (false sound__assign). ty keeps string literals
+        # up to 4096 UTF-8 bytes (MAX_STRING_LITERAL_SIZE); beyond that, or for lone surrogates,
+        # no assertion. ascii() escapes non-ASCII so the check file stays plain.
+        try:
+            n = len(v.encode("utf-8"))
+        except UnicodeEncodeError:
+            return "?"
+        return f"_t.Literal[{ascii(v)}]" if n <= 4096 else "?"
     if t is bytes:
-        return f"_t.Literal[{v!r}]" if len(v) <= 40 else "bytes"
+        return f"_t.Literal[{v!r}]" if len(v) <= 4096 else "?"
     if t is float:
         # A `float` annotation means `int | float`.
         # Not[...] for the program classes: a float subclass could also be one.
