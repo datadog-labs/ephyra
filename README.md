@@ -16,7 +16,7 @@ https://github.com/datadog-labs/ephyra/blob/main/STARTUP.md".
 
 ```toml
 [dev-dependencies]
-ephyra = "0.2"
+ephyra = "0.0.1"
 ```
 
 Write a property as a test:

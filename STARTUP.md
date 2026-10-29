@@ -11,7 +11,7 @@ generator, combinator, setting and loop step, and what does not exist);
 
 ```toml
 [dev-dependencies]
-ephyra = "0.2"
+ephyra = "0.0.1"
 ```
 
 `cargo install ephyra-cli` installs the `ephyra` command. Put property tests where the project keeps
