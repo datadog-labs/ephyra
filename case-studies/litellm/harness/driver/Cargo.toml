@@ -1,0 +1,15 @@
+[package]
+name = "search"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ephyra = { path = "../../../../crates/ephyra" }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[workspace]
+
+[profile.release]
+debug-assertions = true
+overflow-checks = true
