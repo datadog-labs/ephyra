@@ -134,7 +134,7 @@ checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "ephyra"
-version = "0.2.0"
+version = "0.0.1"
 dependencies = [
  "ephyra-macros",
  "insta",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "ephyra-cli"
-version = "0.2.0"
+version = "0.0.1"
 dependencies = [
  "ephyra",
  "proc-macro2",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "ephyra-datadog"
-version = "0.2.0"
+version = "0.0.1"
 dependencies = [
  "ephyra",
  "serde_json",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "ephyra-macros"
-version = "0.2.0"
+version = "0.0.1"
 dependencies = [
  "proc-macro2",
  "quote",

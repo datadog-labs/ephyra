@@ -5,7 +5,7 @@ All notable changes to `ephyra` are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-30
+## [0.0.1] - 2026-10-29
 
 The first release on crates.io.
 

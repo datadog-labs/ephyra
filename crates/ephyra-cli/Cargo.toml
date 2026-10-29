@@ -1,7 +1,7 @@
 [package]
 name = "ephyra-cli"
 description = "The ephyra command: runs ephyra properties into one artifact directory, checks generators and strategies, and serves a local page for exploring and rerunning them"
-version = "0.2.0"
+version = "0.0.1"
 edition = "2024"
 categories = ["development-tools::testing", "command-line-utilities"]
 keywords = ["property-testing", "pbt", "ephyra", "cli"]
@@ -19,7 +19,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-ephyra = { version = "=0.2.0", path = "../ephyra" }
+ephyra = { version = "=0.0.1", path = "../ephyra" }
 # The source index: line numbers need span locations outside a proc macro.
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 quote = "1.0"
