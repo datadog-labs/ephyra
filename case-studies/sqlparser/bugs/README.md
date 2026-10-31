@@ -6,5 +6,5 @@ a test. Status as of this export; the upstream link is authoritative.
 
 | Bug | Status | Upstream |
 |---|---|---|
-| [sqlparser-regexp-rlike-null-pattern](sqlparser-regexp-rlike-null-pattern/) | reported 2026-10-28 | [link](https://github.com/apache/datafusion-sqlparser-rs/issues/2760) |
-| [sqlparser-show-ilike-pattern-unquoted](sqlparser-show-ilike-pattern-unquoted/) | reported 2026-10-28 | [link](https://github.com/apache/datafusion-sqlparser-rs/issues/2759) |
+| [MySQL: `REGEXP`/`RLIKE` followed by `NULL` is rejected or misparsed (regression in 0.59.0)](sqlparser-regexp-rlike-null-pattern/) | open | [link](https://github.com/apache/datafusion-sqlparser-rs/issues/2760) |
+| [`SHOW ... ILIKE '<pattern>'` is displayed without quotes](sqlparser-show-ilike-pattern-unquoted/) | open | [link](https://github.com/apache/datafusion-sqlparser-rs/issues/2759) |

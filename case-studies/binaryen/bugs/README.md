@@ -6,4 +6,4 @@ a test. Status as of this export; the upstream link is authoritative.
 
 | Bug | Status | Upstream |
 |---|---|---|
-| [binaryen-translate-to-exnref-invalid-trampoline-b](binaryen-translate-to-exnref-invalid-trampoline-b/) | reported 2026-10-21 | [link](https://github.com/WebAssembly/binaryen/issues/9291) |
+| [`--translate-to-exnref` / `--emit-exnref` produce invalid IR when a delegate target's unreachable `try` body ends in a none-typed instruction](binaryen-translate-to-exnref-invalid-trampoline-b/) | open | [link](https://github.com/WebAssembly/binaryen/issues/9291) |

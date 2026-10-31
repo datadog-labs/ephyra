@@ -6,8 +6,8 @@ a test. Status as of this export; the upstream link is authoritative.
 
 | Bug | Status | Upstream |
 |---|---|---|
-| [ocaml-amd64-atomic-exchange-spill](ocaml-amd64-atomic-exchange-spill/) | reported 2026-10-27 | [link](https://github.com/ocaml/ocaml/issues/15205) |
-| [ocaml-flambda-gadt-dead-float-array](ocaml-flambda-gadt-dead-float-array/) | reported 2026-10-28 | [link](https://github.com/ocaml/ocaml/issues/15212) |
-| [ocaml-int-switch-missing-upper-fail-interval](ocaml-int-switch-missing-upper-fail-interval/) | reported 2026-10-21 | [link](https://github.com/ocaml/ocaml/issues/15185) |
-| [ocaml-linscan-atomic-cas-scratch-clobbers-new-](ocaml-linscan-atomic-cas-scratch-clobbers-new-/) | reported 2026-10-22 | [link](https://github.com/ocaml/ocaml/issues/15189) |
-| [ocaml-matching-merged-orpat-unbound-toplevel](ocaml-matching-merged-orpat-unbound-toplevel/) | reported 2026-10-28 | [link](https://github.com/ocaml/ocaml/issues/15214) |
+| [amd64 `Atomic.exchange` stores a wrong value (5.6 & trunk regression)](ocaml-amd64-atomic-exchange-spill/) | open | [link](https://github.com/ocaml/ocaml/issues/15205) |
+| [flambda `ocamlopt` stops with "Bad definition for float array member" on a GADT match with a dead float-array branch](ocaml-flambda-gadt-dead-float-array/) | fixed | [link](https://github.com/ocaml/ocaml/issues/15212) |
+| [non-exhaustive integer match crashes instead of raising Match_failure](ocaml-int-switch-missing-upper-fail-interval/) | fixed | [link](https://github.com/ocaml/ocaml/issues/15185) |
+| [`ocamlopt -linscan` miscompiles `Atomic.compare_and_set` on amd64](ocaml-linscan-atomic-cas-scratch-clobbers-new-/) | open | [link](https://github.com/ocaml/ocaml/issues/15189) |
+| [toplevel "Fatal error: n unbound at toplevel" on a redundant match case whose or-pattern binds a variable](ocaml-matching-merged-orpat-unbound-toplevel/) | open | [link](https://github.com/ocaml/ocaml/issues/15214) |
