@@ -6,11 +6,11 @@ a test. Status as of this export; the upstream link is authoritative.
 
 | Bug | Status | Upstream |
 |---|---|---|
-| [oxcaml-internal-assembler-bswap32-missing-rex-b](oxcaml-internal-assembler-bswap32-missing-rex-b/) | reported 2026-10-23 | [link](https://github.com/oxcaml/oxcaml/issues/7700) |
-| [oxcaml-oclassic-closure-conversion-block-load-k](oxcaml-oclassic-closure-conversion-block-load-k/) | reported 2026-10-22 | [link](https://github.com/oxcaml/oxcaml/issues/7683) |
-| [oxcaml-oclassic-div-by-const-zero-raise-ignores](oxcaml-oclassic-div-by-const-zero-raise-ignores/) | reported 2026-10-21 | [link](https://github.com/oxcaml/oxcaml/issues/7668) |
-| [oxcaml-reaper-phantom-let-no-source-becomes-inv](oxcaml-reaper-phantom-let-no-source-becomes-inv/) | reported 2026-10-22 | [link](https://github.com/oxcaml/oxcaml/issues/7684) |
-| [oxcaml-ssa-tail-call-accepts-dead-ops-before-re](oxcaml-ssa-tail-call-accepts-dead-ops-before-re/) | reported 2026-10-23 | [link](https://github.com/oxcaml/oxcaml/issues/7702) |
-| [oxcaml-ssa-validate-int-test-threshold-mismatch](oxcaml-ssa-validate-int-test-threshold-mismatch/) | reported 2026-10-23 | [link](https://github.com/oxcaml/oxcaml/issues/7701) |
-| [oxcaml-to-cmm-double-split-must-inline-and-dupl](oxcaml-to-cmm-double-split-must-inline-and-dupl/) | reported 2026-10-23 | [link](https://github.com/oxcaml/oxcaml/issues/7704) |
-| [oxcaml-to-cmm-inlined-apply-reraise-wrapper-und](oxcaml-to-cmm-inlined-apply-reraise-wrapper-und/) | reported 2026-10-23 | [link](https://github.com/oxcaml/oxcaml/issues/7705) |
+| [x86-64 binary emitter encodes 32-bit `bswap` of r8d-r15d without REX.B, so it swaps eax-edi instead](oxcaml-internal-assembler-bswap32-missing-rex-b/) | open | [link](https://github.com/oxcaml/oxcaml/issues/7700) |
+| [`ocamlopt -Oclassic` crashes on a `float#` field read in an unreachable match arm](oxcaml-oclassic-closure-conversion-block-load-k/) | open | [link](https://github.com/oxcaml/oxcaml/issues/7683) |
+| [`ocamlopt -Oclassic` crashes on a division by constant zero inside a `try`](oxcaml-oclassic-div-by-const-zero-raise-ignores/) | fixed | [link](https://github.com/oxcaml/oxcaml/issues/7668) |
+| [with `-flambda2-reaper -g -flambda2-expert-phantom-lets`, an unused variable in a closure breaks compilation](oxcaml-reaper-phantom-let-no-source-becomes-inv/) | open | [link](https://github.com/oxcaml/oxcaml/issues/7684) |
+| [`-use-ssa`: a call followed by an unused pure operation becomes a tail call only in the SSA pipeline, validator aborts with "CFG comparison MISMATCH"](oxcaml-ssa-tail-call-accepts-dead-ops-before-re/) | open | [link](https://github.com/oxcaml/oxcaml/issues/7702) |
+| [`-use-ssa`: SSA validator rejects `x <= 1` against `x < 2` for the same switch, compilation aborts with "CFG comparison MISMATCH"](oxcaml-ssa-validate-int-test-threshold-mismatch/) | open | [link](https://github.com/oxcaml/oxcaml/issues/7701) |
+| [`-Oclassic -flambda2-expert-inline-effects-in-cmm`: `let f x = let y = sin x in (y, y)` fails with "Duplicate order for bindings when flushing"](oxcaml-to-cmm-double-split-must-inline-and-dupl/) | open | [link](https://github.com/oxcaml/oxcaml/issues/7704) |
+| [`-Oclassic -flambda2-expert-inline-effects-in-cmm`: a call used as the argument of another call inside a `try` crashes ocamlopt with `Invalid_argument("Array.iter2 ...")`](oxcaml-to-cmm-inlined-apply-reraise-wrapper-und/) | fixed | [link](https://github.com/oxcaml/oxcaml/issues/7705) |
