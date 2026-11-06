@@ -1,0 +1,13 @@
+CREATE TABLE t(x);
+INSERT INTO t VALUES (1);
+CREATE VIRTUAL TABLE v USING memvt;
+INSERT INTO v(a, b) VALUES (1, 'x');
+SELECT changes(), total_changes(), last_insert_rowid();
+INSERT INTO v(a, b) VALUES (2, 'y');
+SELECT changes(), total_changes(), last_insert_rowid();
+UPDATE v SET a = a + 1;
+SELECT changes(), total_changes(), last_insert_rowid();
+DELETE FROM v WHERE rowid = 1;
+SELECT changes(), total_changes(), last_insert_rowid();
+INSERT OR REPLACE INTO v(a, b) VALUES (3, 'z');
+SELECT changes(), total_changes(), last_insert_rowid();

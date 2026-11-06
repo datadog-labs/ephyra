@@ -1,0 +1,18 @@
+[package]
+name = "memvt"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "A minimal transactional writable virtual table written with turso_ext (the documented Turso extension API), loaded with .load / Connection::load_extension"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+turso_ext = { path = "../../../../turso/extensions/core" }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# must match the host's mimalloc (tursodb main: 0.1.47 / libmimalloc-sys 0.1.43), else .load segfaults
+mimalloc = { version = "=0.1.47", default-features = false }
+
+[workspace]

@@ -1,0 +1,11 @@
+-- turso-apidiff session, seed 0
+-- conns 1
+-- setup (connection 0)
+CREATE TABLE t0(id INTEGER PRIMARY KEY, a UNIQUE);
+-- actions
+exec c0: INSERT INTO t0(a) VALUES (1), (2), (3)
+exec c0: INSERT INTO t0(a) VALUES (1)
+exec c0: INSERT INTO t0(a) VALUES (4), (5)
+exec c0: UPDATE t0 SET a = 1 WHERE a = 5
+exec c0: INSERT OR FAIL INTO t0(a) VALUES (6), (1)
+exec c0: INSERT OR IGNORE INTO t0(a) VALUES (1)

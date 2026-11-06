@@ -1,0 +1,6 @@
+-- conns 1
+-- setup (connection 0)
+CREATE VIRTUAL TABLE vt0 USING appvt(vt0);
+INSERT INTO vt0(a, b) VALUES (7, 'x');
+-- actions
+exec c0: UPDATE vt0 SET rowid = rowid + 1 WHERE rowid = 1

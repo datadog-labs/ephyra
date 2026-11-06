@@ -1,0 +1,10 @@
+-- conns 2
+-- setup (connection 0)
+-- actions
+exec c0: CREATE VIRTUAL TABLE vt9 USING appvt(vt9)
+exec c0: INSERT INTO vt9(a, b) VALUES (1, 'x')
+exec c1: SELECT rowid, a, b FROM vt9
+exec c1: INSERT INTO vt9(a, b) VALUES (2, 'y')
+exec c1: DROP TABLE vt9
+exec c0: SELECT name FROM sqlite_schema
+exec c1: SELECT name FROM sqlite_schema

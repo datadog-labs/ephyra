@@ -1,0 +1,14 @@
+-- turso-apidiff session, seed 0
+-- conns 2
+-- setup (connection 0)
+CREATE TABLE t0(id INTEGER PRIMARY KEY, a);
+CREATE TABLE t1(id INTEGER PRIMARY KEY, a);
+INSERT INTO t0(a) VALUES (1), (2), (3);
+-- actions
+prepare s1 c1: SELECT id, a FROM t0 ORDER BY id
+step s1 x1
+prepare s0 c1: SELECT id, a FROM t0 WHERE id = 99
+step s0 x1
+exec c0: INSERT INTO t1(a) VALUES (9)
+exec c1: SELECT count(*) FROM t1
+step s1 all

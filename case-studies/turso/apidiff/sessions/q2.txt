@@ -1,0 +1,10 @@
+-- turso-apidiff session, seed 0
+-- conns 2
+-- setup (connection 0)
+CREATE TABLE t0(id INTEGER PRIMARY KEY, a, b);
+INSERT INTO t0(a, b) VALUES (1, 'x'), (2, 'y');
+-- actions
+exec c1: SAVEPOINT s0
+exec c1: BEGIN IMMEDIATE
+exec c1: ROLLBACK TO s0
+prepare s1 c1: SELECT * FROM t0

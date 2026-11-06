@@ -1,0 +1,11 @@
+-- turso-apidiff session, seed 0
+-- conns 2
+-- setup (connection 0)
+CREATE TABLE t0(id INTEGER PRIMARY KEY, a UNIQUE, b);
+INSERT INTO t0(a, b) VALUES (1, 'x'), (2, 'y');
+-- actions
+exec c0: BEGIN
+exec c0: SELECT count(*) FROM t0
+exec c1: ALTER TABLE t0 ADD COLUMN e DEFAULT 1
+exec c0: SELECT * FROM t0
+exec c0: SELECT count(*) FROM t0

@@ -1,0 +1,12 @@
+-- turso-apidiff session, seed 500982
+-- conns 1
+-- setup (connection 0)
+CREATE TABLE t1(id INTEGER PRIMARY KEY AUTOINCREMENT, a REAL NOT NULL DEFAULT 0, b TEXT, c REAL, d BLOB);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, a INTEGER, b TEXT UNIQUE, c REAL, d BLOB);
+INSERT OR IGNORE INTO t1(a, b, c, d) VALUES (x'010203', 'a', '3.0', 'B'), (1e-7, '3.0', 10, 'ab'), (1, '', 'Ab', NULL), (1, -3, 5, 10), (9, 20, -2.5, '');
+INSERT OR IGNORE INTO t2(a, b, c, d) VALUES (1e20, x'', '', x'3130'), (9, 'été', 10, NULL);
+-- actions
+prepare s1 c0: SELECT id, sum(id) OVER (ORDER BY id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), app_echo(a) FROM t1 ORDER BY id
+step s1 x1
+exec c0: UPDATE t2 SET a = a + 1, b = 10 WHERE a > 5
+step s1 x2

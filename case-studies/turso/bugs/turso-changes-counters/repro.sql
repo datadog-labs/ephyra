@@ -1,0 +1,11 @@
+CREATE TABLE t(x);
+INSERT INTO t VALUES (1), (2), (3);
+SELECT changes();
+CREATE INDEX i ON t(x);
+SELECT changes();
+CREATE TABLE u(a UNIQUE);
+INSERT INTO u VALUES (1);
+BEGIN;
+INSERT OR FAIL INTO u VALUES (2), (3), (1);
+SELECT changes(), total_changes();
+COMMIT;

@@ -1,0 +1,58 @@
+-- turso-apidiff session, seed 0
+-- conns 1
+-- setup (connection 0)
+CREATE TABLE t0(x);
+CREATE VIRTUAL TABLE vt0 USING appvt(vt0);
+-- actions
+exec c0: INSERT INTO t0 VALUES (1)
+exec c0: INSERT INTO vt0(a, b) VALUES (1, 'a')
+exec c0: SELECT changes(), total_changes(), last_insert_rowid()
+exec c0: INSERT INTO vt0(a, b) VALUES (2, 'b')
+exec c0: UPDATE vt0 SET a = a + 1
+exec c0: SELECT changes(), total_changes(), last_insert_rowid()
+exec c0: DELETE FROM vt0 WHERE rowid = 1
+exec c0: SELECT changes(), total_changes(), last_insert_rowid()
+
+setup: CREATE TABLE t0(x)
+    sqlite: ok, done
+    turso:  ok, done
+setup: CREATE VIRTUAL TABLE vt0 USING appvt(vt0)
+    sqlite: ok, done
+    turso:  ok, done
+    vt hooks (DIFFER): sqlite [vt0:commit(no begin)] turso []
+exec c0: INSERT INTO t0 VALUES (1)
+    sqlite: ok, done
+    turso:  ok, done
+exec c0: INSERT INTO vt0(a, b) VALUES (1, 'a')
+    sqlite: ok, done
+    turso:  ok, done
+    vt hooks (same): sqlite [vt0:begin, vt0:insert 1, vt0:commit] turso [vt0:begin, vt0:insert 1, vt0:commit]
+exec c0: SELECT changes(), total_changes(), last_insert_rowid()
+    sqlite: ok, row 1|2|1, done
+    turso:  ok, row 0|1|1, done
+    !! Finding: exec SELECT: rows differ
+exec c0: INSERT INTO vt0(a, b) VALUES (2, 'b')
+    sqlite: ok, done
+    turso:  ok, done
+    vt hooks (same): sqlite [vt0:begin, vt0:insert 2, vt0:commit] turso [vt0:begin, vt0:insert 2, vt0:commit]
+exec c0: UPDATE vt0 SET a = a + 1
+    sqlite: ok, done
+    turso:  ok, done
+    vt hooks (same): sqlite [vt0:begin, vt0:update 1, vt0:update 2, vt0:commit] turso [vt0:begin, vt0:update 1, vt0:update 2, vt0:commit]
+exec c0: SELECT changes(), total_changes(), last_insert_rowid()
+    sqlite: ok, row 2|5|2, done
+    turso:  ok, row 0|1|1, done
+    !! Finding: exec SELECT: rows differ
+exec c0: DELETE FROM vt0 WHERE rowid = 1
+    sqlite: ok, done
+    turso:  ok, done
+    vt hooks (same): sqlite [vt0:begin, vt0:delete 1, vt0:commit] turso [vt0:begin, vt0:delete 1, vt0:commit]
+exec c0: SELECT changes(), total_changes(), last_insert_rowid()
+    sqlite: ok, row 1|6|2, done
+    turso:  ok, row 0|1|1, done
+    !! Finding: exec SELECT: rows differ
+== Finding: exec SELECT: rows differ
+at: exec c0: SELECT changes(), total_changes(), last_insert_rowid()
+  event 1
+  sqlite: row 1|2|1
+  turso:  row 0|1|1

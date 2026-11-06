@@ -1,0 +1,11 @@
+-- turso-apidiff session, seed 0
+-- conns 1
+-- setup (connection 0)
+CREATE TABLE t(id INTEGER PRIMARY KEY, a);
+INSERT INTO t(a) VALUES (1), (2);
+-- actions
+prepare s1 c0: UPDATE t SET a = 5 WHERE id = 2 RETURNING id, a
+prepare s0 c0: SELECT id FROM t ORDER BY id
+step s0 x1
+step s1 x1
+reset s0

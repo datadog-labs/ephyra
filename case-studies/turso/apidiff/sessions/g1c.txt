@@ -1,0 +1,12 @@
+-- turso-apidiff session, seed 0
+-- conns 2
+-- setup (connection 0)
+CREATE TABLE t0(id INTEGER PRIMARY KEY, a);
+CREATE TABLE t1(id INTEGER PRIMARY KEY, a);
+-- actions
+exec c0: BEGIN
+exec c0: SAVEPOINT s0
+prepare s3 c0: SELECT * FROM t1 ORDER BY id
+exec c1: CREATE INDEX ix2 ON t0(a)
+exec c0: RELEASE s0
+step s3 x1

@@ -1,0 +1,16 @@
+[package]
+name = "turso-apidiff-repro3"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Round-3 repros on turso_core (main 2709799da): native vtab registry, checkpoint, MVCC"
+
+[dependencies]
+turso_core = { path = "../../../../turso/core", default-features = false, features = ["baseline"] }
+turso_sqlite = { path = "../../../../turso/sqlite/frontend" }
+turso_ext = { path = "../../../../turso/extensions/core", features = ["core_only"] }
+
+[workspace]
+
+[profile.release]
+debug = 1

@@ -1,0 +1,72 @@
+-- turso-apidiff session, seed 0
+-- conns 2
+-- setup (connection 0)
+CREATE TABLE t(x);
+INSERT INTO t VALUES (1);
+ATTACH '$AUX' AS aux;
+CREATE TABLE aux.u(a);
+INSERT INTO aux.u VALUES (1);
+-- actions
+exec c1: ATTACH '$AUX' AS aux
+exec c0: BEGIN
+exec c0: SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM aux.u)
+exec c1: ALTER TABLE t ADD COLUMN e
+exec c0: SELECT * FROM t
+exec c1: ALTER TABLE aux.u ADD COLUMN e
+exec c0: SELECT * FROM aux.u
+exec c0: SELECT name FROM aux.sqlite_schema
+exec c0: COMMIT
+exec c0: SELECT * FROM aux.u
+
+setup: CREATE TABLE t(x)
+    sqlite: ok, done
+    turso:  ok, done
+setup: INSERT INTO t VALUES (1)
+    sqlite: ok, done
+    turso:  ok, done
+setup: ATTACH '$AUX' AS aux
+    sqlite: ok, done
+    turso:  ok, done
+setup: CREATE TABLE aux.u(a)
+    sqlite: ok, done
+    turso:  ok, done
+setup: INSERT INTO aux.u VALUES (1)
+    sqlite: ok, done
+    turso:  ok, done
+exec c1: ATTACH '$AUX' AS aux
+    sqlite: ok, done
+    turso:  ok, done
+exec c0: BEGIN
+    sqlite: ok, done
+    turso:  ok, done
+exec c0: SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM aux.u)
+    sqlite: ok, row 1|1, done
+    turso:  ok, row 1|1, done
+exec c1: ALTER TABLE t ADD COLUMN e
+    sqlite: ok, done
+    turso:  ok, done
+exec c0: SELECT * FROM t
+    sqlite: ok, row 1, done
+    turso:  ok, row 1, done
+exec c1: ALTER TABLE aux.u ADD COLUMN e
+    sqlite: ok, done
+    turso:  ok, done
+exec c0: SELECT * FROM aux.u
+    sqlite: ok, row 1, done
+    turso:  ok, Schema: Database schema changed
+    !! Known: known G-family (re-prepare in a transaction after another connection's DDL): exec SELECT: sqlite row / turso Schema
+exec c0: SELECT name FROM aux.sqlite_schema
+    sqlite: ok, row 'u', done
+    turso:  ok, Schema: Database schema changed
+    !! Known: known G-family (re-prepare in a transaction after another connection's DDL): exec SELECT: sqlite row / turso Schema
+exec c0: COMMIT
+    sqlite: ok, done
+    turso:  ok, done
+exec c0: SELECT * FROM aux.u
+    sqlite: ok, row 1|NULL, done
+    turso:  ok, row 1|NULL, done
+== Known: known G-family (re-prepare in a transaction after another connection's DDL): exec SELECT: sqlite row / turso Schema
+at: exec c0: SELECT * FROM aux.u
+  event 1
+  sqlite: row 1
+  turso:  Schema: Database schema changed

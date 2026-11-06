@@ -1,0 +1,20 @@
+-- conns 2
+-- setup (connection 0)
+CREATE TABLE t(x);
+ATTACH '$AUX' AS aux;
+CREATE TABLE aux.u(a);
+INSERT INTO aux.u VALUES (1);
+-- actions
+exec c1: ATTACH '$AUX' AS aux
+exec c1: BEGIN
+exec c1: SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM aux.u)
+exec c0: INSERT INTO t VALUES (1)
+exec c1: INSERT INTO aux.u VALUES (2)
+exec c1: ALTER TABLE aux.u ADD COLUMN e
+exec c1: CREATE INDEX aux.i ON u(a)
+exec c1: ROLLBACK
+exec c1: BEGIN
+exec c1: SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM aux.u)
+exec c1: ALTER TABLE aux.u ADD COLUMN e
+exec c0: INSERT INTO t VALUES (2)
+exec c1: COMMIT

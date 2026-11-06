@@ -1,0 +1,19 @@
+-- conns 2
+-- setup (connection 0)
+CREATE TABLE t(x);
+ATTACH '$AUX' AS aux;
+CREATE TABLE aux.u(a);
+INSERT INTO aux.u VALUES (1);
+-- actions
+exec c1: ATTACH '$AUX' AS aux
+exec c0: BEGIN
+exec c0: UPDATE aux.u SET a = a + 1
+prepare s2 c1: INSERT INTO aux.u SELECT a + 10 FROM aux.u
+step s2 x1
+exec c0: COMMIT
+step s2 x1
+step s2 x1
+reset s2
+step s2 x1
+exec c1: INSERT INTO aux.u VALUES (5)
+exec c1: SELECT count(*) FROM aux.u

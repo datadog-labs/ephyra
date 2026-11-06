@@ -1,0 +1,9 @@
+-- turso-apidiff session, seed 0
+-- conns 2
+-- setup (connection 0)
+CREATE TABLE t0(id INTEGER PRIMARY KEY, a, b);
+INSERT INTO t0(a, b) VALUES (1, 'x'), (2, 'y');
+-- actions
+prepare s2 c1: SELECT b, id FROM t0 ORDER BY b, id
+exec c0: ALTER TABLE t0 ADD COLUMN e DEFAULT '10'
+step s2 x1

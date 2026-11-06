@@ -1,0 +1,25 @@
+[package]
+name = "turso-apidiff"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "API-interleaving differential: Turso (turso_core) against SQLite 3.50.4 on sessions of prepared statements stepped in turn"
+
+[dependencies]
+# SQLite 3.50.4 through raw libsqlite3-sys calls (rusqlite only for its ffi
+# re-export and for the final file checks).
+rusqlite = { version = "0.37", features = ["bundled"] }
+# Turso's crates from a checkout at the repository root (turso/, ignored by
+# git), tested at main 2709799da (README.md, Setup).
+turso_core = { path = "../../../turso/core", default-features = false, features = ["baseline"] }
+turso_sqlite = { path = "../../../turso/sqlite/frontend" }
+# Round 2: the native vtab API names turso_ext::ResultCode in best_index.
+turso_ext = { path = "../../../turso/extensions/core", features = ["core_only"] }
+
+[workspace]
+
+[patch.crates-io]
+libsqlite3-sys = { path = "../../sqlite/vendor/libsqlite3-sys-3.50.4" }
+
+[profile.release]
+debug = 1
