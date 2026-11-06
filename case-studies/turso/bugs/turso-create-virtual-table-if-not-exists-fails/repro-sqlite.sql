@@ -1,0 +1,4 @@
+CREATE VIRTUAL TABLE IF NOT EXISTS v USING memvt;
+SELECT name FROM sqlite_schema;
+CREATE VIRTUAL TABLE w USING memvt;
+SELECT name FROM sqlite_schema;

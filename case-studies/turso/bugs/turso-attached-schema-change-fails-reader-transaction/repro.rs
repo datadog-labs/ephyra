@@ -1,25 +1,26 @@
-//! A reader transaction gets "Database schema changed" after another
-//! connection changes the schema of an attached database; the same change
-//! on main is read from the transaction's snapshot.
-use turso_apidiff_repro2::{connect, on, open_db_attach};
-fn main() {
-    let _ = std::fs::remove_file("/tmp/repro2-aux2.db");
-    let _ = std::fs::remove_file("/tmp/repro2-aux2.db-wal");
-    let db = open_db_attach("/tmp/repro2-main2.db");
-    let (a, b) = (connect(&db), connect(&db));
-    on("a", &a, "CREATE TABLE t(x)");
-    on("a", &a, "INSERT INTO t VALUES (1)");
-    on("a", &a, "ATTACH '/tmp/repro2-aux2.db' AS aux");
-    on("b", &b, "ATTACH '/tmp/repro2-aux2.db' AS aux");
-    on("a", &a, "CREATE TABLE aux.u(a)");
-    on("a", &a, "INSERT INTO aux.u VALUES (1)");
-    on("a", &a, "BEGIN");
-    on("a", &a, "SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM aux.u)");
-    on("b", &b, "ALTER TABLE t ADD COLUMN e");
-    on("a", &a, "SELECT * FROM t");
-    on("b", &b, "ALTER TABLE aux.u ADD COLUMN e");
-    on("a", &a, "SELECT * FROM aux.u");
-    on("a", &a, "SELECT name FROM aux.sqlite_schema");
-    on("a", &a, "COMMIT");
-    on("a", &a, "SELECT * FROM aux.u");
+use turso::Builder;
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let db = Builder::new_local("t.db").experimental_attach(true).build().await.unwrap();
+    let a = db.connect().unwrap();
+    let b = db.connect().unwrap();
+    a.execute("ATTACH 'aux.db' AS aux", ()).await.unwrap();
+    b.execute("ATTACH 'aux.db' AS aux", ()).await.unwrap();
+    a.execute_batch("CREATE TABLE aux.u(a); INSERT INTO aux.u VALUES (1);").await.unwrap();
+
+    a.execute("BEGIN", ()).await.unwrap();
+    let mut rows = a.query("SELECT count(*) FROM aux.u", ()).await.unwrap();
+    println!("{:?}", rows.next().await.unwrap().unwrap().get_value(0).unwrap());
+    drop(rows);
+
+    b.execute("ALTER TABLE aux.u ADD COLUMN e", ()).await.unwrap();
+
+    let mut rows = a.query("SELECT * FROM aux.u", ()).await.unwrap();
+    println!("{:?}", rows.next().await.map(|r| r.map(|r| r.get_value(0).unwrap())));
+    drop(rows);
+
+    a.execute("COMMIT", ()).await.unwrap();
+    let mut rows = a.query("SELECT * FROM aux.u", ()).await.unwrap();
+    println!("{:?}", rows.next().await.map(|r| r.map(|r| (r.get_value(0).unwrap(), r.get_value(1).unwrap()))));
 }

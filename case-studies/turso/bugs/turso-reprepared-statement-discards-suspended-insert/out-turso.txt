@@ -1,0 +1,6 @@
+Some(Integer(1))
+Ok(false)
+Ok(false)
+Integer(0)
+Integer(0)
+(exit status 0)

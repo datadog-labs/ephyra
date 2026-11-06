@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS t(x): Err(Busy("database is locked"))
+CREATE INDEX IF NOT EXISTS i ON t(x): Err(Busy("database is locked"))
+DROP TABLE IF EXISTS nosuch: Err(Busy("database is locked"))
+DROP INDEX IF EXISTS nosuch: Err(Busy("database is locked"))
+(exit status 0)

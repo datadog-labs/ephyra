@@ -1,0 +1,125 @@
+# The reproductions of the Turso bugs in this directory (case-studies/turso/bugs).
+# Each folder: posted.md (the issue as posted), the repro as filed, its
+# SQLite 3.50.4 counterpart, and out-turso.txt / out-sqlite.txt (stdout and
+# stderr of both on Turso main 2709799da and SQLite 3.50.4, exit status last).
+#
+# Rust repros: one binary per folder, `<folder>` runs <folder>/repro.rs (the
+# code in posted.md, on Turso) and `<folder>-sqlite` runs <folder>/repro_sqlite.rs
+# (the same steps on SQLite 3.50.4 through rusqlite). Needs a Turso checkout at
+# the repository root (turso/, as for ../apidiff) and the vendored SQLite 3.50.4
+# crate (case-studies/sqlite/vendor/fetch.sh):
+#
+#   cargo build --release
+#   mkdir -p /tmp/r && cd /tmp/r && rm -f t.db* aux.db*   # they create t.db (aux.db) here
+#   /path/to/case-studies/turso/bugs/target/release/<folder>
+#
+# turso-vtab-other-connection-write-panics loads target/release/libturso_ext_tests
+# and creates t.db relative to the current directory: run it from the turso
+# checkout after `cargo build --release -p turso_ext_tests` there, and remove
+# t.db, t.db-wal there before and after.
+#
+# SQL repros (repro.sql, repro-vtab.sql) run in Turso's shell, built in the turso
+# checkout with `cargo build --release -p turso_cli --bin tursodb -p turso_ext_tests`:
+#   tursodb -q -m list :memory: < repro.sql      # SQLite: sqlite3 :memory: < repro.sql
+# Those that `.load target/release/libturso_ext_tests` (Turso's test extension
+# kv_store) run from the turso checkout; those that `.load target/release/libmemvt`
+# run from memvt/ after `cargo build --release` there (memvt/ is its own crate:
+# a transactional writable virtual table written with turso_ext). Their SQLite
+# side, repro-sqlite.sql / repro-vtab-sqlite.sql, runs memvt's C twin:
+#   V=../../sqlite/vendor/libsqlite3-sys-3.50.4/sqlite3   # from this directory
+#   cc -I$V -o memvt_sqlite memvt/sqlite/memvt_sqlite.c $V/sqlite3.c
+#   ./memvt_sqlite /tmp/m.db <folder>/repro-sqlite.sql   # recreates /tmp/m.db; "@b "/"@c " lines run on other connections
+
+[package]
+name = "turso-bugs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[dependencies]
+turso = { path = "../../../turso/bindings/rust", default-features = false }
+tokio = { version = "1", features = ["rt", "macros"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+# turso-vtab-other-connection-write-panics: turso_core with an extension
+# loaded; extensions are built with mimalloc, so the host uses the same
+# allocator and version as tursodb (extensions/core/README.md).
+turso_core = { path = "../../../turso/core", default-features = false, features = ["baseline"] }
+turso_sqlite = { path = "../../../turso/sqlite/frontend" }
+mimalloc = { version = "=0.1.47", default-features = false }
+
+[workspace]
+
+[patch.crates-io]
+libsqlite3-sys = { path = "../../sqlite/vendor/libsqlite3-sys-3.50.4" }
+
+[[bin]]
+name = "turso-noop-ddl-takes-write-lock"
+path = "turso-noop-ddl-takes-write-lock/repro.rs"
+
+[[bin]]
+name = "turso-noop-ddl-takes-write-lock-sqlite"
+path = "turso-noop-ddl-takes-write-lock/repro_sqlite.rs"
+
+[[bin]]
+name = "turso-rollback-to-schema-changed-error"
+path = "turso-rollback-to-schema-changed-error/repro.rs"
+
+[[bin]]
+name = "turso-rollback-to-schema-changed-error-sqlite"
+path = "turso-rollback-to-schema-changed-error/repro_sqlite.rs"
+
+[[bin]]
+name = "turso-attached-schema-change-fails-reader-transaction"
+path = "turso-attached-schema-change-fails-reader-transaction/repro.rs"
+
+[[bin]]
+name = "turso-attached-schema-change-fails-reader-transaction-sqlite"
+path = "turso-attached-schema-change-fails-reader-transaction/repro_sqlite.rs"
+
+[[bin]]
+name = "turso-attached-ddl-needs-main-snapshot"
+path = "turso-attached-ddl-needs-main-snapshot/repro.rs"
+
+[[bin]]
+name = "turso-attached-ddl-needs-main-snapshot-sqlite"
+path = "turso-attached-ddl-needs-main-snapshot/repro_sqlite.rs"
+
+[[bin]]
+name = "turso-reprepared-statement-discards-suspended-insert"
+path = "turso-reprepared-statement-discards-suspended-insert/repro.rs"
+
+[[bin]]
+name = "turso-reprepared-statement-discards-suspended-insert-sqlite"
+path = "turso-reprepared-statement-discards-suspended-insert/repro_sqlite.rs"
+
+[[bin]]
+name = "turso-reset-suspended-select-ends-explicit-transaction"
+path = "turso-reset-suspended-select-ends-explicit-transaction/repro.rs"
+
+[[bin]]
+name = "turso-reset-suspended-select-ends-explicit-transaction-sqlite"
+path = "turso-reset-suspended-select-ends-explicit-transaction/repro_sqlite.rs"
+
+[[bin]]
+name = "turso-window-select-reset-panics-with-suspended-writer"
+path = "turso-window-select-reset-panics-with-suspended-writer/repro.rs"
+
+[[bin]]
+name = "turso-window-select-reset-panics-with-suspended-writer-sqlite"
+path = "turso-window-select-reset-panics-with-suspended-writer/repro_sqlite.rs"
+
+[[bin]]
+name = "turso-vtab-other-connection-write-panics"
+path = "turso-vtab-other-connection-write-panics/repro.rs"
+
+[[bin]]
+name = "turso-attached-busy-retry-stays-busy"
+path = "turso-attached-busy-retry-stays-busy/repro.rs"
+
+[[bin]]
+name = "turso-attached-busy-retry-stays-busy-sqlite"
+path = "turso-attached-busy-retry-stays-busy/repro_sqlite.rs"

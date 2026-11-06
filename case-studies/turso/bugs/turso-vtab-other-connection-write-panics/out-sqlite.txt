@@ -1,0 +1,21 @@
+SQLite 3.50.4
+a> CREATE VIRTUAL TABLE v USING memvt;
+  [memvt] create
+  [memvt] commit
+a> INSERT INTO v(a, b) VALUES (1, 'x');
+  [memvt] begin
+  [memvt] insert rowid=1 a=1 b=x
+  [memvt] commit
+b> SELECT rowid, a, b FROM v;
+  1|1|x
+b> INSERT INTO v(a, b) VALUES (2, 'y');
+  [memvt] begin
+  [memvt] insert rowid=2 a=2 b=y
+  [memvt] commit
+b> SELECT rowid, a, b FROM v;
+  1|1|x
+  2|2|y
+c> DROP TABLE v;
+  [memvt] destroy
+a> SELECT name FROM sqlite_schema;
+(exit status 0)

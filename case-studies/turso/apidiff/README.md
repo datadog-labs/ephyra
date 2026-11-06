@@ -117,7 +117,8 @@ Each divergence is classified ([src/main.rs](src/main.rs), `classify`):
    `libsqlite3-sys-3.50.4`, patched in as in turso-diff).
 2. Clone Turso at the repository root (`turso/`, ignored by git). The
    dependencies are `turso_core`, `turso_sqlite` and `turso_ext` from
-   `../../../turso/` (`../../../../turso/` in the repro crates). Tested at
+   `../../../turso/` (the same path from [../bugs](../bugs), whose
+   Cargo.toml builds the bug reproductions). Tested at
    `2709799da` on `main` (2026-11-06, Turso 0.9.0-pre.2); round 1 and 2 ran
    on `52d6fd81d`:
 
@@ -165,26 +166,28 @@ core/ (32.3% to 35.2%).
 
 ## Reproductions
 
-Standalone programs for maintainers, one binary each
-(`cargo run --release --bin NAME` in the crate):
-
-- [repro](repro): the public `turso` crate against rusqlite (SQLite
-  3.50.4); `issue_*.rs` are the code in the filed issues, `issue_*_sqlite.rs`
-  the same steps on SQLite.
-- [repro2](repro2): `turso_core` with a minimal native virtual table `mem`
-  ([repro2/src/lib.rs](repro2/src/lib.rs)) or the attach flag;
-  `issue_attached_*.rs` and `issue_vtab_*.rs` are the code in the filed
-  issues.
-- [vtab-ext](vtab-ext): `memvt`, a transactional writable virtual table
-  written with `turso_ext` (the documented extension API), loaded with
-  `.load` in tursodb or `Connection::load_extension`, and its SQLite twin
-  [vtab-ext/sqlite/memvt_sqlite.c](vtab-ext/sqlite/memvt_sqlite.c);
-  [vtab-ext/scripts](vtab-ext/scripts) has the tursodb scripts.
+Each bug folder under [../bugs](../bugs) is self-contained: the issue as
+posted (`posted.md`), the reproduction as filed (`repro.rs`, the code block
+of posted.md, or `repro.sql`), its SQLite 3.50.4 counterpart
+(`repro_sqlite.rs` through rusqlite, the same `repro.sql` in the sqlite3
+shell, or `repro-sqlite.sql` for the C virtual table below), fresh outputs
+of both (`out-turso.txt`, `out-sqlite.txt`).
+[../bugs/Cargo.toml](../bugs/Cargo.toml) (its own workspace) builds every
+Rust reproduction, one binary per folder (`<folder>` and `<folder>-sqlite`);
+its header has the build and run instructions for all of them, SQL ones
+included. The virtual-table
+reproductions use [../bugs/memvt](../bugs/memvt): `memvt`, a transactional
+writable virtual table written with `turso_ext` (the documented extension
+API), loaded with `.load` in tursodb, and its SQLite twin
+[memvt_sqlite.c](../bugs/memvt/sqlite/memvt_sqlite.c); or Turso's own test
+extension `kv_store`. The harness itself does not use them (its virtual
+table is [src/vt.rs](src/vt.rs), in-process).
 
 ## What it found
 
 Filed on tursodatabase/turso (2026-11-06), each with a folder under
-[bugs/turso](../bugs) holding the issue as posted and its reproduction:
+[bugs/turso](../bugs) holding the issue as posted, its reproduction and
+the outputs on both engines (Reproductions, above):
 
 | Issue | Folder |
 |---|---|

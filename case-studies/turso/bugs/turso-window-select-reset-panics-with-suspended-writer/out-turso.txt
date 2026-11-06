@@ -1,0 +1,7 @@
+Some(Integer(1))
+Some(Integer(3))
+
+thread 'main' (26391944) panicked at core/vdbe/mod.rs:3723:17:
+shared autocommit transaction needed full rollback outside MVCC
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+(exit status 101)

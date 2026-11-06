@@ -1,0 +1,5 @@
+1
+SELECT * FROM aux.u: [Integer(1)]
+aux.sqlite_schema: ["u"]
+after COMMIT: [Integer(1), Null]
+(exit status 0)

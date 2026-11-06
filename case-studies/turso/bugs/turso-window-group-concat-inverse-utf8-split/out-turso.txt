@@ -1,0 +1,6 @@
+1|'a,'
+2|'éa'
+Runtime error: Internal error: GroupConcat xInverse removes 1 bytes from 3
+1|'a-'
+2|'éa'
+Runtime error: Internal error: GroupConcat xInverse removes 1 bytes from 3

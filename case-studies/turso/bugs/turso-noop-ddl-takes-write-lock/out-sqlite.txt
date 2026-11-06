@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS t(x): Ok(0)
+CREATE INDEX IF NOT EXISTS i ON t(x): Ok(0)
+DROP TABLE IF EXISTS nosuch: Ok(0)
+DROP INDEX IF EXISTS nosuch: Ok(0)
+(exit status 0)

@@ -1,0 +1,3 @@
+Runtime error: near "IF": syntax error
+w
+(exit status 1)

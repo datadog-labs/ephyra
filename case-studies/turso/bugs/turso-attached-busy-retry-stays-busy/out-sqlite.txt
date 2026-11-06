@@ -1,0 +1,4 @@
+SQLITE_BUSY
+SQLITE_DONE
+count: 2
+(exit status 0)

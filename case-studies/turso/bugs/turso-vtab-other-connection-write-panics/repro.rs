@@ -1,24 +1,42 @@
-//! A virtual table created on one connection, written or dropped from
-//! another connection of the same Database.
-use std::panic;
-use turso_apidiff_repro2::{connect, exec, open_db};
-fn main() {
-    let which = std::env::args().nth(1).unwrap_or_else(|| "before".into());
-    let db = open_db(&format!("/tmp/repro2-vtab-other-{which}.db"));
-    let a = connect(&db);
-    // "before": b connects before the CREATE; "after": after it.
-    let early = if which == "before" { Some(connect(&db)) } else { None };
-    exec(&a, "CREATE VIRTUAL TABLE v USING mem");
-    exec(&a, "INSERT INTO v(a, b) VALUES (1, 'x')");
-    let b = early.unwrap_or_else(|| connect(&db));
-    println!("-- connection b ({which} the CREATE)");
-    exec(&b, "SELECT rowid, a, b FROM v");
-    let r = panic::catch_unwind(panic::AssertUnwindSafe(|| exec(&b, "INSERT INTO v(a, b) VALUES (2, 'y')")));
-    if r.is_err() {
-        println!("  -> (panicked)");
+use std::sync::Arc;
+use turso_core::{ConnectOpts, Connection, Database, OpenOptions, PlatformIO, StepResult};
+
+// extensions are built with mimalloc (extensions/core/README.md); the host must use it too
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+fn exec(c: &Arc<Connection>, sql: &str) {
+    let mut st = c.prepare(sql).unwrap();
+    loop {
+        match st.step() {
+            Ok(StepResult::Row) => {
+                let r: Vec<String> = st.row().unwrap().get_values().map(|v| v.to_string()).collect();
+                println!("{}", r.join("|"));
+            }
+            Ok(StepResult::IO) => st._io().step().unwrap(),
+            Ok(_) => break,
+            Err(e) => { println!("error: {e}"); break; }
+        }
     }
-    let b2 = connect(&db);
-    println!("-- connection c (new)");
-    exec(&b2, "DROP TABLE v");
-    exec(&b2, "SELECT name FROM sqlite_schema");
+}
+
+fn main() {
+    let ext = "target/release/libturso_ext_tests.dylib";
+    let io = Arc::new(PlatformIO::new().unwrap());
+    let db = Database::open(io, "t.db", OpenOptions::new(Arc::new(turso_sqlite::SqliteDialect))).unwrap();
+    let connect = || { let c = db.connect(ConnectOpts::new()).unwrap(); c.load_extension(ext).unwrap(); c };
+
+    let a = connect();
+    exec(&a, "CREATE VIRTUAL TABLE v USING kv_store");
+    exec(&a, "INSERT INTO v(key, value) VALUES ('k1', 'x')");
+
+    let b = connect();
+    exec(&b, "SELECT key, value FROM v");
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        exec(&b, "INSERT INTO v(key, value) VALUES ('k2', 'y')")
+    }));
+
+    let c = connect();
+    exec(&c, "DROP TABLE v");
+    exec(&c, "SELECT name FROM sqlite_schema");
 }
