@@ -1,5 +1,0 @@
--- conns 1
--- setup (connection 0)
--- actions
-exec c0: CREATE VIRTUAL TABLE IF NOT EXISTS vt9 USING appvt(vt9)
-exec c0: SELECT name, sql FROM sqlite_schema
