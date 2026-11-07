@@ -25,8 +25,12 @@
 
 use crate::{
     engines::Cell,
-    gen::{lit, small_int, txn, Action, Rng, Session, Slot, STEP_ALL},
-    gen2::{ddl2, read2, setup2, table, write2, S2},
+    gen::{
+        lit, small_int,
+        v1::txn,
+        v2::{ddl2, read2, setup2, table, write2, S2},
+        Action, Rng, Session, Slot, STEP_ALL,
+    },
 };
 
 struct S3 {

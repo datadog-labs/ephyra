@@ -33,8 +33,6 @@
 
 mod engines;
 mod gen;
-mod gen2;
-mod gen3;
 mod vt;
 
 use std::{
@@ -1828,7 +1826,7 @@ fn main() {
     }));
     let args: Vec<String> = std::env::args().collect();
     if let Some(g) = arg(&args, "--gen") {
-        GEN.store(g.parse().expect("--gen 1|2"), Ordering::Relaxed);
+        GEN.store(g.parse().expect("--gen 1|2|3"), Ordering::Relaxed);
     }
     match args.get(1).map(String::as_str) {
         Some("one") => {

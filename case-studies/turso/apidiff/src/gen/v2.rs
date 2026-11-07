@@ -2,7 +2,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026-Present Datadog, Inc.
 
 //! Round-2 generator (README.md, "Generators"). Same action language
-//! and script format as round 1 ([`crate::gen`]); on top of round 1:
+//! and script format as round 1 ([`super::v1`]); on top of round 1:
 //! - the writable application virtual table `appvt` ([`crate::vt`]):
 //!   vt0/vt1 in 45% of sessions, single-row INSERT/UPDATE/DELETE that can
 //!   fail before or after writing the module's storage (a = 13, a = 99,
@@ -22,7 +22,11 @@
 
 use crate::{
     engines::Cell,
-    gen::{conflict, ddl, lit, read, setup, small_int, txn, write, Action, Rng, Schema, Session, Slot, STEP_ALL},
+    gen::{
+        lit, small_int,
+        v1::{conflict, ddl, read, setup, txn, write, Schema},
+        Action, Rng, Session, Slot, STEP_ALL,
+    },
 };
 
 pub(crate) struct S2 {

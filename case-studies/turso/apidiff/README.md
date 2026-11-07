@@ -13,7 +13,7 @@ table registered identically in both engines. Bugs found:
 
 ## How it works
 
-A session ([src/gen.rs](src/gen.rs)) is a schema and data, then API actions
+A session ([src/gen/mod.rs](src/gen/mod.rs)) is a schema and data, then API actions
 over 2-5 prepared-statement slots on one connection (two connections on the
 same file in about a third of the sessions, WAL and busy timeout 0 in both
 engines):
@@ -55,11 +55,14 @@ Application functions, the same in both engines: `app_echo`, `app_text`,
 
 ### Generators
 
-`--gen 1|2|3` selects the generator (default 3); each round kept the earlier
-one verbatim for coverage comparisons.
+`--gen 1|2|3` selects the generator (default 3). They live in `src/gen/`:
+`mod.rs` holds what they share (the action language, value pools and session
+scripts), `v1.rs` is round 1 and also the building blocks (schema, reads,
+writes, transaction control, DDL) that `v2.rs` and `v3.rs` extend. Each round
+kept the earlier ones unchanged, as the baselines for coverage comparisons.
 
-- Round 1 ([src/gen.rs](src/gen.rs)): the above, plus `json_each`/`json_tree`.
-- Round 2 ([src/gen2.rs](src/gen2.rs)): a writable application virtual table
+- Round 1 ([src/gen/v1.rs](src/gen/v1.rs)): the above, plus `json_each`/`json_tree`.
+- Round 2 ([src/gen/v2.rs](src/gen/v2.rs)): a writable application virtual table
   `appvt` ([src/vt.rs](src/vt.rs)), one storage logic behind both engines:
   SQLite through an iVersion-1 `sqlite3_module` (xBegin/xSync/xCommit/
   xRollback), Turso through `OpenOptions::native_module` (`VirtualTable`,
@@ -68,7 +71,7 @@ one verbatim for coverage comparisons.
   (Turso's `with_attach`), DDL from the other connection while statements
   are prepared (re-prepare), window and aggregate reads, and a bulk insert
   in the setup so sessions split pages.
-- Round 3 ([src/gen3.rs](src/gen3.rs)): a second attached database, TEMP
+- Round 3 ([src/gen/v3.rs](src/gen/v3.rs)): a second attached database, TEMP
   tables and triggers, DETACH/ATTACH while statements are suspended and
   inside transactions, `PRAGMA [db.]wal_checkpoint(MODE)` (rows not
   compared: frame counts are per engine), cross-database statements, vtab
