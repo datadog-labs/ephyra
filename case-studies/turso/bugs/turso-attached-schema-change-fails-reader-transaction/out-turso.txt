@@ -1,0 +1,4 @@
+Integer(1)
+Err(Error("Database schema changed"))
+Ok(Some((Integer(1), Null)))
+(exit status 0)

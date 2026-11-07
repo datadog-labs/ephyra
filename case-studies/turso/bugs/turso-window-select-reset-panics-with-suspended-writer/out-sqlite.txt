@@ -1,0 +1,6 @@
+Some(Integer(1))
+Some(Integer(3))
+Ok(())
+Ok(false)
+count: 3
+(exit status 0)

@@ -1,0 +1,36 @@
+k1|x
+
+thread 'main' (26392372) panicked at core/vdbe/execute.rs:1731:14:
+Could not find virtual table for VBegin
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (26392372) panicked at core/vdbe/execute.rs:4189:14:
+vtab must exist
+stack backtrace:
+   0:        0x103173a98 - <<std[5d97c59e5e5fafcc]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[663bb9e1522ba5ef]::fmt::Display>::fmt
+   1:        0x103188188 - core[663bb9e1522ba5ef]::fmt::write
+   2:        0x103177a84 - <std[5d97c59e5e5fafcc]::sys::stdio::unix::Stderr as std[5d97c59e5e5fafcc]::io::Write>::write_fmt
+   3:        0x10315f470 - std[5d97c59e5e5fafcc]::panicking::default_hook::{closure#0}
+   4:        0x10316d2a4 - std[5d97c59e5e5fafcc]::panicking::default_hook
+   5:        0x10316d5cc - std[5d97c59e5e5fafcc]::panicking::panic_with_hook
+   6:        0x10315f4f8 - std[5d97c59e5e5fafcc]::panicking::panic_handler::{closure#0}
+   7:        0x103156b70 - std[5d97c59e5e5fafcc]::sys::backtrace::__rust_end_short_backtrace::<std[5d97c59e5e5fafcc]::panicking::panic_handler::{closure#0}, !>
+   8:        0x10315fae8 - __rustc[100742bb89c490cb]::rust_begin_unwind
+   9:        0x1031c1f38 - core[663bb9e1522ba5ef]::panicking::panic_fmt
+  10:        0x1031c1d04 - core[663bb9e1522ba5ef]::option::expect_failed
+  11:        0x1029df044 - turso_core[9ec71afe121856d3]::vdbe::execute::vtab_rollback_all
+  12:        0x102e8bea8 - <turso_core[9ec71afe121856d3]::vdbe::Program>::abort
+  13:        0x102dd566c - <turso_core[9ec71afe121856d3]::statement::Statement>::reset_internal
+  14:        0x102dd9088 - <turso_core[9ec71afe121856d3]::statement::Statement>::reset
+  15:        0x102dd650c - <turso_core[9ec71afe121856d3]::statement::Statement>::reset_best_effort
+  16:        0x102e214a4 - <turso_core[9ec71afe121856d3]::statement::Statement as core[663bb9e1522ba5ef]::ops::drop::Drop>::drop
+  17:        0x1027bad68 - core[663bb9e1522ba5ef]::ptr::drop_glue::<turso_core[9ec71afe121856d3]::statement::Statement>
+  18:        0x1027bd5a0 - turso_vtab_other_connection_write_panics[93c133df7929c66]::exec
+  19:        0x1027bd6ec - turso_vtab_other_connection_write_panics[93c133df7929c66]::main
+  20:        0x1027c7f14 - std[5d97c59e5e5fafcc]::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  21:        0x1027c6d00 - std[5d97c59e5e5fafcc]::rt::lang_start::<()>::{closure#0}
+  22:        0x10316c7ec - std[5d97c59e5e5fafcc]::rt::lang_start_internal
+  23:        0x1027be140 - _main
+error: Internal error: Could not find Virtual Table to Destroy
+v
+(exit status 0)

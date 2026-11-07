@@ -1,0 +1,6 @@
+Integer(1)
+autocommit: false
+autocommit: true
+Integer(2)
+Err(Error("cannot commit - no transaction is active"))
+(exit status 0)

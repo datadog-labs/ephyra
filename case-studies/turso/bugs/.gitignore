@@ -1,0 +1,6 @@
+target/
+# what the repros and the memvt_sqlite build write here
+t.db*
+aux.db*
+repro.db*
+memvt_sqlite
