@@ -60,6 +60,7 @@ cranelift-entity,https://github.com/bytecodealliance/wasmtime,Apache-2.0 WITH LL
 cranelift-frontend,https://github.com/bytecodealliance/wasmtime,Apache-2.0 WITH LLVM-exception,The Cranelift Project Developers
 cranelift-native,https://github.com/bytecodealliance/wasmtime,Apache-2.0 WITH LLVM-exception,The Cranelift Project Developers
 crc32c,https://github.com/zowens/crc32c,Apache-2.0 OR MIT,Zack Owens
+crc32c,https://github.com/zowens/crc32c,MIT OR Apache-2.0,Zack Owens
 crc32fast,https://github.com/srijs/rust-crc32fast,MIT OR Apache-2.0,"Sam Rijs <srijs@airpost.net>, Alex Crichton <alex@alexcrichton.com>"
 crossbeam-channel,https://github.com/crossbeam-rs/crossbeam,MIT OR Apache-2.0,The crossbeam-channel Authors
 crossbeam-deque,https://github.com/crossbeam-rs/crossbeam,MIT OR Apache-2.0,The crossbeam-deque Authors
@@ -164,6 +165,7 @@ leb128fmt,https://github.com/bluk/leb128fmt,MIT OR Apache-2.0,Bryant Luk <code@b
 libc,https://github.com/rust-lang/libc,MIT OR Apache-2.0,The libc Authors
 libloading,https://github.com/nagisa/rust_libloading,ISC,Simonas Kazlauskas <libloading@kazlauskas.me>
 libm,https://github.com/rust-lang/compiler-builtins,MIT,"Alex Crichton <alex@alexcrichton.com>, Amanieu d'Antras <amanieu@gmail.com>, Jorge Aparicio <japaricious@gmail.com>, Trevor Gross <tg@trevorgross.com>"
+libmimalloc-sys,https://github.com/purpleprotocol/mimalloc_rust/tree/master/libmimalloc-sys,MIT,Octavian Oncescu <octavonce@gmail.com>
 libredox,https://gitlab.redox-os.org/redox-os/libredox,MIT,4lDO2 <4lDO2@protonmail.com>
 libsqlite3-sys,https://github.com/rusqlite/rusqlite,MIT,The rusqlite developers
 linked-hash-map,https://github.com/contain-rs/linked-hash-map,MIT OR Apache-2.0,"Stepan Koltsov <stepan.koltsov@gmail.com>, Andrew Paseltiner <apaseltiner@gmail.com>"
@@ -189,6 +191,7 @@ memmap2,https://github.com/RazrFalcon/memmap2-rs,MIT OR Apache-2.0,"Dan Burkert 
 memoffset,https://github.com/Gilnaa/memoffset,MIT,Gilad Naaman <gilad.naaman@gmail.com>
 miette,https://github.com/zkat/miette,Apache-2.0,Kat Marchán <kzm@zkat.tech>
 miette-derive,https://github.com/zkat/miette,Apache-2.0,Kat Marchán <kzm@zkat.tech>
+mimalloc,https://github.com/purpleprotocol/mimalloc_rust,MIT,"Octavian Oncescu <octavonce@gmail.com>, Vincent Rouillé <vincent@speedy37.fr>, Thom Chiovoloni <chiovolonit@gmail.com>"
 miniz_oxide,https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide,MIT OR Zlib OR Apache-2.0,"Frommi <daniil.liferenko@gmail.com>, oyvindln <oyvindln@users.noreply.github.com>, Rich Geldreich richgel99@gmail.com"
 mio,https://github.com/tokio-rs/mio,MIT,"Carl Lerche <me@carllerche.com>, Thomas de Zeeuw <thomasdezeeuw@gmail.com>, Tokio Contributors <team@tokio.rs>"
 nonempty,https://github.com/cloudhead/nonempty,MIT,Alexis Sellier <self@cloudhead.io>
@@ -321,6 +324,7 @@ tinystr,https://github.com/unicode-org/icu4x,Unicode-3.0,The ICU4X Project Devel
 tinyvec,https://github.com/Lokathor/tinyvec,Zlib OR Apache-2.0 OR MIT,Lokathor <zefria@gmail.com>
 tl-expected,https://github.com/TartanLlama/expected,CC0-1.0,Sy Brand
 tokio,https://github.com/tokio-rs/tokio,MIT,Tokio Contributors <team@tokio.rs>
+tokio-macros,https://github.com/tokio-rs/tokio,MIT,Tokio Contributors <team@tokio.rs>
 tokio-postgres,https://github.com/rust-postgres/rust-postgres,MIT OR Apache-2.0,Steven Fackler <sfackler@gmail.com>
 tokio-util,https://github.com/tokio-rs/tokio,MIT,Tokio Contributors <team@tokio.rs>
 tr46,https://github.com/jsdom/tr46,MIT,Sebastian Mayr
@@ -355,6 +359,7 @@ urlpattern-polyfill,https://github.com/kenchris/urlpattern-polyfill,MIT,Copyrigh
 utf16_iter,https://github.com/hsivonen/utf16_iter,Apache-2.0 OR MIT,Henri Sivonen <hsivonen@hsivonen.fi>
 utf8-zero,https://github.com/algesten/utf8-zero,MIT OR Apache-2.0,"Simon Sapin <simon.sapin@exyr.org>, Martin Algesten <martin@algesten.se>"
 utf8_iter,https://github.com/hsivonen/utf8_iter,Apache-2.0 OR MIT,Henri Sivonen <hsivonen@hsivonen.fi>
+utf_types,https://github.com/hsivonen/utf_types,Apache-2.0 OR MIT,Henri Sivonen <hsivonen@hsivonen.fi>
 uuid,https://github.com/uuid-rs/uuid,Apache-2.0 OR MIT,"Ashley Mannix<ashleymannix@live.com.au>, Dylan DPC<dylan.dpc@gmail.com>, Hunar Roop Kahlon<hunar.roop@gmail.com>"
 valuable,https://github.com/tokio-rs/valuable,MIT,The valuable Authors
 verus_builtin,https://github.com/verus-lang/verus,MIT,The verus_builtin Authors

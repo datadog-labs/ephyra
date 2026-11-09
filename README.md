@@ -80,7 +80,7 @@ run it and what it found.
 | Target | Components | What they test |
 |---|---|---|
 | [`sqlite`](case-studies/sqlite) | [`generator`](case-studies/sqlite/generator), [`coverage`](case-studies/sqlite/coverage), [`diversity`](case-studies/sqlite/diversity) | SQLite: a typed SQL generator, a model and metamorphic oracles (TLP, NoREC, ...), and a coverage-guided runner over SQLite's C source |
-| [`turso`](case-studies/turso) | [`explore`](case-studies/turso/explore), [`differential`](case-studies/turso/differential) | Turso against SQLite (differential), on the SQLite generator's inputs |
+| [`turso`](case-studies/turso) | [`explore`](case-studies/turso/explore), [`differential`](case-studies/turso/differential), [`apidiff`](case-studies/turso/apidiff) | Turso against SQLite (differential), on the SQLite generator's inputs, and through the statement APIs (prepared statements stepped in turn, transactions, virtual tables, ATTACH, MVCC) |
 | [`postgresql`](case-studies/postgresql) | [`generator`](case-studies/postgresql/generator), [`coverage`](case-studies/postgresql/coverage) | PostgreSQL: a generator, a model and oracles, and a coverage-guided runner |
 | [`sqleq`](case-studies/sqleq) | [`checker`](case-studies/sqleq/checker) | [sqleq](https://github.com/datadog-labs/sqleq), on equivalent PostgreSQL queries from an e-graph over `postgresql/generator`'s seeds |
 | [`ada`](case-studies/ada) | [`generator`](case-studies/ada/generator), [`coverage`](case-studies/ada/coverage), [`asan`](case-studies/ada/asan) | [ada](https://github.com/ada-url/ada), the WHATWG URL parser |
@@ -91,8 +91,8 @@ run it and what it found.
 
 Some case studies build against code that is not in this repository:
 `case-studies/sqlite/vendor/fetch.sh` creates the `libsqlite3-sys` crates with
-SQLite trunk that the SQLite and Turso ones patch in, and `turso/differential`
-and `cedar/generator` need a checkout of Turso or Cedar at the repository root
+SQLite trunk that the SQLite and Turso ones patch in, and `turso/differential`,
+`turso/apidiff` and `cedar/generator` need a checkout of Turso or Cedar at the repository root
 (their READMEs give the revision).
 
 ## License

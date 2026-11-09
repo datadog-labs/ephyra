@@ -1,0 +1,6 @@
+0
+Ok(1)
+Ok(1)
+Ok(1)
+Ok(1)
+(exit status 0)

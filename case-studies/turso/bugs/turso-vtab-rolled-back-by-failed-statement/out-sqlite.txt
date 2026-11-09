@@ -1,0 +1,23 @@
+SQLite 3.50.4
+a> CREATE TABLE t(a NOT NULL);
+a> CREATE VIRTUAL TABLE v USING memvt;
+  [memvt] create
+  [memvt] commit
+a> INSERT INTO v(a, b) VALUES (7, 'x');
+  [memvt] begin
+  [memvt] insert rowid=1 a=7 b=x
+  [memvt] commit
+a> BEGIN;
+a> UPDATE v SET a = 8 WHERE rowid = 1;
+  [memvt] begin
+  [memvt] update rowid=1 new_rowid=1 a=8 b=x
+a> INSERT INTO t VALUES (NULL);
+  error: NOT NULL constraint failed: t.a
+a> INSERT INTO t VALUES (1);
+a> COMMIT;
+  [memvt] commit
+a> SELECT rowid, a, b FROM v;
+  1|8|x
+a> SELECT a FROM t;
+  1
+(exit status 0)

@@ -1,0 +1,15 @@
+SQLite 3.50.4
+a> CREATE VIRTUAL TABLE t USING memvt;
+  [memvt] create
+  [memvt] commit
+a> INSERT INTO t(a, b) VALUES ('k', 'v');
+  [memvt] begin
+  [memvt] insert rowid=1 a=k b=v
+  [memvt] commit
+a> UPDATE t SET rowid = rowid + 1;
+  [memvt] begin
+  [memvt] update rowid=1 new_rowid=2 a=k b=v
+  [memvt] commit
+a> SELECT rowid, a, b FROM t;
+  2|k|v
+(exit status 0)

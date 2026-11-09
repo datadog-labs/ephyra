@@ -1,0 +1,13 @@
+  [memvt] create
+  [memvt] destroy
+  [memvt] create
+  [memvt] begin
+  [memvt] insert rowid=1 a=Int(7) b=Text("x")
+  [memvt] commit
+  [memvt] begin
+  [memvt] update rowid=1 a=Int(8) b=Text("x")
+  [memvt] rollback
+Runtime error: NOT NULL constraint failed: t.a (19)
+1|7|x
+1
+(exit status 1)

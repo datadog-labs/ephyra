@@ -1,0 +1,6 @@
+Integer(0)
+Ok(1)
+Err(BusySnapshot("database snapshot is stale, rollback and retry the transaction"))
+Err(BusySnapshot("database snapshot is stale, rollback and retry the transaction"))
+Err(Busy("database is locked"))
+(exit status 0)

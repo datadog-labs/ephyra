@@ -1,0 +1,13 @@
+SQLite 3.50.4
+a> CREATE VIRTUAL TABLE IF NOT EXISTS v USING memvt;
+  [memvt] create
+  [memvt] commit
+a> SELECT name FROM sqlite_schema;
+  v
+a> CREATE VIRTUAL TABLE w USING memvt;
+  [memvt] create
+  [memvt] commit
+a> SELECT name FROM sqlite_schema;
+  v
+  w
+(exit status 0)
