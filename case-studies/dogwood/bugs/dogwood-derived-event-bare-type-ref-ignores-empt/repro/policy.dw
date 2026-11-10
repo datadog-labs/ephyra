@@ -1,0 +1,2 @@
+permit (principal, action, resource)
+when temporal { formerly within 1h App::Action::"Read"::response{ output.r: 1 } };

@@ -6,8 +6,8 @@ a test. Status as of this export; the upstream link is authoritative.
 
 | Bug | Status | Upstream |
 |---|---|---|
-| [Wrong result: float/double `abs()` statistics are backwards when the column's max is 0 and its min is negative](duckdb-abs-double-stats-inverted-at-zero-bound/) | open | [link](https://github.com/duckdb/duckdb/issues/27711) |
-| [Hang: correlated NOT EXISTS (... EXCEPT ALL ...) query never finishes on v2.0.0 (works on v1.5.6)](duckdb-buffered-cte-consumer-cycle-undetected-d/) | open | [link](https://github.com/duckdb/duckdb/issues/27737) |
+| [Wrong result: float/double `abs()` statistics are backwards when the column's max is 0 and its min is negative](duckdb-abs-double-stats-inverted-at-zero-bound/) | fixed | [link](https://github.com/duckdb/duckdb/issues/27711) |
+| [Hang: correlated NOT EXISTS (... EXCEPT ALL ...) query never finishes on v2.0.0 (works on v1.5.6)](duckdb-buffered-cte-consumer-cycle-undetected-d/) | fixed | [link](https://github.com/duckdb/duckdb/issues/27737) |
 | [EXPLAIN (SQL) exports quantile_disc with a column reference as the quantile argument when expression_rewriter is disabled](duckdb-cse-hoists-constant-quantile-argument/) | fixed | [link](https://github.com/duckdb/duckdb/issues/27776) |
 | [INTERNAL Error: assertion in join_hashtable.cpp:1474 for join query with WHERE NOT EXISTS (SELECT 1) (assertion builds)](duckdb-flush-caching-operators-continues-into-f/) | open | [link](https://github.com/duckdb/duckdb/issues/27722) |
 | [INTERNAL Error "GetPartitioningSpaceRequirement: tuple width should not be 0" for a hash join whose probe side has no columns](duckdb-hash-join-zero-column-probe-side-partiti/) | fixed | [link](https://github.com/duckdb/duckdb/issues/27450) |
@@ -31,4 +31,4 @@ a test. Status as of this export; the upstream link is authoritative.
 | [SEMI JOIN with a right-side-only condition returns no rows when filter_pushdown is disabled](duckdb-semi-join-right-only-condition-no-filter-pushdown/) | open | [link](https://github.com/duckdb/duckdb/issues/27633) |
 | [INTERNAL Error `exprs.size() > 0` (expression_executor.cpp) when statistics propagation folds an aggregate with no aggregate expressions (`HAVING` without aggregates)](duckdb-stats-folds-expressionless-aggregate-int/) | fixed | [link](https://github.com/duckdb/duckdb/issues/27446) |
 | [INTERNAL Error `physical_index != DConstants::INVALID_INDEX` in propagate_get.cpp when statistics fold a pushed-down filter's column away](duckdb-stats-table-filter-loses-column-ref/) | fixed | [link](https://github.com/duckdb/duckdb/issues/27447) |
-| [Wrong result: WHERE contains(CASE WHEN b THEN 'a' END, 'a') keeps rows where the predicate is NULL](duckdb-table-filter-true-or-null-becomes-column/) | open | [link](https://github.com/duckdb/duckdb/issues/27715) |
+| [Wrong result: WHERE contains(CASE WHEN b THEN 'a' END, 'a') keeps rows where the predicate is NULL](duckdb-table-filter-true-or-null-becomes-column/) | fixed | [link](https://github.com/duckdb/duckdb/issues/27715) |

@@ -1,0 +1,33 @@
+diff --git a/src/kernel/level.cpp b/src/kernel/level.cpp
+index 8a0dc80e69..e7cfbcaa9a 100644
+--- a/src/kernel/level.cpp
++++ b/src/kernel/level.cpp
+@@ -495,8 +495,9 @@ bool is_geq_core(level l1, level l2) {
+     auto p2 = to_offset(l2);
+     if (p1.first == p2.first || is_zero(p2.first))
+         return p1.second >= p2.second;
+-    if (p1.second == p2.second && p1.second > 0)
+-        return is_geq(p1.first, p2.first);
++    /* `a+k1 >= b+k2` with `k1 >= k2 > 0` holds iff `a+(k1-k2) >= b` */
++    if (p1.second >= p2.second && p2.second > 0)
++        return is_geq(mk_succ(p1.first, p1.second - p2.second), p2.first);
+     return false;
+ }
+ bool is_geq(level const & l1, level const & l2) {
+diff --git a/tests/elab/kernelLevelGeqOffset.lean b/tests/elab/kernelLevelGeqOffset.lean
+new file mode 100644
+index 0000000000..682123ecd5
+--- /dev/null
++++ b/tests/elab/kernelLevelGeqOffset.lean
+@@ -0,0 +1,11 @@
++/-!
++The kernel's `is_geq` must strip a common `succ` offset when the two sides have different
++offsets, as `Level.geq` does: `imax (w+1) w + 1 ≤ w + 2` for every `w`.
++-/
++universe u w
++
++inductive J (β : Sort (imax (w+1) w + 1)) : Sort (w+2)
++  | mk : β → J β
++
++inductive J' (β : Sort (max (imax (w+1) w + 1) (w+1))) : Sort (max (w+3) u)
++  | mk : β → J' β

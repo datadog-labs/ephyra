@@ -1,12 +1,26 @@
 # ephyra
 
-Property-based testing for Rust, designed for tests written by coding
-agents: one generator gives generation, shrinking, targeted search and exact
-replay; every report is readable by people and by tools; every setting can
-be changed from the environment.
+Ephyra is a new property-based testing library we are developing
+at Datadog Systems Research, designed from scratch for agentic property-based testing.
 
-See [`crates/ephyra/README.md`](crates/ephyra/README.md) for the
-library's own README and the [changelog](crates/ephyra/CHANGELOG.md).
+Briefly, Ephyra brings autoresearch style hill-climbing optimizations together
+with property-based testing; given a set of properties Ephyra first writes
+a simple valid test case generator, measures the code coverage, optimizes
+the generator to reach new regions of the code.
+
+This process is similar to coverage-guided fuzzing (CGF) that favors inputs that
+increase the coverage of the testing space. However whereas CGF is deductive, mutating
+promising inputs; Ephyra is inductive, it rewrites the generator with the hypothesis of
+discovering promising inputs.
+
+We have run Ephyra through popular targets for testing research, finding 70+ bugs in SQLite,
+20 bugs in PostgreSQL, 25 bugs in Lean, several bugs in heavily fuzzing-guided developed systems
+such as FoundationDB and TigerBeetle. We present many more systems and bugs in the chart below.
+
+The [Ephyra library](crates/ephyra/README.md) and [Ephyra command line](crates/ephyra-cli/README.md)
+have their own respective documentation, mostly written in an information dense style targeting
+coding agents. Almost all of the code in this repository is experimental and subject to change,
+please let us know any issues you experience while using it.
 
 **Testing a project with an agent?** Point it at [STARTUP.md](STARTUP.md):
 "Let's test `<my project>` with ephyra; start from
@@ -59,7 +73,16 @@ cargo run -p ephyra --example sort_performance
 
 Next: [the library's README](crates/ephyra/README.md) for generators,
 shrinkers and mutators, [API.md](API.md) for every generator, combinator and
-setting, and [CONTRIBUTING.md](CONTRIBUTING.md) to work on ephyra itself.
+setting, the [changelog](crates/ephyra/CHANGELOG.md) for what changed in each release, and
+[CONTRIBUTING.md](CONTRIBUTING.md) to work on ephyra itself.
+
+## Naming
+
+Ephyra, the ancient Greek city now known as Corinth, is the home of Sisyphus, a man forever cursed to
+carry a boulder up a hill, only to keep going in a metaphorical Möbius strip, never approaching the end.
+The name of the library is an homage to the most Sisyphean task in modern software development, testing;
+particularly random testing where we roll not one, but millions of rocks through a variety of software,
+and Ephyra is the home of all such efforts.
 
 ## Case studies
 
@@ -88,6 +111,7 @@ run it and what it found.
 | [`egg`](case-studies/egg) | [`demo`](case-studies/egg/demo) | equivalent SQL queries sampled from an e-graph, checked on SQLite |
 | [`sqlparser`](case-studies/sqlparser) | | [sqlparser-rs](https://github.com/apache/datafusion-sqlparser-rs): bugs from round-trip and statement-separation properties an agent wrote from STARTUP.md alone (harness to follow) |
 | [`coreutils`](case-studies/coreutils), [`duckdb`](case-studies/duckdb), [`datafusion`](case-studies/datafusion), [`brush`](case-studies/brush), [`gix`](case-studies/gix), [`binaryen`](case-studies/binaryen), [`ocaml`](case-studies/ocaml), [`oxcaml`](case-studies/oxcaml), [`rustc`](case-studies/rustc), [`litellm`](case-studies/litellm) | `harness` | targets of ephyra's autonomous agent: the harness it wrote for each (uutils coreutils, DuckDB, DataFusion, brush, gitoxide, Binaryen, OCaml, OxCaml, rustc, LiteLLM) and the bugs it found |
+| [`lean4`](case-studies/lean4), [`torchspec`](case-studies/torchspec), [`fastmcp`](case-studies/fastmcp), [`dogwood`](case-studies/dogwood), [`envoy`](case-studies/envoy), [`foundationdb`](case-studies/foundationdb), [`bun`](case-studies/bun), [`tigerbeetle`](case-studies/tigerbeetle) | `bugs` | the bugs ephyra's autonomous agent found and we reported publicly in Lean 4, TorchSpec, FastMCP, Dogwood, Envoy, FoundationDB, Bun and TigerBeetle (harnesses to follow) |
 
 Some case studies build against code that is not in this repository:
 `case-studies/sqlite/vendor/fetch.sh` creates the `libsqlite3-sys` crates with

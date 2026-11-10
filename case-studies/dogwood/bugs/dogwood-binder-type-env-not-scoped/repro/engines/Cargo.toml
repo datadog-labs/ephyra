@@ -1,0 +1,10 @@
+[package]
+name = "dw-engines"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+# Point this at an upstream checkout: path = "<dogwood>/dogwood-language"
+dogwood-language = { path = "DOGWOOD_SRC/dogwood-language" }
+
+[workspace]

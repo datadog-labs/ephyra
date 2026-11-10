@@ -1,0 +1,33 @@
+diff --git a/backend/amd64/proc.ml b/backend/amd64/proc.ml
+index e2950b9511..91889e7030 100644
+--- a/backend/amd64/proc.ml
++++ b/backend/amd64/proc.ml
+@@ -612,6 +612,8 @@ let destroyed_at_reloadretaddr = [| |]
+ let destroyed_rax = [| rax |] (* CR-someday vkarvonen: Use [iarray] *)
+ let destroyed_rax_rdx = [| rax; rdx |]
+ let destroyed_rbp = [| rbp |]
++let destroyed_at_small_memory_op_and_rax =
++  Array.append destroyed_rax destroyed_at_small_memory_op
+ let destroyed_r10 = [| r10 |]
+ 
+ let destroyed_at_basic (basic : Cfg_intf.S.basic) =
+@@ -622,6 +624,9 @@ let destroyed_at_basic (basic : Cfg_intf.S.basic) =
+     destroyed_at_pushtrap
+   | Op (Intop (Idiv _ | Imod _)) | Op (Intop_imm ((Idiv _ | Imod _), _)) ->
+     destroyed_rax_rdx
++  | Op(Intop_atomic { op = Compare_set; _ }) ->
++    (* [lock cmpxchg] overwrites rax (holding the expected value) on failure *)
++    destroyed_at_small_memory_op_and_rax
+   | Op(Store(Single { reg = Float64 }, _, _)) ->
+     destroyed_at_single_float64_store
+   | Op (Store ((Byte_unsigned | Byte_signed | Sixteen_unsigned |
+@@ -632,7 +637,8 @@ let destroyed_at_basic (basic : Cfg_intf.S.basic) =
+                 Sixteen_signed | Thirtytwo_unsigned | Thirtytwo_signed |
+                 Single _); _ })
+   | Op(Specific (Ifloatarithmem (Float32, _, _)))
+-  | Op(Intop_atomic _) ->
++  | Op(Intop_atomic { op = (Fetch_and_add | Add | Sub | Land | Lor | Lxor
++                           | Exchange | Compare_exchange); _ }) ->
+     destroyed_at_small_memory_op
+   | Op(Store( (Word_int | Word_mask | Word_val | Double |
+                Onetwentyeight_aligned | Onetwentyeight_unaligned |

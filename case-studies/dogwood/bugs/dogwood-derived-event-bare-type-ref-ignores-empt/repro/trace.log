@@ -1,0 +1,3 @@
+@1 scope(principal: App::User::"alice", resource: App::Doc::"d1") request_context(input: { n: 0 }) App::Action::"Read"::request(input: { n: 0 }, callerPrincipal: App::User::"alice", callerResource: App::Doc::"d1", requestId: "q1")
+@2 App::Action::"Read"::response(input: { n: 0 }, output: { r: 1 }, callerPrincipal: App::User::"alice", callerResource: App::Doc::"d1", requestId: "q1")
+@3 scope(principal: App::User::"alice", resource: App::Doc::"d1") request_context(input: { n: 0 }) App::Action::"Read"::request(input: { n: 0 }, callerPrincipal: App::User::"alice", callerResource: App::Doc::"d1", requestId: "q2")

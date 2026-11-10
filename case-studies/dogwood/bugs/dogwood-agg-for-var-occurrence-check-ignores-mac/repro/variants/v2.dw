@@ -1,0 +1,7 @@
+def temporal login_by(?u) { App::Action::"Login"::request{ input.user: ?u } };
+def temporal login_n(?k) { App::Action::"Login"::request{ input.n: ?k } };
+def temporal login() { App::Action::"Login"::request{} };
+def temporal login_free() { App::Action::"Login"::request{ input.user: u } };
+permit (principal, action == App::Action::"Login", resource) when temporal {
+  (count for (u: String), (t: Timepoint). where (login_by(u) && tp(t))) < 3
+};

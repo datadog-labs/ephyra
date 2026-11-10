@@ -24,6 +24,6 @@ a test. Status as of this export; the upstream link is authoritative.
 | [Rename / find references of an attribute skip accesses in platform-dependent unreachable code](ty-rename-skips-attribute-access-in-unreach/) | open | [link](https://github.com/astral-sh/ty/issues/4856) |
 | [`x == S.A` narrows a `str` to the StrEnum, although `"a" == S.A`](ty-strenum-eq-narrowing/) | fixed | [link](https://github.com/astral-sh/ty/issues/4827) |
 | [`TypeAliasType("A", value=int)` is rejected: "Wrong number of arguments … expected 2, found 1"](ty-typealiastype-keyword-value-rejected/) | fixed | [link](https://github.com/astral-sh/ty/issues/4854) |
-| [Dict literal is rejected for a `TypedDict \| dict[str, list[float]]` parameter: inner list inferred without context](ty-typeddict-union-arg-dict-literal/) | open | [link](https://github.com/astral-sh/ty/issues/4829) |
+| [Dict literal is rejected for a `TypedDict \| dict[str, list[float]]` parameter: inner list inferred without context](ty-typeddict-union-arg-dict-literal/) | fixed | [link](https://github.com/astral-sh/ty/issues/4829) |
 | [Accepting the variable-type inlay hint on a subclass override of a `ClassVar` gives `invalid-attribute-override`](ty-vartype-inlay-hint-edit-on-inherited-cla/) | open | [link](https://github.com/astral-sh/ty/issues/4866) |
 | [Invalid edit offer on variable-type inlay hint](ty-vartype-inlay-hint-edit-on-non-receiver-/) | open | [link](https://github.com/astral-sh/ty/issues/4859) |

@@ -1,0 +1,1 @@
+@0 scope(principal: User::"u", resource: Doc::"d") request_context(input: { user: "alice" }) Action::"Read"::request(input: { user: "alice" }, callerPrincipal: User::"u", callerResource: Doc::"d", requestId: "r0")

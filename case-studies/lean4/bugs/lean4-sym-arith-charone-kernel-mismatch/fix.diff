@@ -1,0 +1,39 @@
+diff --git a/src/Lean/Meta/Sym/Arith/Norm.lean b/src/Lean/Meta/Sym/Arith/Norm.lean
+index fbb777d..e200900 100644
+--- a/src/Lean/Meta/Sym/Arith/Norm.lean
++++ b/src/Lean/Meta/Sym/Arith/Norm.lean
+@@ -1738,9 +1738,12 @@ private def constRelProof? (rel : RelKind) (order? : Option Order) (ring : Ring)
+     | .eq, none =>
+       return some (mkAppN (mkConst ``Grind.CommRing.eq_true_of_toPoly_eq [u])
+         (#[ring.type, inst, ctx] ++ sides), true)
++    -- In characteristic `1`, `Expr.toPolyC` keeps monomials with coefficient `1`, so the sides
++    -- can have different polynomials although their difference is `0`.
+     | .eq, some (charInst, c) =>
+-      return some (mkAppN (mkConst ``Grind.CommRing.eq_true_of_toPolyC_eq [u])
+-        (#[ring.type, toExpr c, inst, charInst, ctx] ++ sides), true)
++      if pl == pr then
++        return some (mkAppN (mkConst ``Grind.CommRing.eq_true_of_toPolyC_eq [u])
++          (#[ring.type, toExpr c, inst, charInst, ctx] ++ sides), true)
+     | .le, none =>
+       let some o := order? | return none
+       return some (mkAppN (mkConst ``Grind.CommRing.le_true_of_toPoly_eq [u])
+diff --git a/tests/elab/grindSymCharOneEq.lean b/tests/elab/grindSymCharOneEq.lean
+new file mode 100644
+index 0000000..551e0df
+--- /dev/null
++++ b/tests/elab/grindSymCharOneEq.lean
+@@ -0,0 +1,14 @@
++/-!
++`grind` with the `Sym.simp`-based normalizer in a ring of characteristic `1`: the sides of
++`0 = x ^ 2` have different polynomials (`Expr.toPolyC` keeps `x ^ 2` with coefficient `1`)
++although their difference is `0`, so the proof must not state both sides as one polynomial.
++-/
++
++example (x : Fin 1) (h : ¬ (0 : Fin 1) = x ^ 2) : False := by
++  set_option backward.grind.normalizer false in grind (maxChar := 2)
++
++example (x : BitVec 0) (h : ¬ (0 : BitVec 0) = x ^ 2) : False := by
++  set_option backward.grind.normalizer false in grind (maxChar := 2)
++
++example (x : BitVec 0) (h : (0 : BitVec 0) = x ^ 2 → False) : False := by
++  set_option backward.grind.normalizer false in grind +distrib (maxChar := 1000000)

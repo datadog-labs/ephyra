@@ -1,0 +1,16 @@
+diff --git a/src/Lean/Util/Path.lean b/src/Lean/Util/Path.lean
+index cccecd7d36..d66f26b969 100644
+--- a/src/Lean/Util/Path.lean
++++ b/src/Lean/Util/Path.lean
+@@ -143,7 +143,10 @@ partial def findOLean (mod : Name) : IO FilePath := do
+   if let some root := cache.lookup pkg then
+     return modToFilePath root mod "olean"
+   if let some root ← sp.findRootWithExt "olean" mod then
+-    oleanRootCacheRef.set (sp, (pkg, root) :: cache)
++    -- `pkg` may live in the compacted region of an imported `.olean` (e.g. a module name from its
++    -- import list), which `Environment.freeRegions` frees while the cache lives on: store a copy.
++    if let .str .anonymous s := pkg then
++      oleanRootCacheRef.set (sp, (Name.mkSimple (String.Pos.Raw.extract s 0 s.rawEndPos), root) :: cache)
+     return modToFilePath root mod "olean"
+   else
+     let pkg := FilePath.mk <| mod.getRoot.toString (escape := false)

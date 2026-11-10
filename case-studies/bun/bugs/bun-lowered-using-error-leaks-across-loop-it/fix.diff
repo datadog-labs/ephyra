@@ -1,0 +1,315 @@
+diff --git a/src/js_parser/p.rs b/src/js_parser/p.rs
+index 3859c3391..ed4217673 100644
+--- a/src/js_parser/p.rs
++++ b/src/js_parser/p.rs
+@@ -10175,12 +10175,31 @@ impl LowerUsingDeclarationsContext {
+             loc,
+         );
+         let stack_init = p.new_expr(E::Array::default(), loc);
++        // `let __stack = [], _err, _hasErr;`: the error slots belong to this
++        // evaluation of the block. A `var` in the catch clause would be
++        // function-scoped and keep the error of an earlier loop iteration,
++        // which `__callDispose` would then throw again.
++        let mut stack_decls = bun_alloc::AstAlloc::vec();
++        VecExt::append(
++            &mut stack_decls,
++            Decl {
++                binding: stack_binding,
++                value: Some(stack_init),
++            },
++        );
++        for ref_ in [err_ref, has_err_ref] {
++            let binding = p.b(B::Identifier { r#ref: ref_ }, loc);
++            VecExt::append(
++                &mut stack_decls,
++                Decl {
++                    binding,
++                    value: None,
++                },
++            );
++        }
+         result.push(p.s(
+             S::Local {
+-                decls: G::DeclList::init_one(Decl {
+-                    binding: stack_binding,
+-                    value: Some(stack_init),
+-                }),
++                decls: stack_decls,
+                 kind: js_ast::s::Kind::KLet,
+                 ..Default::default()
+             },
+@@ -10188,34 +10207,36 @@ impl LowerUsingDeclarationsContext {
+         ));
+         let catch_binding = p.b(B::Identifier { r#ref: caught_ref }, loc);
+         let catch_body: js_ast::StmtNodeList = {
+-            let err_binding = p.b(B::Identifier { r#ref: err_ref }, loc);
+-            let err_value = p.new_expr(
++            // _err = _catch, _hasErr = 1;
++            p.record_usage(err_ref);
++            p.record_usage(has_err_ref);
++            let err_target = p.new_expr(
+                 E::Identifier {
+-                    ref_: caught_ref,
++                    ref_: err_ref,
+                     ..Default::default()
+                 },
+                 loc,
+             );
+-            let has_err_binding = p.b(B::Identifier { r#ref: has_err_ref }, loc);
+-            let has_err_value = p.new_expr(E::Number::new(1.0), loc);
+-            let mut decls = bun_alloc::AstAlloc::vec();
+-            VecExt::append(
+-                &mut decls,
+-                Decl {
+-                    binding: err_binding,
+-                    value: Some(err_value),
++            let err_value = p.new_expr(
++                E::Identifier {
++                    ref_: caught_ref,
++                    ..Default::default()
+                 },
++                loc,
+             );
+-            VecExt::append(
+-                &mut decls,
+-                Decl {
+-                    binding: has_err_binding,
+-                    value: Some(has_err_value),
++            let has_err_target = p.new_expr(
++                E::Identifier {
++                    ref_: has_err_ref,
++                    ..Default::default()
+                 },
++                loc,
+             );
++            let has_err_value = p.new_expr(E::Number::new(1.0), loc);
++            let value = Expr::assign(err_target, err_value)
++                .join_with_comma(Expr::assign(has_err_target, has_err_value));
+             let stmt0 = p.s(
+-                S::Local {
+-                    decls,
++                S::SExpr {
++                    value,
+                     ..Default::default()
+                 },
+                 loc,
+diff --git a/test/bundler/transpiler/__snapshots__/transpiler.test.js.snap b/test/bundler/transpiler/__snapshots__/transpiler.test.js.snap
+index a78b2167d..c5d701e6e 100644
+--- a/test/bundler/transpiler/__snapshots__/transpiler.test.js.snap
++++ b/test/bundler/transpiler/__snapshots__/transpiler.test.js.snap
+@@ -1,22 +1,22 @@
+ // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+ 
+ exports[`Bun.Transpiler using statements work right 1`] = `
+-"let __bun_temp_ref_1$ = [];
++"let __bun_temp_ref_1$ = [], __bun_temp_ref_3$, __bun_temp_ref_4$;
+ try {
+ const x = __using(__bun_temp_ref_1$, a, 0);
+ } catch (__bun_temp_ref_2$) {
+-var __bun_temp_ref_3$ = __bun_temp_ref_2$, __bun_temp_ref_4$ = 1;
++__bun_temp_ref_3$ = __bun_temp_ref_2$, __bun_temp_ref_4$ = 1;
+ } finally {
+ __callDispose(__bun_temp_ref_1$, __bun_temp_ref_3$, __bun_temp_ref_4$);
+ }"
+ `;
+ 
+ exports[`Bun.Transpiler using statements work right 2`] = `
+-"let __bun_temp_ref_1$ = [];
++"let __bun_temp_ref_1$ = [], __bun_temp_ref_3$, __bun_temp_ref_4$;
+ try {
+ const x = __using(__bun_temp_ref_1$, a, 1);
+ } catch (__bun_temp_ref_2$) {
+-var __bun_temp_ref_3$ = __bun_temp_ref_2$, __bun_temp_ref_4$ = 1;
++__bun_temp_ref_3$ = __bun_temp_ref_2$, __bun_temp_ref_4$ = 1;
+ } finally {
+ var __bun_temp_ref_5$ = __callDispose(__bun_temp_ref_1$, __bun_temp_ref_3$, __bun_temp_ref_4$);
+ __bun_temp_ref_5$ && await __bun_temp_ref_5$;
+@@ -25,12 +25,12 @@ __bun_temp_ref_5$ && await __bun_temp_ref_5$;
+ 
+ exports[`Bun.Transpiler using statements work right 3`] = `
+ "for (const __bun_temp_ref_1$ of b) {
+-let __bun_temp_ref_2$ = [];
++let __bun_temp_ref_2$ = [], __bun_temp_ref_4$, __bun_temp_ref_5$;
+ try {
+ const a = __using(__bun_temp_ref_2$, __bun_temp_ref_1$, 0);
+ c(a);
+ } catch (__bun_temp_ref_3$) {
+-var __bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
++__bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
+ } finally {
+ __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ }
+@@ -39,12 +39,12 @@ __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ 
+ exports[`Bun.Transpiler using statements work right 4`] = `
+ "for await (const __bun_temp_ref_1$ of b) {
+-let __bun_temp_ref_2$ = [];
++let __bun_temp_ref_2$ = [], __bun_temp_ref_4$, __bun_temp_ref_5$;
+ try {
+ const a = __using(__bun_temp_ref_2$, __bun_temp_ref_1$, 0);
+ c(a);
+ } catch (__bun_temp_ref_3$) {
+-var __bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
++__bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
+ } finally {
+ __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ }
+@@ -53,12 +53,12 @@ __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ 
+ exports[`Bun.Transpiler using statements work right 5`] = `
+ "for (const __bun_temp_ref_1$ of b) {
+-let __bun_temp_ref_2$ = [];
++let __bun_temp_ref_2$ = [], __bun_temp_ref_4$, __bun_temp_ref_5$;
+ try {
+ const a = __using(__bun_temp_ref_2$, __bun_temp_ref_1$, 1);
+ c(a);
+ } catch (__bun_temp_ref_3$) {
+-var __bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
++__bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
+ } finally {
+ var __bun_temp_ref_6$ = __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ __bun_temp_ref_6$ && await __bun_temp_ref_6$;
+@@ -68,12 +68,12 @@ __bun_temp_ref_6$ && await __bun_temp_ref_6$;
+ 
+ exports[`Bun.Transpiler using statements work right 6`] = `
+ "for await (const __bun_temp_ref_1$ of b) {
+-let __bun_temp_ref_2$ = [];
++let __bun_temp_ref_2$ = [], __bun_temp_ref_4$, __bun_temp_ref_5$;
+ try {
+ const a = __using(__bun_temp_ref_2$, __bun_temp_ref_1$, 1);
+ c(a);
+ } catch (__bun_temp_ref_3$) {
+-var __bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
++__bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
+ } finally {
+ var __bun_temp_ref_6$ = __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ __bun_temp_ref_6$ && await __bun_temp_ref_6$;
+@@ -83,13 +83,13 @@ __bun_temp_ref_6$ && await __bun_temp_ref_6$;
+ 
+ exports[`Bun.Transpiler using statements work right 7`] = `
+ "for (const __bun_temp_ref_1$ of b) {
+-let __bun_temp_ref_2$ = [];
++let __bun_temp_ref_2$ = [], __bun_temp_ref_4$, __bun_temp_ref_5$;
+ try {
+ const a = __using(__bun_temp_ref_2$, __bun_temp_ref_1$, 0);
+ c(a);
+ a(c);
+ } catch (__bun_temp_ref_3$) {
+-var __bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
++__bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
+ } finally {
+ __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ }
+@@ -98,13 +98,13 @@ __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ 
+ exports[`Bun.Transpiler using statements work right 8`] = `
+ "for await (const __bun_temp_ref_1$ of b) {
+-let __bun_temp_ref_2$ = [];
++let __bun_temp_ref_2$ = [], __bun_temp_ref_4$, __bun_temp_ref_5$;
+ try {
+ const a = __using(__bun_temp_ref_2$, __bun_temp_ref_1$, 0);
+ c(a);
+ a(c);
+ } catch (__bun_temp_ref_3$) {
+-var __bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
++__bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
+ } finally {
+ __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ }
+@@ -113,13 +113,13 @@ __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ 
+ exports[`Bun.Transpiler using statements work right 9`] = `
+ "for (const __bun_temp_ref_1$ of b) {
+-let __bun_temp_ref_2$ = [];
++let __bun_temp_ref_2$ = [], __bun_temp_ref_4$, __bun_temp_ref_5$;
+ try {
+ const a = __using(__bun_temp_ref_2$, __bun_temp_ref_1$, 1);
+ c(a);
+ a(c);
+ } catch (__bun_temp_ref_3$) {
+-var __bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
++__bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
+ } finally {
+ var __bun_temp_ref_6$ = __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ __bun_temp_ref_6$ && await __bun_temp_ref_6$;
+@@ -129,13 +129,13 @@ __bun_temp_ref_6$ && await __bun_temp_ref_6$;
+ 
+ exports[`Bun.Transpiler using statements work right 10`] = `
+ "for await (const __bun_temp_ref_1$ of b) {
+-let __bun_temp_ref_2$ = [];
++let __bun_temp_ref_2$ = [], __bun_temp_ref_4$, __bun_temp_ref_5$;
+ try {
+ const a = __using(__bun_temp_ref_2$, __bun_temp_ref_1$, 1);
+ c(a);
+ a(c);
+ } catch (__bun_temp_ref_3$) {
+-var __bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
++__bun_temp_ref_4$ = __bun_temp_ref_3$, __bun_temp_ref_5$ = 1;
+ } finally {
+ var __bun_temp_ref_6$ = __callDispose(__bun_temp_ref_2$, __bun_temp_ref_4$, __bun_temp_ref_5$);
+ __bun_temp_ref_6$ && await __bun_temp_ref_6$;
+@@ -146,18 +146,18 @@ __bun_temp_ref_6$ && await __bun_temp_ref_6$;
+ exports[`Bun.Transpiler using top level 1`] = `
+ "import { __callDispose as __callDispose, __using as __using } from "bun:wrap";
+ export function c(e) {
+-  let __bun_temp_ref_1$ = [];
++  let __bun_temp_ref_1$ = [], __bun_temp_ref_3$, __bun_temp_ref_4$;
+   try {
+     const f = __using(__bun_temp_ref_1$, g(a), 0);
+     return f.h;
+   } catch (__bun_temp_ref_2$) {
+-    var __bun_temp_ref_3$ = __bun_temp_ref_2$, __bun_temp_ref_4$ = 1;
++    __bun_temp_ref_3$ = __bun_temp_ref_2$, __bun_temp_ref_4$ = 1;
+   } finally {
+     __callDispose(__bun_temp_ref_1$, __bun_temp_ref_3$, __bun_temp_ref_4$);
+   }
+ }
+ import { using } from "n";
+-let __bun_temp_ref_5$ = [];
++let __bun_temp_ref_5$ = [], __bun_temp_ref_7$, __bun_temp_ref_8$;
+ try {
+   var a = __using(__bun_temp_ref_5$, b, 0);
+   var j = __using(__bun_temp_ref_5$, c(i), 1);
+@@ -166,7 +166,7 @@ try {
+   var p = __using(__bun_temp_ref_5$, await using, 1);
+   var q = r;
+ } catch (__bun_temp_ref_6$) {
+-  var __bun_temp_ref_7$ = __bun_temp_ref_6$, __bun_temp_ref_8$ = 1;
++  __bun_temp_ref_7$ = __bun_temp_ref_6$, __bun_temp_ref_8$ = 1;
+ } finally {
+   var __bun_temp_ref_9$ = __callDispose(__bun_temp_ref_5$, __bun_temp_ref_7$, __bun_temp_ref_8$);
+   __bun_temp_ref_9$ && await __bun_temp_ref_9$;
+diff --git a/test/bundler/transpiler/transpiler.test.js b/test/bundler/transpiler/transpiler.test.js
+index 4724a1bd2..175109f81 100644
+--- a/test/bundler/transpiler/transpiler.test.js
++++ b/test/bundler/transpiler/transpiler.test.js
+@@ -5380,6 +5380,29 @@ console.log("boop");
+     expectCapturePrintedSnapshot(`for await (await using a of b) { c(a); a(c) }`);
+   });
+ 
++  it("lowered using does not rethrow the error of an earlier loop iteration", () => {
++    const code = new Bun.Transpiler({ loader: "js" }).transformSync(`
++      const out = [];
++      for (let i = 0; i < 2; i++) {
++        try {
++          using r = null;
++          if (i == 0) throw new TypeError();
++        } catch (e) {
++          out.push("caught " + i);
++        }
++      }
++      globalThis.__usingLoopOut = out;
++    `);
++    expect(code).toContain("__callDispose");
++    const wrap = require("bun:wrap");
++    new Function(
++      "__bunwrap",
++      code.replace(/import\s*\{([^}]*)\}\s*from\s*"bun:wrap";?/, (_, names) => "const {" + names.replace(/\s+as\s+/g, ": ") + "} = __bunwrap;"),
++    )(wrap);
++    expect(globalThis.__usingLoopOut).toEqual(["caught 0"]);
++    delete globalThis.__usingLoopOut;
++  });
++
+   it("await of the identifier 'using' is not an await using declaration", () => {
+     // "await using" only starts a declaration when followed by an identifier on
+     // the same line. Otherwise it's an "await" expression of the identifier "using".

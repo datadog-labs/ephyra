@@ -1,0 +1,86 @@
+--- a/test/returning1.test
++++ b/test/returning1.test
+@@ -592,6 +592,83 @@
+     INSERT INTO ft VALUES('hello world') RETURNING *
+   } {{hello world}}
+ }
++
+ 
++#-------------------------------------------------------------------------
++# A DML statement with a RETURNING clause (or one that returns a change
++# count) makes all its changes before it returns its first row.  If two
++# such statements are left pending after their first row, the statement
++# transaction of the older one must not be still open when it finishes
++# first: statement transactions must nest.
++#
++proc stmt_rows {stmt} {
++  set res [list]
++  while {[sqlite3_step $stmt]=="SQLITE_ROW"} {
++    lappend res [sqlite3_column_int $stmt 0]
++  }
++  lappend res [sqlite3_finalize $stmt]
++}
++reset_db
++do_execsql_test 25.0 {
++  CREATE TABLE t1(a INTEGER PRIMARY KEY, b UNIQUE);
++  INSERT INTO t1 VALUES(1,1),(2,2),(3,3);
++}
++do_test 25.1 {
++  execsql BEGIN
++  set A [sqlite3_prepare_v2 db "UPDATE t1 SET b=b+10 RETURNING a" -1 dummy]
++  set B [sqlite3_prepare_v2 db "UPDATE t1 SET b=b+100 RETURNING a" -1 dummy]
++  list [sqlite3_step $A] [sqlite3_step $B] [stmt_rows $A] [stmt_rows $B]
++} {SQLITE_ROW SQLITE_ROW {2 3 SQLITE_OK} {2 3 SQLITE_OK}}
++do_execsql_test 25.2 {
++  COMMIT;
++  SELECT * FROM t1;
++  PRAGMA integrity_check;
++} {1 111 2 112 3 113 ok}
+ 
++# In autocommit mode, an active SELECT makes the UPDATEs open statement
++# transactions.
++do_test 25.3 {
++  set R [sqlite3_prepare_v2 db "SELECT a FROM t1" -1 dummy]
++  set A [sqlite3_prepare_v2 db "UPDATE t1 SET b=b+10 RETURNING a" -1 dummy]
++  set B [sqlite3_prepare_v2 db "UPDATE t1 SET b=b+100 RETURNING a" -1 dummy]
++  list [sqlite3_step $R] [sqlite3_step $A] [sqlite3_step $B] \
++       [stmt_rows $A] [stmt_rows $B] [sqlite3_finalize $R]
++} {SQLITE_ROW SQLITE_ROW SQLITE_ROW {2 3 SQLITE_OK} {2 3 SQLITE_OK} SQLITE_OK}
++do_execsql_test 25.4 {
++  SELECT * FROM t1;
++  PRAGMA integrity_check;
++} {1 221 2 222 3 223 ok}
++
++# The same with PRAGMA count_changes instead of RETURNING.
++do_test 25.5 {
++  execsql { PRAGMA count_changes = 1; BEGIN; }
++  set A [sqlite3_prepare_v2 db "UPDATE t1 SET b=b+10" -1 dummy]
++  set B [sqlite3_prepare_v2 db "UPDATE t1 SET b=b+100" -1 dummy]
++  list [sqlite3_step $A] [sqlite3_step $B] [stmt_rows $A] [stmt_rows $B]
++} {SQLITE_ROW SQLITE_ROW SQLITE_OK SQLITE_OK}
++do_execsql_test 25.6 {
++  COMMIT;
++  PRAGMA count_changes = 0;
++  SELECT * FROM t1;
++  PRAGMA integrity_check;
++} {1 331 2 332 3 333 ok}
++
++# If the older statement then fails, it must not roll back the changes
++# of the newer one, which completes successfully.
++do_test 25.7 {
++  set R [sqlite3_prepare_v2 db "SELECT a FROM t1" -1 dummy]
++  set A [sqlite3_prepare_v2 db \
++      "UPDATE t1 SET b=b+10 RETURNING a, randomblob(100000*a)" -1 dummy]
++  set B [sqlite3_prepare_v2 db "UPDATE t1 SET b=b+100 RETURNING a" -1 dummy]
++  set res [list [sqlite3_step $R] [sqlite3_step $A] [sqlite3_step $B]]
++  sqlite3_hard_heap_limit64 [expr {[sqlite3_memory_used]+1000}]
++  lappend res [sqlite3_step $A]
++  sqlite3_hard_heap_limit64 0
++  lappend res [sqlite3_finalize $A] [stmt_rows $B] [sqlite3_finalize $R]
++} {SQLITE_ROW SQLITE_ROW SQLITE_ROW SQLITE_NOMEM SQLITE_NOMEM {2 3 SQLITE_OK} SQLITE_OK}
++do_execsql_test 25.8 {
++  SELECT b FROM t1;
++  PRAGMA integrity_check;
++} {441 442 443 ok}
++
+ finish_test

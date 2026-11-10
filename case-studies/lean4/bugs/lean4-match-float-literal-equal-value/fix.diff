@@ -1,0 +1,115 @@
+diff --git a/src/Lean/Meta/Match/Match.lean b/src/Lean/Meta/Match/Match.lean
+index 19f3cd008d..a249a59351 100644
+--- a/src/Lean/Meta/Match/Match.lean
++++ b/src/Lean/Meta/Match/Match.lean
+@@ -18,6 +18,7 @@ import Lean.Meta.Match.SolveOverlap
+ import Lean.Meta.HasNotBit
+ import Lean.Meta.Match.CaseArraySizes
+ import Lean.Meta.Match.CaseValues
++import Lean.Meta.Match.Value
+ import Lean.Meta.Match.NamedPatterns
+ 
+ /-!
+@@ -650,11 +651,11 @@ private def processNonVariable (p : Problem) : MetaM Problem := withGoalOf p do
+     | _      => unreachable!
+   return { p with alts := alts, vars := xs }
+ 
+-private def collectValues (p : Problem) : Array Expr :=
+-  p.alts.foldl (init := #[]) fun values alt =>
++private def collectValues (p : Problem) : MetaM (Array Expr) :=
++  p.alts.foldlM (init := #[]) fun values alt =>
+     match alt.patterns with
+-    | .val v :: _ => if values.contains v then values else values.push v
+-    | _           => values
++    | .val v :: _ => do if (← values.anyM (isSameMatchValue v)) then return values else return values.push v
++    | _           => return values
+ 
+ private def isFirstPatternInaccessible (alt : Alt) : Bool :=
+   match alt.patterns with
+@@ -675,7 +676,7 @@ private def triviallyComplete (p : Problem) : Bool :=
+ private def processValue (p : Problem) : MetaM (Array Problem) := do
+   trace[Meta.Match.match] "value step"
+   let x :: xs := p.vars | unreachable!
+-  let values := collectValues p
++  let values ← collectValues p
+   let needHyps := !triviallyComplete p || p.alts.any (!·.notAltIdxs.isEmpty)
+   let subgoals ← caseValues p.mvarId x.fvarId! values (needHyps := needHyps)
+   subgoals.mapIdxM fun i subgoal => do
+@@ -687,9 +688,9 @@ private def processValue (p : Problem) : MetaM (Array Problem) := do
+       trace[Meta.Match.match] "processValue subst: {subst.map.toList.map fun p => mkFVar p.1}, {subst.map.toList.map fun p => p.2}"
+         let examples := p.examples.map <| Example.replaceFVarId x.fvarId! (Example.val value)
+       let examples := examples.map <| Example.applyFVarSubst subst
+-      let newAlts  := p.alts.filter fun alt => match alt.patterns with
+-        | .val v          :: _ => v == value
+-        | .inaccessible _ :: _ => true
++      let newAlts ← p.alts.filterM fun alt => match alt.patterns with
++        | .val v          :: _ => isSameMatchValue v value
++        | .inaccessible _ :: _ => return true
+         | _                    => unreachable!
+       let newAlts := newAlts.map fun alt => alt.applyFVarSubst subst
+       let newAlts := newAlts.map fun alt => match alt.patterns with
+diff --git a/src/Lean/Meta/Match/Value.lean b/src/Lean/Meta/Match/Value.lean
+index 0450dffd9e..b03e8cd485 100644
+--- a/src/Lean/Meta/Match/Value.lean
++++ b/src/Lean/Meta/Match/Value.lean
+@@ -29,4 +29,17 @@ def isMatchValue (e : Expr) : MetaM Bool := do
+   if (← getFloat32Value? e).isSome then return true
+   return false
+ 
++/--
++Return true if the match values `v` and `w` denote the same value. `normLitValue` normalizes all
++other literals, but leaves `Float`/`Float32` literals untouched, so distinct literals such as `5`
++and `5.0`, or `(16777216 : Float32)` and `16777217`, are compared by bit pattern.
++-/
++def isSameMatchValue (v w : Expr) : MetaM Bool := do
++  if v == w then return true
++  if let some a ← getFloatValue? v then
++    if let some b ← getFloatValue? w then return a.toBits == b.toBits
++  if let some a ← getFloat32Value? v then
++    if let some b ← getFloat32Value? w then return a.toBits == b.toBits
++  return false
++
+ end Lean.Meta
+diff --git a/tests/elab/match_float.lean b/tests/elab/match_float.lean
+index 8d2c579204..1405ea8d9b 100644
+--- a/tests/elab/match_float.lean
++++ b/tests/elab/match_float.lean
+@@ -81,8 +81,37 @@ example (f : Float) : Bool :=
+   | 6.0 => (h : True)
+   | _ => false
+ 
+--- no warning for overlaps due to lack of normalization for Float literals:
++-- Literals are not normalized, but literals with the same value (bit pattern) are the same match
++-- value: in the branch for the first one, alternatives using the other one must not be dropped.
+ 
++def sameVal (s : Float32) (n : Nat) : Nat :=
++  match s, n with
++  | 16777216, 0 => 6
++  | 16777217, _ => 7  -- `(16777217 : Float32) = 16777216`
++  | _, _ => 0
++
++/-- info: 7 -/
++#guard_msgs in #eval sameVal 16777217 1
++/-- info: 6 -/
++#guard_msgs in #eval sameVal 16777216 0
++
++def sameVal64 (s : Float) (n : Nat) : Nat :=
++  match s, n with
++  | 5, 0 => 1
++  | 5.0, _ => 2
++  | _, _ => 0
++
++/-- info: 2 -/
++#guard_msgs in #eval sameVal64 5 1
++
++example : sameVal 16777217 1 = 7 := by decide
++
++-- Equal-valued literals overlap, as `0` and `256` do for `UInt8`.
++/--
++error: Redundant alternative: Any expression matching
++  5.0
++will match one of the preceding alternatives
++-/
+ #guard_msgs in
+ example : Float → Bool
+   | 5 => true

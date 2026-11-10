@@ -1,0 +1,45 @@
+diff --git a/src/Std/Time/Format/Basic.lean b/src/Std/Time/Format/Basic.lean
+index 3e041d8946..0c46c80faf 100644
+--- a/src/Std/Time/Format/Basic.lean
++++ b/src/Std/Time/Format/Basic.lean
+@@ -389,7 +389,7 @@ private def formatWith (dateformat : DateFormat) (modifier : Modifier) (data : T
+   | .a format =>
+     match format with
+     | .short => formatMarkerShort dateformat.symbols data
+-    | .full => formatMarkerShort dateformat.symbols data
++    | .full => formatMarkerLong dateformat.symbols data
+     | .narrow => formatMarkerNarrow dateformat.symbols data
+     | .twoLetterShort => formatMarkerShort dateformat.symbols data
+   | .b format =>
+diff --git a/tests/elab/timeFormatRoundTrip.lean b/tests/elab/timeFormatRoundTrip.lean
+index 988cb8de2b..04ed0ae409 100644
+--- a/tests/elab/timeFormatRoundTrip.lean
++++ b/tests/elab/timeFormatRoundTrip.lean
+@@ -116,7 +116,7 @@ def hourDates : List DateTime :=
+ #guard_msgs in
+ #eval Id.run do
+   let mut failures := #[]
+-  for pat in ["kk:mm", "KK:mm a", "hh:mm a", "HH:mm"] do
++  for pat in ["kk:mm", "KK:mm a", "hh:mm a", "hh:mm aaaa", "KK:mm aaaaa", "HH:mm"] do
+     for d in hourDates do
+       let pat := s!"uuuu-MM-dd {pat}"
+       unless exact pat d do
+diff --git a/tests/elab/timeFormats.lean b/tests/elab/timeFormats.lean
+index 0f45263ef7..855e695674 100644
+--- a/tests/elab/timeFormats.lean
++++ b/tests/elab/timeFormats.lean
+@@ -270,11 +270,11 @@ def jpTZ : TimeZone := timezone("Asia/Tokyo +09:00")
+ -- ──────────────────────────────────────────────────────────────────────────────
+ 
+ -- 23:13:12 → PM
+-/-- info: "PM PM PM PM p" -/
++/-- info: "PM PM PM post meridiem p" -/
+ #guard_msgs in #eval zoned₄.format "a aa aaa aaaa aaaaa"
+-/-- info: "PM PM PM PM p" -/
++/-- info: "PM PM PM post meridiem p" -/
+ #guard_msgs in #eval datetime₄.format "a aa aaa aaaa aaaaa"
+-/-- info: "PM PM PM PM p" -/
++/-- info: "PM PM PM post meridiem p" -/
+ #guard_msgs in #eval time₄.format "a aa aaa aaaa aaaaa"
+ 
+ -- ──────────────────────────────────────────────────────────────────────────────

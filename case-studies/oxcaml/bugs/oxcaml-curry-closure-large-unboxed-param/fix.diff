@@ -1,0 +1,155 @@
+diff --git a/backend/cmm_helpers.ml b/backend/cmm_helpers.ml
+index 99055a6665..6e5ec2d2c4 100644
+--- a/backend/cmm_helpers.ml
++++ b/backend/cmm_helpers.ml
+@@ -303,12 +303,8 @@ let white_mixed_block_header tag sz ~scannable_prefix_len =
+ let local_block_header ?block_kind tag sz =
+   Nativeint.logor (block_header ?block_kind tag sz) caml_local
+ 
+-let white_closure_header sz = block_header Obj.closure_tag sz
+-
+ let black_closure_header sz = black_block_header Obj.closure_tag sz
+ 
+-let local_closure_header sz = local_block_header Obj.closure_tag sz
+-
+ let infix_header ofs = block_header Obj.infix_tag ofs
+ 
+ let boxedfloat32_header = block_header Obj.custom_tag 2
+@@ -444,11 +440,6 @@ let alloc_boxedmask_header (mode : Cmm.Alloc_mode.t) dbg =
+ 
+ let alloc_floatarray_header len dbg = Cconst_natint (floatarray_header len, dbg)
+ 
+-let alloc_closure_header ~(mode : Cmm.Alloc_mode.t) sz dbg =
+-  match mode with
+-  | Heap -> Cconst_natint (white_closure_header sz, dbg)
+-  | Local -> Cconst_natint (local_closure_header sz, dbg)
+-
+ let alloc_infix_header ofs dbg = Cconst_natint (infix_header ofs, dbg)
+ 
+ let alloc_boxedint32_header (mode : Cmm.Alloc_mode.t) dbg =
+@@ -4286,6 +4277,27 @@ let value_slot_given_machtype vs =
+   in
+   List.map (fun (v, _) -> Cvar v) (non_scanned @ scanned)
+ 
++(* The memory chunks used to store [value_slot_given_machtype vs], in the same
++   order. *)
++let value_slot_memory_chunks_given_machtype vs =
++  let non_scanned, scanned =
++    List.partition_map
++      (fun (_, c) ->
++        match (c : machtype_component) with
++        | Int -> Left Word_int
++        | Float -> Left Double
++        | Float32 -> Left (Single { reg = Float32 })
++        | Vec128 -> Left Onetwentyeight_unaligned
++        | Vec256 -> Left Twofiftysix_unaligned
++        | Vec512 -> Left Fivetwelve_unaligned
++        | Mask -> Left Word_mask
++        | Val -> Right Word_val
++        | Valx2 -> Misc.fatal_error "Unexpected machtype_component Valx2"
++        | Addr -> Misc.fatal_error "[Addr] cannot be stored")
++      vs
++  in
++  non_scanned @ scanned
++
+ let read_from_closure_given_machtype t clos base_offset dbg =
+   let load chunk offset =
+     (* Closure value slots are write-once (a partial-application closure is
+@@ -4409,32 +4421,33 @@ let intermediate_curry_functions ~nlocal ~arity result =
+             List.map (fun (arg, t) -> VP.create arg, [| t |]) args
+             @ [VP.create clos, typ_val];
+           fun_body =
+-            Cop
+-              ( Calloc (mode, Alloc_block_kind_closure),
+-                [ alloc_closure_header ~mode
+-                    (function_slot_size + machtype_stored_size arg_type + 1)
+-                    (dbg ());
+-                  Cconst_symbol
+-                    ( global_symbol (name1 ^ "_" ^ Int.to_string (num + 1)),
+-                      dbg () );
+-                  Cconst_natint
+-                    ( pack_closure_info
+-                        ~arity:(if has_nary then narity - num - 1 else 1)
+-                        ~startenv:
+-                          (function_slot_size
+-                          + machtype_non_scanned_size arg_type)
+-                        ~is_last:true,
+-                      dbg () ) ]
+-                @ (if has_nary
+-                   then
+-                     [ Cconst_symbol
+-                         ( global_symbol
+-                             (name1 ^ "_" ^ Int.to_string (num + 1) ^ "_app"),
+-                           dbg () ) ]
+-                   else [])
+-                @ value_slot_given_machtype args
+-                @ [Cvar clos],
+-                dbg () );
++            (* [make_closure_alloc] falls back to [caml_alloc_shr_check_gc]
++               when the closure is too big for the minor heap, which can happen
++               when [arg_type] is a large unboxed product. *)
++            make_closure_alloc ~mode (dbg ()) ~tag:Obj.closure_tag
++              ([ Cconst_symbol
++                   ( global_symbol (name1 ^ "_" ^ Int.to_string (num + 1)),
++                     dbg () );
++                 Cconst_natint
++                   ( pack_closure_info
++                       ~arity:(if has_nary then narity - num - 1 else 1)
++                       ~startenv:
++                         (function_slot_size
++                         + machtype_non_scanned_size arg_type)
++                       ~is_last:true,
++                     dbg () ) ]
++              @ (if has_nary
++                 then
++                   [ Cconst_symbol
++                       ( global_symbol
++                           (name1 ^ "_" ^ Int.to_string (num + 1) ^ "_app"),
++                         dbg () ) ]
++                 else [])
++              @ value_slot_given_machtype args
++              @ [Cvar clos])
++              ((Word_int :: Word_int :: (if has_nary then [Word_int] else []))
++              @ value_slot_memory_chunks_given_machtype args
++              @ [Word_val]);
+           fun_codegen_options = [];
+           fun_dbg;
+           fun_poll = Default_poll;
+diff --git a/testsuite/tests/flambda2/curry_closure_large_unboxed_product.ml b/testsuite/tests/flambda2/curry_closure_large_unboxed_product.ml
+new file mode 100644
+index 0000000000..977a23940a
+--- /dev/null
++++ b/testsuite/tests/flambda2/curry_closure_large_unboxed_product.ml
+@@ -0,0 +1,25 @@
++(* TEST
++ flambda2;
++ native;
++*)
++
++(* The partial-application closure built by caml_curry for [f] holds every
++   component of the unboxed record [r], which is more than Max_young_wosize
++   words, so it has to be allocated directly in the major heap. *)
++
++external box_float : float# -> float = "%box_float"
++
++type r = #{ f0 : int; f1 : float#; f2 : string; f3 : int; f4 : float#; f5 : string; f6 : int; f7 : float#; f8 : string; f9 : int; f10 : float#; f11 : string; f12 : int; f13 : float#; f14 : string; f15 : int; f16 : float#; f17 : string; f18 : int; f19 : float#; f20 : string; f21 : int; f22 : float#; f23 : string; f24 : int; f25 : float#; f26 : string; f27 : int; f28 : float#; f29 : string; f30 : int; f31 : float#; f32 : string; f33 : int; f34 : float#; f35 : string; f36 : int; f37 : float#; f38 : string; f39 : int; f40 : float#; f41 : string; f42 : int; f43 : float#; f44 : string; f45 : int; f46 : float#; f47 : string; f48 : int; f49 : float#; f50 : string; f51 : int; f52 : float#; f53 : string; f54 : int; f55 : float#; f56 : string; f57 : int; f58 : float#; f59 : string; f60 : int; f61 : float#; f62 : string; f63 : int; f64 : float#; f65 : string; f66 : int; f67 : float#; f68 : string; f69 : int; f70 : float#; f71 : string; f72 : int; f73 : float#; f74 : string; f75 : int; f76 : float#; f77 : string; f78 : int; f79 : float#; f80 : string; f81 : int; f82 : float#; f83 : string; f84 : int; f85 : float#; f86 : string; f87 : int; f88 : float#; f89 : string; f90 : int; f91 : float#; f92 : string; f93 : int; f94 : float#; f95 : string; f96 : int; f97 : float#; f98 : string; f99 : int; f100 : float#; f101 : string; f102 : int; f103 : float#; f104 : string; f105 : int; f106 : float#; f107 : string; f108 : int; f109 : float#; f110 : string; f111 : int; f112 : float#; f113 : string; f114 : int; f115 : float#; f116 : string; f117 : int; f118 : float#; f119 : string; f120 : int; f121 : float#; f122 : string; f123 : int; f124 : float#; f125 : string; f126 : int; f127 : float#; f128 : string; f129 : int; f130 : float#; f131 : string; f132 : int; f133 : float#; f134 : string; f135 : int; f136 : float#; f137 : string; f138 : int; f139 : float#; f140 : string; f141 : int; f142 : float#; f143 : string; f144 : int; f145 : float#; f146 : string; f147 : int; f148 : float#; f149 : string; f150 : int; f151 : float#; f152 : string; f153 : int; f154 : float#; f155 : string; f156 : int; f157 : float#; f158 : string; f159 : int; f160 : float#; f161 : string; f162 : int; f163 : float#; f164 : string; f165 : int; f166 : float#; f167 : string; f168 : int; f169 : float#; f170 : string; f171 : int; f172 : float#; f173 : string; f174 : int; f175 : float#; f176 : string; f177 : int; f178 : float#; f179 : string; f180 : int; f181 : float#; f182 : string; f183 : int; f184 : float#; f185 : string; f186 : int; f187 : float#; f188 : string; f189 : int; f190 : float#; f191 : string; f192 : int; f193 : float#; f194 : string; f195 : int; f196 : float#; f197 : string; f198 : int; f199 : float#; f200 : string; f201 : int; f202 : float#; f203 : string; f204 : int; f205 : float#; f206 : string; f207 : int; f208 : float#; f209 : string; f210 : int; f211 : float#; f212 : string; f213 : int; f214 : float#; f215 : string; f216 : int; f217 : float#; f218 : string; f219 : int; f220 : float#; f221 : string; f222 : int; f223 : float#; f224 : string; f225 : int; f226 : float#; f227 : string; f228 : int; f229 : float#; f230 : string; f231 : int; f232 : float#; f233 : string; f234 : int; f235 : float#; f236 : string; f237 : int; f238 : float#; f239 : string; f240 : int; f241 : float#; f242 : string; f243 : int; f244 : float#; f245 : string; f246 : int; f247 : float#; f248 : string; f249 : int; f250 : float#; f251 : string; f252 : int; f253 : float#; f254 : string; f255 : int; f256 : float#; f257 : string; f258 : int; f259 : float#; f260 : string; f261 : int; f262 : float#; f263 : string; f264 : int; f265 : float#; f266 : string; f267 : int; f268 : float#; f269 : string; f270 : int; f271 : float#; f272 : string; f273 : int; f274 : float#; f275 : string; f276 : int; f277 : float#; f278 : string; f279 : int; f280 : float#; f281 : string; f282 : int; f283 : float#; f284 : string; f285 : int; f286 : float#; f287 : string; f288 : int; f289 : float#; f290 : string; f291 : int; f292 : float#; f293 : string; f294 : int; f295 : float#; f296 : string; f297 : int; f298 : float#; f299 : string }
++
++let[@inline never] f (x : int) (r : r) (y : int) =
++  x + r.#f0 + int_of_string r.#f2 + int_of_float (box_float r.#f298)
++  + int_of_string r.#f299 + y
++
++let g = Sys.opaque_identity f
++
++let () =
++  let r = #{ f0 = 0; f1 = #1.5; f2 = (string_of_int 2); f3 = 3; f4 = #4.5; f5 = (string_of_int 5); f6 = 6; f7 = #7.5; f8 = (string_of_int 8); f9 = 9; f10 = #10.5; f11 = (string_of_int 11); f12 = 12; f13 = #13.5; f14 = (string_of_int 14); f15 = 15; f16 = #16.5; f17 = (string_of_int 17); f18 = 18; f19 = #19.5; f20 = (string_of_int 20); f21 = 21; f22 = #22.5; f23 = (string_of_int 23); f24 = 24; f25 = #25.5; f26 = (string_of_int 26); f27 = 27; f28 = #28.5; f29 = (string_of_int 29); f30 = 30; f31 = #31.5; f32 = (string_of_int 32); f33 = 33; f34 = #34.5; f35 = (string_of_int 35); f36 = 36; f37 = #37.5; f38 = (string_of_int 38); f39 = 39; f40 = #40.5; f41 = (string_of_int 41); f42 = 42; f43 = #43.5; f44 = (string_of_int 44); f45 = 45; f46 = #46.5; f47 = (string_of_int 47); f48 = 48; f49 = #49.5; f50 = (string_of_int 50); f51 = 51; f52 = #52.5; f53 = (string_of_int 53); f54 = 54; f55 = #55.5; f56 = (string_of_int 56); f57 = 57; f58 = #58.5; f59 = (string_of_int 59); f60 = 60; f61 = #61.5; f62 = (string_of_int 62); f63 = 63; f64 = #64.5; f65 = (string_of_int 65); f66 = 66; f67 = #67.5; f68 = (string_of_int 68); f69 = 69; f70 = #70.5; f71 = (string_of_int 71); f72 = 72; f73 = #73.5; f74 = (string_of_int 74); f75 = 75; f76 = #76.5; f77 = (string_of_int 77); f78 = 78; f79 = #79.5; f80 = (string_of_int 80); f81 = 81; f82 = #82.5; f83 = (string_of_int 83); f84 = 84; f85 = #85.5; f86 = (string_of_int 86); f87 = 87; f88 = #88.5; f89 = (string_of_int 89); f90 = 90; f91 = #91.5; f92 = (string_of_int 92); f93 = 93; f94 = #94.5; f95 = (string_of_int 95); f96 = 96; f97 = #97.5; f98 = (string_of_int 98); f99 = 99; f100 = #100.5; f101 = (string_of_int 101); f102 = 102; f103 = #103.5; f104 = (string_of_int 104); f105 = 105; f106 = #106.5; f107 = (string_of_int 107); f108 = 108; f109 = #109.5; f110 = (string_of_int 110); f111 = 111; f112 = #112.5; f113 = (string_of_int 113); f114 = 114; f115 = #115.5; f116 = (string_of_int 116); f117 = 117; f118 = #118.5; f119 = (string_of_int 119); f120 = 120; f121 = #121.5; f122 = (string_of_int 122); f123 = 123; f124 = #124.5; f125 = (string_of_int 125); f126 = 126; f127 = #127.5; f128 = (string_of_int 128); f129 = 129; f130 = #130.5; f131 = (string_of_int 131); f132 = 132; f133 = #133.5; f134 = (string_of_int 134); f135 = 135; f136 = #136.5; f137 = (string_of_int 137); f138 = 138; f139 = #139.5; f140 = (string_of_int 140); f141 = 141; f142 = #142.5; f143 = (string_of_int 143); f144 = 144; f145 = #145.5; f146 = (string_of_int 146); f147 = 147; f148 = #148.5; f149 = (string_of_int 149); f150 = 150; f151 = #151.5; f152 = (string_of_int 152); f153 = 153; f154 = #154.5; f155 = (string_of_int 155); f156 = 156; f157 = #157.5; f158 = (string_of_int 158); f159 = 159; f160 = #160.5; f161 = (string_of_int 161); f162 = 162; f163 = #163.5; f164 = (string_of_int 164); f165 = 165; f166 = #166.5; f167 = (string_of_int 167); f168 = 168; f169 = #169.5; f170 = (string_of_int 170); f171 = 171; f172 = #172.5; f173 = (string_of_int 173); f174 = 174; f175 = #175.5; f176 = (string_of_int 176); f177 = 177; f178 = #178.5; f179 = (string_of_int 179); f180 = 180; f181 = #181.5; f182 = (string_of_int 182); f183 = 183; f184 = #184.5; f185 = (string_of_int 185); f186 = 186; f187 = #187.5; f188 = (string_of_int 188); f189 = 189; f190 = #190.5; f191 = (string_of_int 191); f192 = 192; f193 = #193.5; f194 = (string_of_int 194); f195 = 195; f196 = #196.5; f197 = (string_of_int 197); f198 = 198; f199 = #199.5; f200 = (string_of_int 200); f201 = 201; f202 = #202.5; f203 = (string_of_int 203); f204 = 204; f205 = #205.5; f206 = (string_of_int 206); f207 = 207; f208 = #208.5; f209 = (string_of_int 209); f210 = 210; f211 = #211.5; f212 = (string_of_int 212); f213 = 213; f214 = #214.5; f215 = (string_of_int 215); f216 = 216; f217 = #217.5; f218 = (string_of_int 218); f219 = 219; f220 = #220.5; f221 = (string_of_int 221); f222 = 222; f223 = #223.5; f224 = (string_of_int 224); f225 = 225; f226 = #226.5; f227 = (string_of_int 227); f228 = 228; f229 = #229.5; f230 = (string_of_int 230); f231 = 231; f232 = #232.5; f233 = (string_of_int 233); f234 = 234; f235 = #235.5; f236 = (string_of_int 236); f237 = 237; f238 = #238.5; f239 = (string_of_int 239); f240 = 240; f241 = #241.5; f242 = (string_of_int 242); f243 = 243; f244 = #244.5; f245 = (string_of_int 245); f246 = 246; f247 = #247.5; f248 = (string_of_int 248); f249 = 249; f250 = #250.5; f251 = (string_of_int 251); f252 = 252; f253 = #253.5; f254 = (string_of_int 254); f255 = 255; f256 = #256.5; f257 = (string_of_int 257); f258 = 258; f259 = #259.5; f260 = (string_of_int 260); f261 = 261; f262 = #262.5; f263 = (string_of_int 263); f264 = 264; f265 = #265.5; f266 = (string_of_int 266); f267 = 267; f268 = #268.5; f269 = (string_of_int 269); f270 = 270; f271 = #271.5; f272 = (string_of_int 272); f273 = 273; f274 = #274.5; f275 = (string_of_int 275); f276 = 276; f277 = #277.5; f278 = (string_of_int 278); f279 = 279; f280 = #280.5; f281 = (string_of_int 281); f282 = 282; f283 = #283.5; f284 = (string_of_int 284); f285 = 285; f286 = #286.5; f287 = (string_of_int 287); f288 = 288; f289 = #289.5; f290 = (string_of_int 290); f291 = 291; f292 = #292.5; f293 = (string_of_int 293); f294 = 294; f295 = #295.5; f296 = (string_of_int 296); f297 = 297; f298 = #298.5; f299 = (string_of_int 299) } in
++  let h = g 1 r in
++  Gc.full_major ();
++  let h = Sys.opaque_identity h in
++  Printf.printf "%d\n" (h 1000)
+diff --git a/testsuite/tests/flambda2/curry_closure_large_unboxed_product.reference b/testsuite/tests/flambda2/curry_closure_large_unboxed_product.reference
+new file mode 100644
+index 0000000000..b67470f1dc
+--- /dev/null
++++ b/testsuite/tests/flambda2/curry_closure_large_unboxed_product.reference
+@@ -0,0 +1 @@
++1600

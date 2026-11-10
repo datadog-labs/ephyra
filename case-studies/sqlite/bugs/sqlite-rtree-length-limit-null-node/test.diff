@@ -1,0 +1,98 @@
+--- a/ext/rtree/rtree1.test
++++ b/ext/rtree/rtree1.test
+@@ -1190,6 +1190,95 @@
+     SELECT rowid FROM g
+      WHERE geopoly_overlap(_shape, '[[10,10],[12,10],[12,12],[10,12],[10,10]]');
+   } {1}
++}
++
++#-------------------------------------------------------------------------
++# A node blob (820 bytes here) is longer than SQLITE_LIMIT_LENGTH. Writing
++# it must fail with SQLITE_TOOBIG and leave the table as it was, not store
++# NULL in place of the node.
++#
++reset_db
++do_execsql_test 32.0 {
++  CREATE VIRTUAL TABLE rt USING rtree(id, x0, x1);
++  INSERT INTO rt VALUES(1, 0, 10);
+ }
++sqlite3_limit db SQLITE_LIMIT_LENGTH 100
++do_catchsql_test 32.1 {
++  INSERT INTO rt VALUES(2, 5, 6);
++} {1 {string or blob too big}}
++do_test 32.2 { sqlite3_extended_errcode db } SQLITE_TOOBIG
++do_execsql_test 32.3 { BEGIN }
++do_catchsql_test 32.4 {
++  INSERT INTO rt VALUES(3, 5, 6);
++} {1 {string or blob too big}}
++do_catchsql_test 32.5 {
++  DELETE FROM rt;
++} {1 {string or blob too big}}
++do_execsql_test 32.6 { COMMIT }
++sqlite3_limit db SQLITE_LIMIT_LENGTH 1000000000
++do_execsql_test 32.7 {
++  SELECT nodeno, typeof(data), length(data) FROM rt_node;
++  SELECT * FROM rt;
++  PRAGMA integrity_check;
++} {1 blob 820 1 0.0 10.0 ok}
++db close
++sqlite3 db test.db
++do_execsql_test 32.8 {
++  INSERT INTO rt VALUES(2, 5, 6);
++  SELECT * FROM rt;
++  PRAGMA integrity_check;
++} {1 0.0 10.0 2 5.0 6.0 ok}
+ 
++# Limits between the node size (820) and the %_node record size (824):
++# the INSERT must fail before it writes anything.
++#
++foreach L {820 823} {
++  sqlite3_limit db SQLITE_LIMIT_LENGTH $L
++  do_execsql_test 32.9.$L.1 { BEGIN }
++  do_catchsql_test 32.9.$L.2 {
++    INSERT INTO rt VALUES(3, 5, 6)
++  } {1 {string or blob too big}}
++  do_execsql_test 32.9.$L.3 { COMMIT }
++  sqlite3_limit db SQLITE_LIMIT_LENGTH 1000000000
++  do_execsql_test 32.9.$L.4 {
++    SELECT rtreecheck('rt'); PRAGMA integrity_check
++  } {ok ok}
++}
++
++# The same for geopoly. Also, a _shape blob (4+8*200 bytes here) can be
++# longer than its JSON text, and longer than SQLITE_LIMIT_LENGTH.
++#
++ifcapable geopoly {
++  reset_db
++  set shape {[}
++  for {set i 0} {$i<200} {incr i} { append shape "\[[expr $i%10],[expr $i/10]\]," }
++  append shape {[0,0]]}
++  do_execsql_test 33.0 {
++    CREATE VIRTUAL TABLE g USING geopoly();
++    INSERT INTO g(rowid, _shape) VALUES(1, '[[0,0],[1,0],[1,1],[0,0]]');
++  }
++  sqlite3_limit db SQLITE_LIMIT_LENGTH 100
++  do_catchsql_test 33.1 {
++    INSERT INTO g(rowid, _shape) VALUES(2, '[[0,0],[2,0],[2,2],[0,0]]');
++  } {1 {string or blob too big}}
++  do_catchsql_test 33.2 {
++    DELETE FROM g;
++  } {1 {string or blob too big}}
++  sqlite3_limit db SQLITE_LIMIT_LENGTH 1500
++  do_test 33.3 { expr {[string length $shape]<1500} } 1
++  do_catchsql_test 33.4 {
++    INSERT INTO g(rowid, _shape) VALUES(3, $shape);
++  } {1 {string or blob too big}}
++  sqlite3_limit db SQLITE_LIMIT_LENGTH 1000000000
++  do_execsql_test 33.5 {
++    SELECT rowid, geopoly_json(_shape) FROM g;
++    PRAGMA integrity_check;
++  } {1 {[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,0.0]]} ok}
++  do_execsql_test 33.6 {
++    INSERT INTO g(rowid, _shape) VALUES(3, $shape);
++    SELECT rowid, length(_shape) FROM g;
++    PRAGMA integrity_check;
++  } {1 28 3 1604 ok}
++}
++
+ finish_test

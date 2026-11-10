@@ -1,0 +1,44 @@
+diff --git a/src/Lean/Meta/Tactic/Grind/MatchCond.lean b/src/Lean/Meta/Tactic/Grind/MatchCond.lean
+index 1f4dbba779..aedbcec34d 100644
+--- a/src/Lean/Meta/Tactic/Grind/MatchCond.lean
++++ b/src/Lean/Meta/Tactic/Grind/MatchCond.lean
+@@ -323,6 +323,8 @@ where
+             return some (mkApp h (← mkLambdaFVars xs hx))
+           return none
+     else if root.interpreted then
++      -- `rhs` may be a pattern variable, see `isMatchCondFalseHyp`
++      unless (← isLitValue rhs) do return none
+       if (← normLitValue root.self) != (← normLitValue rhs) then
+         let hne ← mkDecideProof (mkNot (← mkEq root.self rhs))
+         return some (mkApp hne h)
+diff --git a/tests/elab/grind_match_cond_lit_pvar.lean b/tests/elab/grind_match_cond_lit_pvar.lean
+new file mode 100644
+index 0000000000..3a8c3ee96e
+--- /dev/null
++++ b/tests/elab/grind_match_cond_lit_pvar.lean
+@@ -0,0 +1,25 @@
++/-!
++`grind` must not refute a `match`-condition equality between a literal and a pattern
++variable by `decide` when it builds the proof of the condition.
++-/
++
++def f0 (x : Nat) : Nat :=
++  match (x, 1) with
++  | (a, 0) => a
++  | _ => 7
++
++example : f0 3 = 7 := by grind [f0]
++
++def f1 (s : Nat × Bool) : Nat :=
++  match s with
++  | (_, true) => 0
++  | _ => 1
++
++example : f1 (3, false) = 1 := by grind [f1]
++
++def f2 (x : Nat) (y : UInt8) : Nat :=
++  match (x, y) with
++  | (a, 0) => a
++  | _ => 7
++
++example : f2 3 1 = 7 := by grind [f2]

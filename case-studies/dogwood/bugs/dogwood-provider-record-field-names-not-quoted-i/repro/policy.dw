@@ -1,0 +1,1 @@
+permit (principal, action, resource) when { Odd::Keys()["a b"] < context.input.n };

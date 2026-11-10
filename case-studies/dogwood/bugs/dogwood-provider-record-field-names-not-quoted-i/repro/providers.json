@@ -1,0 +1,1 @@
+{"availableProviders":{"Odd::Keys":{"argumentTypes":[],"outputType":{"paramType":"record","fields":{"a b":{"paramType":"long"}},"required":["a b"]},"implementation":{"kind":"rhai","script":"fn evaluate() { #{ \"a b\": 1 } }"}}}}

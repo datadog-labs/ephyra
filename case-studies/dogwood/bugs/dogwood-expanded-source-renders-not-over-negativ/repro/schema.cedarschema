@@ -1,0 +1,3 @@
+entity User;
+entity Doc;
+action "Read" appliesTo { principal: [User], resource: [Doc] };

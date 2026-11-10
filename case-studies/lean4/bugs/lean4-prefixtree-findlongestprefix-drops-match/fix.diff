@@ -1,0 +1,13 @@
+diff --git a/src/Lean/Data/PrefixTree.lean b/src/Lean/Data/PrefixTree.lean
+index 6c9deec108..a77ce3a6a7 100644
+--- a/src/Lean/Data/PrefixTree.lean
++++ b/src/Lean/Data/PrefixTree.lean
+@@ -59,7 +59,7 @@ partial def findLongestPrefix? (cmp : α → α → Ordering) (t : PrefixTreeNod
+     | PrefixTreeNode.Node val _, [] => val <|> acc?
+     | PrefixTreeNode.Node val m, k :: ks =>
+       match m.get? k with
+-      | none   => val
++      | none   => val <|> acc?
+       | some t => loop (val <|> acc?) t ks
+   loop none t k
+ 

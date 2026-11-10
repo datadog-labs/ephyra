@@ -1,0 +1,8 @@
+def temporal login_at(?t) { App::Action::"Login"::request{} && tp(?t) };
+
+permit (principal, action == App::Action::"Login", resource);
+
+forbid (principal, action == App::Action::"Login", resource)
+when temporal {
+    exists (t: Timepoint). formerly within 5s login_at(t)
+};

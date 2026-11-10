@@ -1,0 +1,54 @@
+diff --git a/src/Lean/Elab/PreDefinition/Eqns.lean b/src/Lean/Elab/PreDefinition/Eqns.lean
+index d5af7d2c05..f8a63fc423 100644
+--- a/src/Lean/Elab/PreDefinition/Eqns.lean
++++ b/src/Lean/Elab/PreDefinition/Eqns.lean
+@@ -179,14 +179,13 @@ partial def saveEqn (mvarId : MVarId) : StateRefT (Array Expr) MetaM Unit := mva
+   modify (·.push type)
+ where
+   /--
+-    We say the type/proposition is "irrelevant" if
+-    1- It does not contain any variable in `fvarIdSet` OR
+-    2- It is of the form `x = t` or `t = x` where `x` is a free variable
+-       that is not in `fvarIdSet`. This can of equality can be eliminated by substitution.  -/
++    We say the type/proposition is "irrelevant" if it is of the form `x = t` or `t = x` where `x`
++    is a free variable that is not in `fvarIdSet`. This kind of equality can be eliminated by
++    substitution. Other propositions are kept even if they do not mention `fvarIdSet`: e.g.
++    `heq : id 0 = n.succ` or `heq : 7 - 0 = 0` from splitting `match id a, a with ...` is the only
++    reason the alternative applies. -/
+   isIrrelevant (fvarIdSet : FVarIdSet) (type : Expr) : MetaM Bool := do
+-    if Option.isNone <| type.find? fun e => e.isFVar && fvarIdSet.contains e.fvarId! then
+-      return true
+-    else if let some (_, lhs, rhs) := type.eq? then
++    if let some (_, lhs, rhs) := type.eq? then
+       return (lhs.isFVar && !fvarIdSet.contains lhs.fvarId!)
+              || (rhs.isFVar && !fvarIdSet.contains rhs.fvarId!)
+     else
+diff --git a/tests/elab/eqnsNonVarDiscrHyp.lean b/tests/elab/eqnsNonVarDiscrHyp.lean
+new file mode 100644
+index 0000000000..11c27273d8
+--- /dev/null
++++ b/tests/elab/eqnsNonVarDiscrHyp.lean
+@@ -0,0 +1,23 @@
++/-!
++Equation lemmas for a `match` on a non-variable discriminant keep the hypothesis
++`id 0 = n.succ` (or `7 - 0 = 0`) of an alternative even when it mentions no variable of its conclusion.
++-/
++
++def f (a : Nat) : Nat := match id a, a with | 0, _ => 1 | _+1, 0 => 2 | _, _+1 => 3
++
++/-- info: f.eq_2 (n : Nat) : id 0 = n.succ → f 0 = 2 -/
++#guard_msgs in #check f.eq_2
++
++def g (a : Nat) : StateM Nat Nat := do
++  match a / a, a with
++  | 0, _ => set 0
++  | _+1, 0 => pure ()
++  | _, _+1 => pure ()
++  return 0
++
++example (a : Nat) : g a = g a := by simp only [g]
++
++def h (a : Nat) : Nat := match 7 - 0, a with | 0, _ => 1 | _+1, 0 => 2 | _, _+1 => 3
++
++/-- info: h.eq_1 (a✝ : Nat) : 7 - 0 = 0 → h a✝ = 1 -/
++#guard_msgs in #check h.eq_1

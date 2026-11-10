@@ -1,0 +1,6 @@
+namespace App {
+  type Ctx = { input: { n: Long }, output?: { r: Long } };
+  entity User;
+  entity Doc;
+  action "Read" appliesTo { principal: [User], resource: [Doc], context: Ctx };
+}

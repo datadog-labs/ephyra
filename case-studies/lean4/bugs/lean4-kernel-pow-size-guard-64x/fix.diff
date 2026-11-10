@@ -1,0 +1,46 @@
+diff --git a/src/kernel/type_checker.cpp b/src/kernel/type_checker.cpp
+index bf8d959df6..1b5f0bd016 100644
+--- a/src/kernel/type_checker.cpp
++++ b/src/kernel/type_checker.cpp
+@@ -631,12 +631,16 @@ optional<expr> type_checker::reduce_pow(expr const & e) {
+     nat base = get_nat_val(arg1);
+     nat exp  = get_nat_val(arg2);
+     size_t k = get_count_arg(env(), exp, "Nat.pow");
+-    // `base^exp` has at most `size(base) * k` bytes (`base <= 1` yields `0`/`1`).
++    // `base < 2^bits`, so `base^exp` has fewer than `bits * k` bits (`base <= 1` yields `0`/`1`).
+     // Compare via division to avoid overflowing the product.
+-    if (base > nat(1) && k != 0 && nat_size_in_bytes(base) > g_nat_max_size / k)
+-        throw kernel_exception(env(), "the kernel refused to evaluate `Nat.pow` because "
+-            "the result would exceed the maximum numeral size; increase the "
+-            "LEAN_NAT_MAX_SIZE environment variable to allow it");
++    if (base > nat(1) && k != 0) {
++        size_t bits = (base.is_small() ? mpz::of_size_t(base.get_small_value()).log2() : base.get_big_value().log2()) + 1;
++        size_t max_bits = g_nat_max_size > SIZE_MAX / 8 ? SIZE_MAX : g_nat_max_size * 8;
++        if (k > max_bits / bits)
++            throw kernel_exception(env(), "the kernel refused to evaluate `Nat.pow` because "
++                "the result would exceed the maximum numeral size; increase the "
++                "LEAN_NAT_MAX_SIZE environment variable to allow it");
++    }
+     return some_expr(mk_lit(literal(nat(nat_pow(base.raw(), exp.raw())))));
+ }
+ 
+diff --git a/tests/elab/nat_size_limit.lean b/tests/elab/nat_size_limit.lean
+index b6090701ab..dde148178c 100644
+--- a/tests/elab/nat_size_limit.lean
++++ b/tests/elab/nat_size_limit.lean
+@@ -28,8 +28,14 @@ def mulBig : Nat := a * a                        -- 2^128, three limbs
+ #guard_msgs in
+ #eval kwhnf `mulBig
+ 
+--- `Nat.pow`: the result and the exponent are both bounded.
++-- `Nat.pow`: the result and the exponent are both bounded. The bound is in bits of
++-- the base, not bytes: `2 ^ 64` (two limbs) is accepted.
++def powOk  : Nat := 2 ^ 64
+ def powBig : Nat := 2 ^ 100
++
++/-- info: 18446744073709551616 -/
++#guard_msgs in
++#eval kwhnf `powOk
+ def powHugeExp : Nat := 2 ^ 4294967296
+ 
+ /-- error: (kernel) the kernel refused to evaluate `Nat.pow` because the result would exceed the maximum numeral size; increase the LEAN_NAT_MAX_SIZE environment variable to allow it -/

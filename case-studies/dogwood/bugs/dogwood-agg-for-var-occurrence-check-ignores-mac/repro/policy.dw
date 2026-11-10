@@ -1,0 +1,6 @@
+def temporal login_by(?u) { App::Action::"Login"::request{ input.user: ?u } };
+
+permit (principal, action == App::Action::"Login", resource)
+when temporal {
+    (count for (u: String). where (formerly within 1h login_by(u))) < 3
+};

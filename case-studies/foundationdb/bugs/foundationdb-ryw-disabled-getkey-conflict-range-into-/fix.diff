@@ -1,0 +1,93 @@
+diff --git a/fdbclient/NativeAPI.cpp b/fdbclient/NativeAPI.cpp
+index b855fb4ee..5de06788a 100644
+--- a/fdbclient/NativeAPI.cpp
++++ b/fdbclient/NativeAPI.cpp
+@@ -3905,6 +3905,14 @@ Future<Void> Transaction::getRangeStream(PromiseStream<RangeResult>& results,
+ 	return getRangeStream(results, begin, end, GetRangeLimits(limit), snapshot, reverse);
+ }
+ 
++void Transaction::clipExtraReadConflictRanges(size_t from, Key end) {
++	for (size_t i = from; i < extraConflictRanges.size(); ++i) {
++		extraConflictRanges[i] = map(extraConflictRanges[i], [end](std::pair<Key, Key> const& r) {
++			return std::make_pair(std::min(r.first, end), std::min(r.second, end));
++		});
++	}
++}
++
+ void Transaction::addReadConflictRange(KeyRangeRef const& keys) {
+ 	ASSERT(!keys.empty());
+ 
+diff --git a/fdbclient/ReadYourWrites.cpp b/fdbclient/ReadYourWrites.cpp
+index 131f4ca9d..49b547c24 100644
+--- a/fdbclient/ReadYourWrites.cpp
++++ b/fdbclient/ReadYourWrites.cpp
+@@ -186,8 +186,18 @@ public:
+ 		return ryw->tr.get(read.key, snapshot);
+ 	}
+ 
++	// NativeAPI resolves key selectors over all keys, so the conflict range of a read through it can extend into the
++	// system keys even when the result is clipped. Clip the conflict ranges added since `from` the same way.
++	static void clipConflictRangesThrough(ReadYourWritesTransaction* ryw, size_t from) {
++		if (!ryw->options.readSystemKeys)
++			ryw->tr.clipExtraReadConflictRanges(from, keyAfter(ryw->getMaxReadKey()));
++	}
++
+ 	static Future<Key> readThrough(ReadYourWritesTransaction* ryw, GetKeyReq read, Snapshot snapshot) {
+-		Key key = co_await ryw->tr.getKey(read.key, snapshot);
++		size_t from = ryw->tr.getExtraReadConflictRanges().size();
++		Future<Key> fkey = ryw->tr.getKey(read.key, snapshot);
++		clipConflictRangesThrough(ryw, from);
++		Key key = co_await fkey;
+ 		if (ryw->getMaxReadKey() < key)
+ 			co_return ryw->getMaxReadKey(); // Filter out results in the system keys if they are not accessible
+ 		co_return key;
+@@ -200,15 +210,21 @@ public:
+ 		if (backwards && read.end.offset > 1) {
+ 			// FIXME: Optimistically assume that this will not run into the system keys, and only reissue if the result
+ 			// actually does.
+-			Key key = co_await ryw->tr.getKey(read.end, snapshot);
++			size_t from = ryw->tr.getExtraReadConflictRanges().size();
++			Future<Key> fkey = ryw->tr.getKey(read.end, snapshot);
++			clipConflictRangesThrough(ryw, from);
++			Key key = co_await fkey;
+ 			if (key > ryw->getMaxReadKey())
+ 				read.end = firstGreaterOrEqual(ryw->getMaxReadKey());
+ 			else
+ 				read.end = KeySelector(firstGreaterOrEqual(key), key.arena());
+ 		}
+ 
+-		RangeResult v = co_await ryw->tr.getRange(
++		size_t from = ryw->tr.getExtraReadConflictRanges().size();
++		Future<RangeResult> fv = ryw->tr.getRange(
+ 		    read.begin, read.end, read.limits, snapshot, backwards ? Reverse::True : Reverse::False);
++		clipConflictRangesThrough(ryw, from);
++		RangeResult v = co_await fv;
+ 		KeyRef maxKey = ryw->getMaxReadKey();
+ 		if (!v.empty()) {
+ 			if (!backwards && v[v.size() - 1].key >= maxKey) {
+@@ -1156,7 +1172,10 @@ public:
+ 		if (backwards && read.end.offset > 1) {
+ 			// FIXME: Optimistically assume that this will not run into the system keys, and only reissue if the result
+ 			// actually does.
+-			Key key = co_await ryw->tr.getKey(read.end, snapshot);
++			size_t from = ryw->tr.getExtraReadConflictRanges().size();
++			Future<Key> fkey = ryw->tr.getKey(read.end, snapshot);
++			clipConflictRangesThrough(ryw, from);
++			Key key = co_await fkey;
+ 			if (key > ryw->getMaxReadKey())
+ 				read.end = firstGreaterOrEqual(ryw->getMaxReadKey());
+ 			else
+diff --git a/fdbclient/include/fdbclient/NativeAPI.h b/fdbclient/include/fdbclient/NativeAPI.h
+index 33a977581..5980b696a 100644
+--- a/fdbclient/include/fdbclient/NativeAPI.h
++++ b/fdbclient/include/fdbclient/NativeAPI.h
+@@ -483,6 +483,9 @@ public:
+ 	void setToken(uint64_t token);
+ 
+ 	const std::vector<Future<std::pair<Key, Key>>>& getExtraReadConflictRanges() const { return extraConflictRanges; }
++	// Clips the conflict ranges of the reads issued since getExtraReadConflictRanges() had `from` entries so that they
++	// end no later than `end`.
++	void clipExtraReadConflictRanges(size_t from, Key end);
+ 	Standalone<VectorRef<KeyRangeRef>> readConflictRanges() const {
+ 		return Standalone<VectorRef<KeyRangeRef>>(tr.transaction.read_conflict_ranges, tr.arena);
+ 	}

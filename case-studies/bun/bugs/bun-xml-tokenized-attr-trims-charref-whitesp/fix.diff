@@ -1,0 +1,72 @@
+diff --git a/src/parsers/xml.rs b/src/parsers/xml.rs
+index 04a1a8b4d..cc6cfbb70 100644
+--- a/src/parsers/xml.rs
++++ b/src/parsers/xml.rs
+@@ -441,30 +441,6 @@ fn is_pubid_char(c: u8) -> bool {
+         )
+ }
+ 
+-/// `text` with `S` trimmed from both ends.
+-#[inline]
+-fn trim_ws<U: Unit>(text: &[U]) -> &[U] {
+-    trim_ws_end(trim_ws_start(text))
+-}
+-
+-#[inline]
+-fn trim_ws_start<U: Unit>(text: &[U]) -> &[U] {
+-    let mut a = 0;
+-    while a < text.len() && is_ws(text[a].low()) {
+-        a += 1;
+-    }
+-    &text[a..]
+-}
+-
+-#[inline]
+-fn trim_ws_end<U: Unit>(text: &[U]) -> &[U] {
+-    let mut b = text.len();
+-    while b > 0 && is_ws(text[b - 1].low()) {
+-        b -= 1;
+-    }
+-    &text[..b]
+-}
+-
+ /// `a == b` for the short slices names are, without a `memcmp` call.
+ #[inline]
+ fn name_eq<T: Copy + Eq>(a: &[T], b: &[T]) -> bool {
+@@ -4272,10 +4248,18 @@ impl<'a, 'log, U: Unit, S: Sink<'a, U>> Parser<'a, 'log, U, S> {
+ 
+ /// The extra normalization for attributes declared with a tokenized or
+ /// enumerated type (§3.3.3): leading and trailing spaces removed, runs of
+-/// spaces collapsed. All whitespace in `value` is already #x20.
++/// spaces collapsed. Only #x20 counts: a whitespace character other than a
++/// space in `value` came from a character reference and is kept.
+ fn collapse_spaces<'a, U: Unit>(bump: &'a Bump, value: &'a [U]) -> &'a [U] {
+-    // All whitespace in `value` is already #x20, so `trim_ws` trims spaces.
+-    let trimmed = trim_ws(value);
++    let mut a = 0;
++    let mut b = value.len();
++    while a < b && value[a].low() == b' ' {
++        a += 1;
++    }
++    while b > a && value[b - 1].low() == b' ' {
++        b -= 1;
++    }
++    let trimmed = &value[a..b];
+     if find_ascii(trimmed, b"  ").is_none() {
+         return trimmed;
+     }
+diff --git a/test/js/bun/xml/xml.test.ts b/test/js/bun/xml/xml.test.ts
+index 12763e840..4a475207f 100644
+--- a/test/js/bun/xml/xml.test.ts
++++ b/test/js/bun/xml/xml.test.ts
+@@ -647,6 +647,10 @@ describe("document type declaration", () => {
+     });
+     // ...unless it got there as a character reference to a character reference.
+     expect(XML.parse(`<!DOCTYPE d [<!ENTITY nl "&#38;#10;">]><d x="a&nl;b"/>`)).toEqual({ d: { "@x": "a\nb" } });
++    // A tokenized type trims and collapses only #x20, so referenced whitespace stays.
++    expect(
++      XML.parse(`<!DOCTYPE d [<!ATTLIST d t NMTOKENS #IMPLIED>]><d t="&#10;&#9; a  b &#13;&#x20;"/>`),
++    ).toEqual({ d: { "@t": "\n\t a b \r" } });
+   });
+ 
+   test("internal parameter entities are expanded between declarations", () => {

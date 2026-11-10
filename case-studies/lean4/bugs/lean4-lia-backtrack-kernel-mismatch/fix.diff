@@ -1,0 +1,53 @@
+--- a/src/Lean/Meta/Tactic/Grind/Arith/Cutsat/Search.lean	2026-11-03 05:26:52.951191781 +0000
++++ b/src/Lean/Meta/Tactic/Grind/Arith/Cutsat/Search.lean	2026-11-03 05:26:52.957570301 +0000
+@@ -524,6 +524,27 @@
+     trace[grind.debug.lia.search.backtrack] "skipping {case.fvarId.name}"
+   unreachable!
+ 
++/--
++Rolls the cutsat state back to `saved`, the state of a case split, but keeps the variables
++created after it, without constraints. The conflict proof being resolved may use them (e.g., the
++variable of an omega step, see `EqCnstr.elimNonUnit`), and it is used after backtracking.
++-/
++private def restoreCase (saved : State) : GoalM Unit := do
++  modify' fun s => Id.run do
++    if s.vars.size == saved.vars.size || s.varsHistory.size != saved.varsHistory.size then
++      return saved
++    let mut r := { saved with vars := s.vars, varMap := s.varMap }
++    for _ in [saved.vars.size:s.vars.size] do
++      r := { r with
++        dvds    := r.dvds.push none
++        lowers  := r.lowers.push {}
++        uppers  := r.uppers.push {}
++        diseqs  := r.diseqs.push {}
++        occurs  := r.occurs.push {}
++        elimEqs := r.elimEqs.push none
++      }
++    return r
++
+ def resolveConflict (h : UnsatProof) : SearchM Unit := do
+   trace[grind.debug.lia.search.backtrack] "resolve conflict, decision stack: {(← get).cases.toList.map fun c => c.fvarId.name}"
+   let decVars := h.collectDecVars.run (← get).decVars
+@@ -533,7 +554,7 @@
+     closeGoal (← h.toExprProof)
+     return ()
+   let c ← findCase decVars
+-  modify' fun _  => c.saved
++  restoreCase c.saved
+   trace[grind.debug.lia.search.backtrack] "backtracking {c.fvarId.name}"
+   let decVars := decVars.erase c.fvarId
+   match c.kind with
+--- /dev/null
++++ b/tests/elab/lia_omega_step_backtrack.lean	2026-11-03 05:56:35.069475516 +0000
+@@ -0,0 +1,11 @@
++/-!
++Regression test: an omega step (`EqCnstr.elimNonUnit`) below a Cooper split creates new cutsat
++variables. The conflict found there is used after backtracking, so the variables must survive it;
++otherwise the variable context of the proof lacks them and the kernel rejects it.
++-/
++
++example (x : Int) (h : (3 * x + 3) % 8 ≤ (3 * x + x % 4) % 8) (h2 : 2 * x % 8 < (5 * x + 3) % 8) : False := by
++  lia
++
++example (x0 : Fin 8) : x0 + x0 < 3 + x0 * 5 → 3 + 3 * x0 ≤ x0 * 3 + x0 % 4 → False := by
++  grind

@@ -1,0 +1,91 @@
+--- a/ext/rtree/geopoly.c
++++ b/ext/rtree/geopoly.c
+@@ -1687,6 +1687,8 @@
+       goto geopoly_update_end;
+     }
+     coordChange = 1;
++    rc = rtreeCheckNodeSize(pRtree);
++    if( rc ) goto geopoly_update_end;
+ 
+     /* If a rowid value was supplied, check if it is already present in 
+     ** the table. If so, the constraint has failed. */
+@@ -1709,6 +1711,9 @@
+   ** record to delete from the r-tree table. The following block does
+   ** just that.
+   */
++  if( rc==SQLITE_OK && nData==1 ){
++    rc = rtreeCheckNodeSize(pRtree);
++  }
+   if( rc==SQLITE_OK && (nData==1 || (coordChange && oldRowidValid)) ){
+     rc = rtreeDeleteRowid(pRtree, oldRowid);
+   }
+@@ -1752,7 +1757,8 @@
+        && (p = geopolyFuncParam(0, pShape, &rc))!=0
+        && rc==SQLITE_OK
+       ){
+-        sqlite3_bind_blob(pUp, 2, p->hdr, 4+8*p->nVertex, SQLITE_TRANSIENT);
++        rc = sqlite3_bind_blob(pUp, 2, p->hdr, 4+8*p->nVertex,
++                               SQLITE_TRANSIENT);
+       }else{
+         sqlite3_bind_value(pUp, 2, pShape);
+       }
+@@ -1763,7 +1769,7 @@
+       nChange++;
+       sqlite3_bind_value(pUp, jj+2, aData[jj+2]);
+     }
+-    if( nChange ){
++    if( rc==SQLITE_OK && nChange ){
+       sqlite3_step(pUp);
+       rc = sqlite3_reset(pUp);
+     }
+--- a/ext/rtree/rtree.c
++++ b/ext/rtree/rtree.c
+@@ -900,6 +900,22 @@
+ }
+ 
+ /*
++** Return SQLITE_TOOBIG if a %_node record is larger than the
++** SQLITE_LIMIT_LENGTH limit, so that nodeWrite() cannot write it. The
++** record is the node blob plus a 4-byte header (header size, a NULL for
++** the INTEGER PRIMARY KEY and a 2-byte serial type, as nodes are between
++** 58 and 8185 bytes). The xUpdate methods check this before they write
++** anything, so that the write does not fail when the shadow tables are
++** already partly updated.
++*/
++static int rtreeCheckNodeSize(Rtree *pRtree){
++  if( pRtree->iNodeSize+4>sqlite3_limit(pRtree->db, SQLITE_LIMIT_LENGTH, -1) ){
++    return SQLITE_TOOBIG;
++  }
++  return SQLITE_OK;
++}
++
++/*
+ ** If the node is dirty, write it out to the database.
+ */
+ static int nodeWrite(Rtree *pRtree, RtreeNode *pNode){
+@@ -911,10 +927,13 @@
+     }else{
+       sqlite3_bind_null(p, 1);
+     }
+-    sqlite3_bind_blob(p, 2, pNode->zData, pRtree->iNodeSize, SQLITE_STATIC);
+-    sqlite3_step(p);
++    rc = sqlite3_bind_blob(p, 2, pNode->zData, pRtree->iNodeSize,
++                           SQLITE_STATIC);
++    if( rc==SQLITE_OK ){
++      sqlite3_step(p);
++      rc = sqlite3_reset(p);
++    }
+     pNode->isDirty = 0;
+-    rc = sqlite3_reset(p);
+     sqlite3_bind_null(p, 2);
+     if( pNode->iNode==0 && rc==SQLITE_OK ){
+       pNode->iNode = sqlite3_last_insert_rowid(pRtree->db);
+@@ -3187,6 +3206,8 @@
+     ** cursor. */
+     return SQLITE_LOCKED_VTAB;
+   }
++  rc = rtreeCheckNodeSize(pRtree);
++  if( rc ) return rc;
+   rtreeReference(pRtree);
+   assert(nData>=1);
+ 

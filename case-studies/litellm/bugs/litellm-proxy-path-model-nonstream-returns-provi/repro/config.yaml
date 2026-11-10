@@ -1,0 +1,8 @@
+model_list:
+  - model_name: team-model
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: http://127.0.0.1:18080/v1
+      api_key: sk-fake
+general_settings:
+  master_key: sk-1234567890abcdef

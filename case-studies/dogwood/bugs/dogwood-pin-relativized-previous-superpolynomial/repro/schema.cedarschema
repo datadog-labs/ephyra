@@ -1,0 +1,13 @@
+namespace App {
+  type In = { user: String };
+  entity Gateway;
+  entity User = { id: String };
+  action "Login" appliesTo {
+    principal: [User], resource: [Gateway],
+    context: { input: In }
+  };
+  action "Write" appliesTo {
+    principal: [User], resource: [Gateway],
+    context: { input: In }
+  };
+}

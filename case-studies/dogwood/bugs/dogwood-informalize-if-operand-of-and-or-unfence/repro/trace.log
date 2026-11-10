@@ -1,0 +1,2 @@
+@0 scope(principal: User::"u", resource: Doc::"d") request_context(input: { n: 0 }) Action::"Read"::request(input: { n: 0 }, callerPrincipal: User::"u", callerResource: Doc::"d", requestId: "r0")
+@1 scope(principal: User::"u", resource: Doc::"d") request_context(input: { n: 1 }) Action::"Read"::request(input: { n: 1 }, callerPrincipal: User::"u", callerResource: Doc::"d", requestId: "r1")

@@ -1,0 +1,11 @@
+[package]
+name = "engines"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Edit to point at your dogwood checkout.
+dogwood-language = { path = "../../../dogwood/dogwood-language" }
+
+[workspace]

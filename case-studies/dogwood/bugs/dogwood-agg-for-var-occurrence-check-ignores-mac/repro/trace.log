@@ -1,0 +1,3 @@
+@1 scope(principal: App::User::"alice", resource: App::Gateway::"gw") request_context(input: { user: "a" }) App::Action::"Login"::request(input: { user: "a" }, callerPrincipal: App::User::"alice", callerResource: App::Gateway::"gw", requestId: "r1")
+@2 scope(principal: App::User::"alice", resource: App::Gateway::"gw") request_context(input: { user: "b" }) App::Action::"Login"::request(input: { user: "b" }, callerPrincipal: App::User::"alice", callerResource: App::Gateway::"gw", requestId: "r2")
+@3 scope(principal: App::User::"alice", resource: App::Gateway::"gw") request_context(input: { user: "c" }) App::Action::"Login"::request(input: { user: "c" }, callerPrincipal: App::User::"alice", callerResource: App::Gateway::"gw", requestId: "r3")

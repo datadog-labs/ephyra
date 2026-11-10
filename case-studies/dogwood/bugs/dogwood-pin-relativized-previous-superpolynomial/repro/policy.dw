@@ -1,0 +1,4 @@
+permit (principal, action == App::Action::"Write", resource)
+when temporal {
+    previous within 1m (previous within 1m (!App::Action::"Login"::response{ input.user: "zed" }))
+};

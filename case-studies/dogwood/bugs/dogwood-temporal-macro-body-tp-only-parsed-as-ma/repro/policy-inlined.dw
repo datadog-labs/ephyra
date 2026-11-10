@@ -1,0 +1,6 @@
+permit (principal, action == App::Action::"Login", resource);
+
+forbid (principal, action == App::Action::"Login", resource)
+when temporal {
+    exists (t: Timepoint). formerly within 5s (App::Action::"Login"::request{} && tp(t))
+};
