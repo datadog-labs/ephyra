@@ -1,0 +1,20 @@
+--- a/src/vdbe.c
++++ b/src/vdbe.c
+@@ -1828,6 +1828,17 @@
+   }
+ #endif
+   if( db->mallocFailed ) goto no_mem;
++
++  /* A DML statement returns rows (RETURNING output or a change count)
++  ** only after all of its changes are made and OP_FkCheck has passed.
++  ** Release its statement transaction before returning control to the
++  ** application, which may step another statement that opens a
++  ** statement transaction before this one halts.  Otherwise the two
++  ** statement transactions would overlap instead of nesting. */
++  if( p->iStatement ){
++    rc = sqlite3VdbeCloseStatement(p, SAVEPOINT_RELEASE);
++    if( rc ) goto abort_due_to_error;
++  }
+   if( db->mTrace & SQLITE_TRACE_ROW ){
+     db->trace.xV2(SQLITE_TRACE_ROW, db->pTraceArg, p, 0);
+   }

@@ -1,0 +1,88 @@
+diff --git a/src/Lean/Compiler/LCNF/InferBorrow.lean b/src/Lean/Compiler/LCNF/InferBorrow.lean
+index 54d168312e..d93647623a 100644
+--- a/src/Lean/Compiler/LCNF/InferBorrow.lean
++++ b/src/Lean/Compiler/LCNF/InferBorrow.lean
+@@ -13,6 +13,7 @@ import Lean.Compiler.LCNF.MonadScope
+ import Lean.Compiler.LCNF.FVarUtil
+ import Lean.Compiler.LCNF.PhaseExt
+ import Lean.Compiler.LCNF.PrettyPrinter
++import Lean.Runtime
+ import Std.Data.Iterators.Producers.Monadic.Array
+ import Std.Data.Iterators.Combinators.Monadic.Zip
+ 
+@@ -193,6 +194,8 @@ inductive OwnReason where
+   | resetReuse (resultFVar : FVarId)
+   /-- Result of a constructor allocation. -/
+   | constructorResult (resultFVar : FVarId)
++  /-- Result of a heap-allocated literal (a string or a big natural number). -/
++  | literalResult (resultFVar : FVarId)
+   /-- Parameter packed into a constructor. -/
+   | constructorArg (resultFVar : FVarId)
+   /-- Forward ownership propagation through `oproj`. -/
+@@ -221,6 +224,7 @@ def OwnReason.toString (reason : OwnReason) : CompilerM String := do
+     match reason with
+     | .resetReuse resultFVar => return s!"used in reset reuse {← PP.ppFVar resultFVar}"
+     | .constructorResult resultFVar => return s!"result of ctor call {← PP.ppFVar resultFVar}"
++    | .literalResult resultFVar => return s!"result of literal {← PP.ppFVar resultFVar}"
+     | .constructorArg resultFVar => return s!"argument to constructor call {← PP.ppFVar resultFVar}"
+     | .forwardProjectionProp resultFVar => return s!"fwd projection propagation {← PP.ppFVar resultFVar}"
+     | .backwardProjectionProp resultFVar => return s!"bkwd projection propagation {← PP.ppFVar resultFVar}"
+@@ -251,7 +255,7 @@ def OwnReason.isForced (reason : OwnReason) : Bool :=
+   -- situation never arises
+   | .backwardProjectionProp .. => false
+   -- Results of functions and constructors are naturally owned.
+-  | .constructorResult .. | .functionCallResult ..
++  | .constructorResult .. | .functionCallResult .. | .literalResult ..
+   -- We cannot pass borrowed values to reset or have borrow annotations destroy tail calls for
+   -- correctness reasons.
+   | .resetReuse .. | .tailCallPreservation .. | .jpTailCallPreservation ..
+@@ -403,6 +407,9 @@ where
+     | .fvar x args =>
+       ownFVar z (.functionCallResult z); ownFVar x (.fvarCall z); ownArgs (.fvarCall z) args
+     | .pap _ args => ownFVar z (.functionCallResult z); ownArgs (.partialApplication z) args
++    -- Unless extracted into a closed term, these literals are freshly allocated at runtime.
++    | .lit (.str _) => ownFVar z (.literalResult z)
++    | .lit (.nat n) => if n > maxSmallNat then ownFVar z (.literalResult z)
+     | _ => return ()
+ 
+   preserveTailCall (x : FVarId) (v : LetValue .impure) (k : Code .impure) : InferM Unit := do
+diff --git a/tests/compile/noClosedLitBorrow.lean b/tests/compile/noClosedLitBorrow.lean
+new file mode 100644
+index 0000000000..3e0de95dd5
+--- /dev/null
++++ b/tests/compile/noClosedLitBorrow.lean
+@@ -0,0 +1,24 @@
++/-!
++Without closed term extraction, string and big `Nat` literals are fresh allocations. Borrow
++inference must treat them as owned: here they are passed to a join point whose body also
++consumes the `""` literal, so a borrowed join point parameter would be used after free.
++-/
++set_option compiler.extract_closed false
++
++@[noinline] def mk (_s : String) (n : Nat) : List Nat := List.replicate n 0
++
++@[noinline] def g (n : Nat) : Bool :=
++  let r := mk "" n
++  (match r with | [] => "ab" | _ :: _ => "").endsWith (("".drop 6).toString.toLower)
++
++@[noinline] def mkN (_s : Nat) (n : Nat) : List Nat := List.replicate n 0
++
++@[noinline] def h (n : Nat) : Nat :=
++  let r := mkN 100000000000000000000000 n
++  (match r with | [] => 7 | _ :: _ => 100000000000000000000000) + (100000000000000000000000 + n)
++
++def main : IO Unit := do
++  IO.println (g 0)
++  IO.println (g 1)
++  IO.println (h 0)
++  IO.println (h 1)
+diff --git a/tests/compile/noClosedLitBorrow.lean.out.expected b/tests/compile/noClosedLitBorrow.lean.out.expected
+new file mode 100644
+index 0000000000..1da7d8e136
+--- /dev/null
++++ b/tests/compile/noClosedLitBorrow.lean.out.expected
+@@ -0,0 +1,4 @@
++true
++true
++100000000000000000000007
++200000000000000000000001

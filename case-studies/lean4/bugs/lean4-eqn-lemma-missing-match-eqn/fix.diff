@@ -1,0 +1,35 @@
+diff --git a/src/Lean/Elab/PreDefinition/Eqns.lean b/src/Lean/Elab/PreDefinition/Eqns.lean
+index e0ae2bad97..d5af7d2c05 100644
+--- a/src/Lean/Elab/PreDefinition/Eqns.lean
++++ b/src/Lean/Elab/PreDefinition/Eqns.lean
+@@ -363,6 +363,12 @@ def realizeEqnTypes (key : EqnTypesKey) : MetaM EqnTypes :=
+ def realizeEqn (declName name : Name) (type : Expr) : MetaM Unit :=
+   withEqnOptions declName <| withOptions (tactic.hygienic.set · false) do
+     let info ← getConstInfoDefn declName
++    -- `type` may mention constants realized by `realizeEqnTypes` (e.g. match equations used to
++    -- simplify the right-hand side), whose environment changes `realizeValue` discards: realize
++    -- them on this branch too, so that they are added to the kernel environment before `name`
++    for c in type.getUsedConstants do
++      unless (← getEnv).contains c do
++        executeReservedNameAction c
+     let value ← mkEqnProof declName type
+     let (type, value) ← removeUnusedEqnHypotheses type value
+     addDecl <| (←mkThmOrUnsafeDef {
+diff --git a/tests/elab/eqnTypesRealizedMatchEqns.lean b/tests/elab/eqnTypesRealizedMatchEqns.lean
+new file mode 100644
+index 0000000000..e78ee67df2
+--- /dev/null
++++ b/tests/elab/eqnTypesRealizedMatchEqns.lean
+@@ -0,0 +1,12 @@
++/-!
++Equation lemma types are computed by `realizeValue`, which discards its environment changes. When
++the type mentions match equations realized while computing it (here, in the cast of the proof
++argument of `Nat.divExact` after the `match` is reduced), they must still reach the kernel
++environment before the equation lemma does.
++-/
++
++def f (_u : Unit) : Nat :=
++  let r := (match (0 : Nat) with | 0 => 1 | _ => 3)
++  Nat.divExact (4 * r) r (Nat.dvd_mul_left r 4)
++
++theorem t : f () = 4 := by simp [f]

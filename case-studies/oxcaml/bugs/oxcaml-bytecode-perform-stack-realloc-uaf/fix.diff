@@ -1,0 +1,55 @@
+diff --git a/runtime/interp.c b/runtime/interp.c
+index 29106f8b18..ed1a9eca9c 100644
+--- a/runtime/interp.c
++++ b/runtime/interp.c
+@@ -1495,6 +1495,11 @@ do_resume: {
+       }
+ 
+       Alloc_small(cont, 2, Cont_tag, Enter_gc);
++      /* [Enter_gc] may run asynchronous callbacks (signal handlers, memprof)
++         on the current stack: if one grows it, [caml_try_realloc_stack]
++         frees [old_stack]. Reload it. */
++      old_stack = domain_state->current_stack;
++      parent_stack = Stack_parent(old_stack);
+ 
+       sp -= 4;
+       sp[0] = Val_long(domain_state->trap_sp_off);
+diff --git a/testsuite/tests/effects/perform_stack_realloc.ml b/testsuite/tests/effects/perform_stack_realloc.ml
+new file mode 100644
+index 0000000000..71cd667872
+--- /dev/null
++++ b/testsuite/tests/effects/perform_stack_realloc.ml
+@@ -0,0 +1,26 @@
++(* TEST
++  { bytecode; }
++  { native; }
++*)
++
++[@@@alert "-unsafe_effects"]
++
++(* [Effect.perform] in bytecode allocates the continuation with [Enter_gc],
++   which may run a memprof callback on the current fiber stack. If the
++   callback grows that stack, the old [stack_info] is freed and [PERFORM]
++   must not keep using it. *)
++
++type _ Effect.t += E : unit Effect.t
++
++let rec deep n = if n = 0 then 0 else 1 + deep (n - 1)
++
++let () =
++  let _ = Gc.Memprof.start ~sampling_rate:1.0
++    { Gc.Memprof.null_tracker with
++      alloc_minor = fun _ -> ignore (Sys.opaque_identity (deep 1000)); None } in
++  Effect.Deep.try_with Effect.perform E
++    { effc = fun (type a) (e : a Effect.t) -> match e with
++        | E -> Some (fun (k : (a, _) Effect.Deep.continuation) ->
++            Gc.Memprof.stop (); Effect.Deep.continue k ())
++        | _ -> None };
++  print_endline "ok"
+diff --git a/testsuite/tests/effects/perform_stack_realloc.reference b/testsuite/tests/effects/perform_stack_realloc.reference
+new file mode 100644
+index 0000000000..9766475a41
+--- /dev/null
++++ b/testsuite/tests/effects/perform_stack_realloc.reference
+@@ -0,0 +1 @@
++ok

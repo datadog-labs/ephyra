@@ -1,0 +1,3 @@
+def cedar not_(?p) { !?p };
+permit (principal, action, resource)
+when { not_(-3) };

@@ -1,0 +1,27 @@
+--- a/src/vdbe.c
++++ b/src/vdbe.c
+@@ -4288,6 +4288,24 @@
+       if( (rc&0xff)==SQLITE_BUSY ){
+         p->pc = (int)(pOp - aOp);
+         p->rc = rc;
++        if( aOp[0].opcode==OP_Init && aOp[0].p2<p->pc ){
++          /* Earlier OP_Transaction ops of this statement have succeeded.
++          ** Their transactions might be rolled back before this statement
++          ** is retried, and any statement transaction they opened must not
++          ** be held while control returns to the application, which might
++          ** run other statements first.  Nothing has been written yet, so
++          ** release the statement transaction and restart from the first
++          ** OP_Transaction (at aOp[0].p2) on the next step. */
++          if( p->iStatement ){
++            int rc2 = sqlite3VdbeCloseStatement(p, SAVEPOINT_RELEASE);
++            if( rc2 ){
++              rc = rc2;
++              goto abort_due_to_error;
++            }
++          }
++          p->pc = aOp[0].p2;
++        }
++        assert( p->iStatement==0 );
+         goto vdbe_return;
+       }
+       goto abort_due_to_error;

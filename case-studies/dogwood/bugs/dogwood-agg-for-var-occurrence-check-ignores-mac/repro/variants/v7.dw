@@ -1,0 +1,7 @@
+def temporal login_by(?u) { App::Action::"Login"::request{ input.user: ?u } };
+def temporal login_n(?k) { App::Action::"Login"::request{ input.n: ?k } };
+def temporal login() { App::Action::"Login"::request{} };
+def temporal login_free() { App::Action::"Login"::request{ input.user: u } };
+permit (principal, action == App::Action::"Login", resource) when temporal {
+  count_distinct_within(u, 1h, login_by(u)) < 3
+};

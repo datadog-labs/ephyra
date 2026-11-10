@@ -1,0 +1,5 @@
+poc.py: offline PoC. A local HTTP server stands in for the Gemini API and answers every request
+with HTTP 400. It streams once through litellm.acompletion and once through litellm.Router.acompletion
+(same deployment, num_retries=0) and prints the exception type each raises.
+
+repro.sh <python>: runs poc.py with that interpreter; exit 1 = bug reproduces, 0 = fixed, 2 = cannot decide.

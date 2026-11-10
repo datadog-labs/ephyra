@@ -1,0 +1,156 @@
+--- /dev/null
++++ b/test/vtabM.test
+@@ -0,0 +1,153 @@
++# 2026 November 3
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++#***********************************************************************
++#
++# A single-row write to a virtual table has no statement journal. If
++# xUpdate fails with an error that is not SQLITE_CONSTRAINT inside an
++# explicit transaction, the changes the module had already made to its
++# shadow tables must not survive the following COMMIT.
++#
++
++set testdir [file dirname $argv0]
++source $testdir/tester.tcl
++set testprefix vtabM
++
++ifcapable !vtab {
++  finish_test
++  return
++}
++
++#-------------------------------------------------------------------------
++# FTS5 with a tokenizer that fails part way through a document.
++#
++ifcapable fts5 {
++  proc tcl_create {args} { return "tcl_tokenize" }
++  proc tcl_tokenize {tflags text} {
++    foreach r [regexp -all -indices -inline {[^ ]+} $text] {
++      set w [string range $text {*}$r]
++      if {$w=="bad"} { error "tokenizer error" }
++      sqlite3_fts5_token $w [lindex $r 0] [expr {[lindex $r 1]+1}]
++    }
++  }
++
++  reset_db
++  sqlite3_fts5_create_tokenizer db tcl tcl_create
++  do_execsql_test 1.0 {
++    CREATE VIRTUAL TABLE ft USING fts5(x, tokenize=tcl);
++    INSERT INTO ft VALUES('one');
++    BEGIN;
++  }
++  do_catchsql_test 1.1 {
++    INSERT INTO ft VALUES('two bad');
++  } {1 {SQL logic error}}
++  do_catchsql_test 1.2 { COMMIT } {1 {cannot commit - no transaction is active}}
++  do_execsql_test 1.3 {
++    SELECT rowid, x FROM ft;
++    SELECT rowid FROM ft('two');
++    INSERT INTO ft(ft) VALUES('integrity-check');
++  } {1 one}
++
++  # Autocommit mode, and INSERT ... SELECT (which has a statement journal)
++  # inside a transaction: the failed statement alone is undone.
++  do_catchsql_test 1.4 {
++    INSERT INTO ft VALUES('three bad');
++  } {1 {SQL logic error}}
++  do_execsql_test 1.5 {
++    BEGIN;
++    INSERT INTO ft VALUES('four');
++  }
++  do_catchsql_test 1.6 {
++    INSERT INTO ft SELECT 'five bad';
++  } {1 {SQL logic error}}
++  do_execsql_test 1.7 {
++    COMMIT;
++    SELECT rowid, x FROM ft;
++    INSERT INTO ft(ft) VALUES('integrity-check');
++  } {1 one 2 four}
++
++  # An error returned before xUpdate changes anything does not end the
++  # transaction.
++  do_execsql_test 1.8 {
++    CREATE VIRTUAL TABLE ft2 USING fts5(x, content='');
++    INSERT INTO ft2(rowid, x) VALUES(1, 'seven');
++    BEGIN;
++    INSERT INTO ft VALUES('six');
++  }
++  do_catchsql_test 1.9 {
++    DELETE FROM ft2 WHERE rowid=1;
++  } {1 {cannot DELETE from contentless fts5 table: ft2}}
++  do_execsql_test 1.10 {
++    COMMIT;
++    SELECT rowid, x FROM ft;
++    INSERT INTO ft(ft) VALUES('integrity-check');
++  } {1 one 2 four 3 six}
++}
++
++#-------------------------------------------------------------------------
++# R-Tree and FTS4 in shared-cache mode. A second connection holds a read
++# lock on a shadow table that xUpdate writes after another shadow table.
++#
++ifcapable shared_cache {
++  reset_db
++  db close
++  set ::enable_shared_cache [sqlite3_enable_shared_cache 1]
++  sqlite3 db test.db
++  sqlite3 db2 test.db
++
++  ifcapable rtree {
++    do_execsql_test 2.0 {
++      CREATE VIRTUAL TABLE rt USING rtree(id, x0, x1);
++      INSERT INTO rt VALUES(1, 0, 1);
++    }
++    do_execsql_test -db db2 2.1 {
++      BEGIN;
++      SELECT count(*) FROM rt_rowid;
++    } {1}
++    do_execsql_test 2.2 { BEGIN }
++    do_catchsql_test 2.3 {
++      INSERT INTO rt VALUES(2, 5, 6);
++    } {1 {database table is locked}}
++    do_catchsql_test 2.4 { COMMIT } {1 {cannot commit - no transaction is active}}
++    do_execsql_test -db db2 2.5 { COMMIT }
++    do_execsql_test 2.6 {
++      SELECT * FROM rt;
++      SELECT rtreecheck('rt');
++    } {1 0.0 1.0 ok}
++  }
++
++  ifcapable fts3 {
++    do_execsql_test 3.0 {
++      CREATE VIRTUAL TABLE f4 USING fts4(x);
++      INSERT INTO f4 VALUES('one');
++    }
++    do_execsql_test -db db2 3.1 {
++      BEGIN;
++      SELECT count(*) FROM f4_docsize;
++    } {1}
++    do_execsql_test 3.2 { BEGIN }
++    do_catchsql_test 3.3 {
++      INSERT INTO f4 VALUES('two');
++    } {1 {database table is locked}}
++    do_catchsql_test 3.4 { COMMIT } {1 {cannot commit - no transaction is active}}
++    do_execsql_test -db db2 3.5 { COMMIT }
++    do_execsql_test 3.6 {
++      SELECT docid, x FROM f4;
++      SELECT docid FROM f4_docsize;
++      SELECT docid FROM f4 WHERE f4 MATCH 'two';
++      PRAGMA integrity_check;
++    } {1 one 1 ok}
++  }
++
++  db2 close
++  db close
++  sqlite3_enable_shared_cache $::enable_shared_cache
++}
++
++finish_test

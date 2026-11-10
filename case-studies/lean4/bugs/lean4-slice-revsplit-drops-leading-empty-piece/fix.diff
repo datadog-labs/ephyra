@@ -1,0 +1,33 @@
+diff --git a/src/Init/Data/String/Slice/Pattern.lean b/src/Init/Data/String/Slice/Pattern.lean
+index 307856161d..0261417a76 100644
+--- a/src/Init/Data/String/Slice/Pattern.lean
++++ b/src/Init/Data/String/Slice/Pattern.lean
+@@ -520,11 +520,8 @@ instance [Pure m] : Std.Iterator (RevSplitIterator ρ s) m Slice where
+         pure (.deflate ⟨.skip ⟨.operating currPos searcher'⟩,
+           by simp [hps.isPlausibleSuccessor_of_skip]⟩)
+       | ⟨.done, _⟩ =>
+-        if currPos ≠ s.startPos then
+-          let slice := s.sliceTo currPos
+-          pure (.deflate ⟨.yield ⟨.atEnd⟩ slice, by simp⟩)
+-        else
+-          pure (.deflate ⟨.done, by simp⟩)
++        let slice := s.sliceTo currPos
++        pure (.deflate ⟨.yield ⟨.atEnd⟩ slice, by simp⟩)
+     | ⟨.atEnd⟩ => pure (.deflate ⟨.done, by simp⟩)
+ 
+ private def toOption : RevSplitIterator ρ s → Option (Std.Iter (α := σ s) (SearchStep s))
+diff --git a/tests/elab/string_slice.lean b/tests/elab/string_slice.lean
+index 2ff7962b7e..74a898e41b 100644
+--- a/tests/elab/string_slice.lean
++++ b/tests/elab/string_slice.lean
+@@ -99,6 +99,10 @@ Tests for `String.Slice` functions
+ 
+ #guard ("coffee tea water".toSlice.revSplit Char.isWhitespace).toList == ["water".toSlice, "tea".toSlice, "coffee".toSlice]
+ #guard ("coffee tea water".toSlice.revSplit ' ').toList == ["water".toSlice, "tea".toSlice, "coffee".toSlice]
++#guard ((",x".toSlice.revSplit ',').toList.map (·.copy)) == ["x", ""]
++#guard (("aa".toSlice.revSplit 'a').toList.map (·.copy)) == ["", "", ""]
++#guard (("".toSlice.revSplit ',').toList.map (·.copy)) == [""]
++#guard (("ab".toSlice.revSplit (· == 'a')).toList.map (·.copy)) == ["b", ""]
+ 
+ #guard "red green blue".toSlice.dropEnd 5 == "red green".toSlice
+ #guard "red green blue".toSlice.dropEnd 11 == "red".toSlice

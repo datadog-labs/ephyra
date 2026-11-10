@@ -1,0 +1,61 @@
+diff --git a/src/Std/Time/Format/Basic.lean b/src/Std/Time/Format/Basic.lean
+index 3e041d8946..8a9d52d634 100644
+--- a/src/Std/Time/Format/Basic.lean
++++ b/src/Std/Time/Format/Basic.lean
+@@ -980,9 +980,13 @@ private def markerOfDayPeriod : DayPeriod → HourMarker
+   | .am | .midnight => .am
+   | .pm | .noon     => .pm
+ 
+-/-- Infer an `HourMarker` from an `ExtendedDayPeriod` parsed by `B`. -/
+-private def markerOfExtendedDayPeriod : ExtendedDayPeriod → HourMarker
+-  | .midnight | .night | .morning => .am
++/--
++Infer an `HourMarker` from an `ExtendedDayPeriod` parsed by `B`. `night` spans both 21:00–24:00 and
++00:00–06:00, so it is resolved by the hour of the 12-hour clock (`hour12`, 0–11): 9–11 at night are PM.
++-/
++private def markerOfExtendedDayPeriod (hour12 : Option Int) : ExtendedDayPeriod → HourMarker
++  | .midnight | .morning => .am
++  | .night => if hour12.any (· ≥ 6) then .pm else .am
+   | .noon | .afternoon | .evening => .pm
+ 
+ private def build (builder : DateBuilder) (aw : Awareness) : Option DateTime :=
+@@ -1009,7 +1013,7 @@ private def build (builder : DateBuilder) (aw : Awareness) : Option DateTime :=
+   let markerOpt : Option HourMarker :=
+     builder.a
+     <|> (markerOfDayPeriod <$> builder.b)
+-    <|> (markerOfExtendedDayPeriod <$> builder.B)
++    <|> (markerOfExtendedDayPeriod ((fun h => h.val % 12) <$> builder.h <|> (·.val) <$> builder.K) <$> builder.B)
+ 
+   let hour : Option (Bounded.LE 0 23) :=
+     if let some marker := markerOpt then
+diff --git a/tests/elab/timeFormatRoundTrip.lean b/tests/elab/timeFormatRoundTrip.lean
+index 988cb8de2b..fb47b45ef3 100644
+--- a/tests/elab/timeFormatRoundTrip.lean
++++ b/tests/elab/timeFormatRoundTrip.lean
+@@ -181,3 +181,26 @@ def yearDates : List DateTime :=
+       unless exact pat d do
+         failures := failures.push (pat, iso.format d)
+   return failures.toList
++
++/-! `B` "at night" covers both 21:00–24:00 (PM) and 00:00–06:00 (AM). -/
++
++/-- info: "2024-01-01T22:00:00Z" -/
++#guard_msgs in #eval check "uuuu-MM-dd hh:mm B" "2024-01-01 10:00 at night"
++
++/-- info: "2024-01-01T03:00:00Z" -/
++#guard_msgs in #eval check "uuuu-MM-dd hh:mm B" "2024-01-01 03:00 at night"
++
++def periodDates : List DateTime :=
++  ["00:00:00", "00:00:01", "03:15:00", "05:59:59", "06:00:00", "11:59:59", "12:00:00", "12:00:01",
++   "17:59:59", "18:00:00", "20:59:59", "21:00:00", "22:30:00", "23:59:59"].map fun t =>
++    iso.parse! s!"2024-01-01T{t}Z"
++
++/-- info: [] -/
++#guard_msgs in
++#eval Id.run do
++  let mut failures := #[]
++  for pat in ["uuuu-MM-dd hh:mm:ss B", "uuuu-MM-dd h:mm:ss BBBB", "uuuu-MM-dd KK:mm:ss BBBBB"] do
++    for d in periodDates do
++      unless exact pat d do
++        failures := failures.push (pat, iso.format d)
++  return failures.toList

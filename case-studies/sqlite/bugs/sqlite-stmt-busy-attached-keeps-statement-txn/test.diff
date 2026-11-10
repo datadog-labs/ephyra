@@ -1,0 +1,104 @@
+--- a/test/busy.test
++++ b/test/busy.test
+@@ -136,4 +136,101 @@
+ 
+ }
+ 
++#-------------------------------------------------------------------------
++# A statement that writes main and an attached database opens its
++# statement transaction on main and then gets SQLITE_BUSY from the
++# attached database.  It must not keep the statement transaction while
++# it returns SQLITE_BUSY: other statements run before it is retried, and
++# statement transactions must nest.
++#
++# Each UPDATE below also writes x.db (or y.db) through a TEMP trigger.  P
++# is active throughout, so A and B open statement transactions in
++# autocommit mode.  B fails with a UNIQUE constraint after its first row
++# and must leave neither main nor the attached database changed.
++#
++catch { db2 close }
++reset_db
++forcedelete test2.db test3.db
++proc step_all {stmt} {
++  while {[sqlite3_step $stmt]=="SQLITE_ROW"} {}
++  sqlite3_finalize $stmt
++}
++do_execsql_test 4.0 {
++  ATTACH 'test2.db' AS x;
++  ATTACH 'test3.db' AS y;
++  CREATE TABLE t1(a INTEGER PRIMARY KEY, b UNIQUE);
++  INSERT INTO t1 VALUES(1,1), (2,2), (3,3);
++  CREATE TABLE x.u(v);
++  CREATE TABLE y.w(v);
++  CREATE TEMP TRIGGER tr AFTER UPDATE ON t1 BEGIN
++    INSERT INTO u VALUES(new.b);
++  END;
++}
++foreach {tn locked} {1 test2.db 2 test3.db} {
++  if {$tn==2} {
++    # BUSY from the second of two attached databases.
++    execsql {
++      DROP TRIGGER tr;
++      UPDATE t1 SET b=a;
++      DELETE FROM u;
++      CREATE TEMP TRIGGER tr AFTER UPDATE ON t1 BEGIN
++        INSERT INTO u VALUES(new.b);
++        INSERT INTO w VALUES(new.b);
++      END;
++    }
++  }
++  sqlite3 db2 $locked
++  do_test 4.$tn.1 {
++    db2 eval { BEGIN IMMEDIATE }
++    set P [sqlite3_prepare_v2 db "UPDATE t1 SET b=b WHERE a=99" -1 dummy]
++    set A [sqlite3_prepare_v2 db "UPDATE t1 SET b=b+10" -1 dummy]
++    set B [sqlite3_prepare_v2 db \
++        "UPDATE t1 SET b=CASE a WHEN 2 THEN 13 ELSE b+100 END" -1 dummy]
++    set res [list [sqlite3_step $P] [sqlite3_step $A] [sqlite3_step $B]]
++    db2 eval { COMMIT }
++    lappend res [step_all $A] [step_all $B] [step_all $P]
++  } {SQLITE_BUSY SQLITE_BUSY SQLITE_BUSY SQLITE_OK SQLITE_CONSTRAINT SQLITE_OK}
++  db2 close
++  do_execsql_test 4.$tn.2 {
++    SELECT * FROM t1;
++    SELECT group_concat(v) FROM u;
++    PRAGMA integrity_check;
++  } {1 11 2 12 3 13 11,12,13 ok}
++}
++do_execsql_test 4.2.3 {
++  SELECT group_concat(v) FROM w;
++} {11,12,13}
++
++# The transaction opened by the first OP_Transaction of a statement that
++# got SQLITE_BUSY is rolled back before the statement is retried.  The
++# retry must not write to main without a write transaction.  (t2 has no
++# constraints, so this UPDATE does not open a statement transaction.)
++do_execsql_test 4.3.0 {
++  CREATE TABLE t2(a INTEGER PRIMARY KEY, b);
++  INSERT INTO t2 VALUES(1,1), (2,2), (3,3);
++  CREATE TEMP TRIGGER tr2 AFTER UPDATE ON t2 BEGIN
++    INSERT INTO u VALUES(new.b);
++  END;
++}
++sqlite3 db2 test2.db
++do_test 4.3.1 {
++  db2 eval { BEGIN IMMEDIATE }
++  execsql BEGIN
++  set A [sqlite3_prepare_v2 db "UPDATE t2 SET b=b+10" -1 dummy]
++  set res [sqlite3_step $A]
++  execsql ROLLBACK
++  db2 eval { COMMIT }
++  lappend res [step_all $A]
++} {SQLITE_BUSY SQLITE_OK}
++db2 close
++do_test 4.3.2 {
++  sqlite3 db2 test.db
++  set res [list [db eval {SELECT b FROM t2}] [db2 eval {SELECT b FROM t2}]]
++  db2 close
++  set res
++} {{11 12 13} {11 12 13}}
++do_execsql_test 4.3.3 {
++  PRAGMA integrity_check;
++} {ok}
++
+ finish_test

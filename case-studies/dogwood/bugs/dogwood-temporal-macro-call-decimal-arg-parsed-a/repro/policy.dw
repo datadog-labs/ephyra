@@ -1,0 +1,8 @@
+def temporal paid(?a) { App::Action::"Pay"::request{ input.amt: ?a } };
+
+permit (principal, action == App::Action::"Pay", resource);
+
+forbid (principal, action == App::Action::"Pay", resource)
+when temporal {
+    formerly within 5s paid(decimal("1.50"))
+};

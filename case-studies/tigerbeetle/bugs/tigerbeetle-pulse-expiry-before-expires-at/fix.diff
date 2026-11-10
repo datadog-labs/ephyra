@@ -1,0 +1,81 @@
+diff --git a/src/state_machine.zig b/src/state_machine.zig
+index 704a7b0c3..a837edf01 100644
+--- a/src/state_machine.zig
++++ b/src/state_machine.zig
+@@ -5123,33 +5123,58 @@ fn ExpirePendingTransfersWorkerType(comptime StateMachine: type) type {
+             assert(worker.timestamp_next <= state_machine.prefetch_timestamp);
+             maybe(worker.timestamp_next == TimestampRange.timestamp_min);
+ 
+-            state_machine.scan_lookup_buffer_offset = @intCast(results.len * @sizeOf(Transfer));
+-            state_machine.scan_lookup_results.appendAssumeCapacity(@intCast(results.len));
++            // The expiry of `results[index]` is committed at `timestamp - len + index + 1`
++            // (see `execute`), which must not precede its `expires_at`. Transfers expiring
++            // within the pulse's own timestamp range may not fit (e.g. several with the same
++            // `expires_at`): keep the longest prefix that does, the rest is left to the next pulse.
++            const results_fit: []const Transfer = results: {
++                var expires_at_index_max: u64 = 0;
++                for (results, 0..) |*transfer, index| {
++                    const expires_at: u64 = transfer.timestamp + transfer.timeout_ns();
++                    assert(expires_at <= state_machine.prefetch_timestamp);
++                    expires_at_index_max = @max(expires_at_index_max, expires_at - index);
++                    if (expires_at_index_max > state_machine.prefetch_timestamp - index) {
++                        assert(index > 0);
++                        break :results results[0..index];
++                    }
++                }
++                break :results results;
++            };
++            maybe(results_fit.len < results.len);
++
++            state_machine.scan_lookup_buffer_offset =
++                @intCast(results_fit.len * @sizeOf(Transfer));
++            state_machine.scan_lookup_results.appendAssumeCapacity(@intCast(results_fit.len));
+ 
+             // The custom `ScanBuilder` returns the timestamp of the next pending
+             // transfer to expire after the last result produced.
+             // It will be used to trigger the next pulse operation.
+             assert(state_machine.scan_builder == .expire_pending_transfers);
+             const scan_builder = &state_machine.scan_builder.expire_pending_transfers;
+-            const expires_at_timestamp_next: u64 = scan_builder.expires_at_timestamp_next(
+-                scan_lookup.state,
+-            );
++            const expires_at_timestamp_next: u64 = next: {
++                const scan_next = scan_builder.expires_at_timestamp_next(scan_lookup.state);
++                if (results_fit.len == results.len) break :next scan_next;
++                const left = &results[results_fit.len];
++                const left_expires_at: u64 = left.timestamp + left.timeout_ns();
++                assert(left_expires_at <= scan_next);
++                break :next left_expires_at;
++            };
+             assert(worker.timestamp_next <= expires_at_timestamp_next);
+             if (worker.timestamp_next == expires_at_timestamp_next) {
+                 // Transfers that expire at the same timestamp may span multiple batches.
+                 assert(expires_at_timestamp_next != TimestampRange.timestamp_max);
+-                assert(results.len > 0);
++                assert(results_fit.len > 0);
+                 if (constants.verify) {
+-                    for (results) |*transfer| {
++                    for (results_fit) |*transfer| {
+                         const expires_at: u64 = transfer.timestamp + transfer.timeout_ns();
+                         assert(expires_at == expires_at_timestamp_next);
+                     }
+                 }
+             } else {
+                 maybe(expires_at_timestamp_next == TimestampRange.timestamp_max);
+-                maybe(results.len == 0);
++                maybe(results_fit.len == 0);
+                 if (constants.verify) {
+-                    for (results) |*transfer| {
++                    for (results_fit) |*transfer| {
+                         const expires_at: u64 = transfer.timestamp + transfer.timeout_ns();
+                         assert(expires_at <= expires_at_timestamp_next);
+                     }
+@@ -5162,7 +5187,7 @@ fn ExpirePendingTransfersWorkerType(comptime StateMachine: type) type {
+             state_machine.scan_builder = .null;
+             state_machine.forest.scan_buffer_pool.reset();
+ 
+-            if (results.len == 0) {
++            if (results_fit.len == 0) {
+                 // It may not return any results if:
+                 // - The state is unknown (`timestamp_min`).
+                 // - The pending transfer was manually posted or voided.

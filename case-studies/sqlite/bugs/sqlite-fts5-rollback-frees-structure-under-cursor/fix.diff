@@ -1,0 +1,10 @@
+--- a/ext/fts5/fts5_main.c
++++ b/ext/fts5/fts5_main.c
+@@ -2155,6 +2155,7 @@
+   int rc;
+   Fts5FullTable *pTab = (Fts5FullTable*)pVtab;
+   fts5CheckTransactionState(pTab, FTS5_ROLLBACK, 0);
++  fts5TripCursors(pTab);
+   rc = sqlite3Fts5StorageRollback(pTab->pStorage);
+   pTab->p.pConfig->pgsz = 0;
+   return rc;

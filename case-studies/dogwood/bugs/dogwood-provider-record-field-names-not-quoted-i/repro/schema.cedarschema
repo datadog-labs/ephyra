@@ -1,0 +1,9 @@
+namespace Drupe {
+  type In = { user: String, n: Long };
+  entity Gateway;
+  entity OAuthUser;
+  action "Read" appliesTo {
+    principal: [OAuthUser], resource: [Gateway],
+    context: { input: In }
+  };
+}

@@ -1,0 +1,4 @@
+permit (principal, action == App::Action::"Write", resource)
+when temporal {
+    App::Action::"Write"::request{} since within 1m (App::Action::"Write"::request{} since within 1m (App::Action::"Write"::request{} since within 1m App::Action::"Write"::request{}))
+};

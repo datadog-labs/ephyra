@@ -1,0 +1,6 @@
+permit (principal, action == App::Action::"Pay", resource);
+
+forbid (principal, action == App::Action::"Pay", resource)
+when temporal {
+    formerly within 5s App::Action::"Pay"::request{ input.amt: decimal("1.50") }
+};

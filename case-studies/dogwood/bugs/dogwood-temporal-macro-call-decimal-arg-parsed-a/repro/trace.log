@@ -1,0 +1,1 @@
+@1 scope(principal: App::User::"alice", resource: App::Gateway::"gw") request_context(input: { user: "alice", amt: 1.5 }) App::Action::"Pay"::request(input: { user: "alice", amt: 1.5 }, callerPrincipal: App::User::"alice", callerResource: App::Gateway::"gw", requestId: "r1")

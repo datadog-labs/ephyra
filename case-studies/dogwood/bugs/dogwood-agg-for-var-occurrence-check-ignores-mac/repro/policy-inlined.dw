@@ -1,0 +1,4 @@
+permit (principal, action == App::Action::"Login", resource)
+when temporal {
+    (count for (u: String). where (formerly within 1h App::Action::"Login"::request{ input.user: u })) < 3
+};

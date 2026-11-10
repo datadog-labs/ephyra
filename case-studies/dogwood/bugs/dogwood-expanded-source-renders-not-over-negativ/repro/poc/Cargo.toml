@@ -1,0 +1,10 @@
+[package]
+name = "not-neg-literal-poc"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+dogwood-language = { path = "DOGWOOD_CHECKOUT/dogwood-language" }

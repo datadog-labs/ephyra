@@ -20,7 +20,7 @@ a test. Status as of this export; the upstream link is authoritative.
 | [Glob `"".*` (empty quotes before the leading dot) does not match dot files](brush-glob-leading-empty-quote-hides-explicit-/) | fixed | [link](https://github.com/reubeno/brush/issues/1584) |
 | [Pathname expansion: backslash from a variable is kept in a glob path component that has no glob characters](brush-glob-literal-component-keeps-expansion-b/) | fixed | [link](https://github.com/reubeno/brush/issues/1583) |
 | [`shopt -s globstar` is accepted, but `**` does not match recursively](brush-globstar-option-not-implemented/) | open | [link](https://github.com/reubeno/brush/issues/1581) |
-| [`+=` on a `declare -i` variable panics with "attempt to add with overflow" in builds with overflow checks](brush-integer-append-add-overflow/) | open | [link](https://github.com/reubeno/brush/issues/1577) |
+| [`+=` on a `declare -i` variable panics with "attempt to add with overflow" in builds with overflow checks](brush-integer-append-add-overflow/) | fixed | [link](https://github.com/reubeno/brush/issues/1577) |
 | [Negative subscript on a sparse array counts from the number of elements, not from the highest index](brush-negative-subscript-sparse-array-uses-ele/) | fixed | [link](https://github.com/reubeno/brush/issues/1570) |
 | [`${var/pattern/string}`: unquoted `&` in the replacement is not replaced by the match (patsub_replacement is on but not implemented)](brush-patsub-replacement-ampersand-not-impleme/) | open | [link](https://github.com/reubeno/brush/issues/1586) |
 | [printf: "invalid number" message ignores `2>` redirection, and the exit status is 0](brush-printf-numeric-diagnostics-bypass-stderr/) | open | [link](https://github.com/reubeno/brush/issues/1589) |

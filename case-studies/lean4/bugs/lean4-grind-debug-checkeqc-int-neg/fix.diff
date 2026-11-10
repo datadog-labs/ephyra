@@ -1,0 +1,62 @@
+diff --git a/src/Lean/Meta/Tactic/Grind/Internalize.lean b/src/Lean/Meta/Tactic/Grind/Internalize.lean
+index 4e653ec56a..b2087917fa 100644
+--- a/src/Lean/Meta/Tactic/Grind/Internalize.lean
++++ b/src/Lean/Meta/Tactic/Grind/Internalize.lean
+@@ -563,6 +563,13 @@ private def getLitKind (e : Expr) : MetaM LitKind := do
+   | Char.ofNat n => return if (← isNatValue n) then .nonParametric else .notLit
+   | _ => return .notLit
+ 
++/--
++Returns `true` if `internalize` handles `e` as a literal (see `getLitKind`).
++Such terms are not added to the congruence table.
++-/
++def isInternalizedAsLiteral (e : Expr) : MetaM Bool :=
++  return !(← getLitKind e) matches .notLit
++
+ /--
+ Internalizer for nonparametric literals (see `getLitKind`).
+ For this kind of literal, we do **not** internalize its children nor
+diff --git a/src/Lean/Meta/Tactic/Grind/Inv.lean b/src/Lean/Meta/Tactic/Grind/Inv.lean
+index c779c4d0c8..8f712add9b 100644
+--- a/src/Lean/Meta/Tactic/Grind/Inv.lean
++++ b/src/Lean/Meta/Tactic/Grind/Inv.lean
+@@ -8,6 +8,7 @@ prelude
+ public import Lean.Meta.Tactic.Grind.Types
+ import Init.Grind.Util
+ import Lean.Meta.Tactic.Grind.Util
++import Lean.Meta.Tactic.Grind.Internalize
+ import Lean.Meta.Sym.Canon
+ namespace Lean.Meta.Grind
+ /-!
+@@ -21,8 +22,10 @@ def checkEqc (root : ENode) : GoalM Unit := do
+     size := size + 1
+     -- The root of `curr` must be `root`
+     assert! isSameExpr (← getRoot curr) root.self
+-    -- Check congruence root
+-    if curr.isApp then
++    -- Check congruence root.
++    -- Literals are not in the congruence table (see `internalizeNonParametricLiteral`), but a lookup
++    -- may find a term congruent to them, e.g., `-x` for the `Int8` literal `-1` after `x = 1`.
++    if curr.isApp && !(← isInternalizedAsLiteral curr) then
+       if let some { e } := (← get).congrTable.find? { e := curr } then
+         if (← hasSameType e.getAppFn curr.getAppFn) then
+           assert! isSameExpr e (← getCongrRoot curr)
+diff --git a/tests/elab/grind_debug_neg_lit_congr.lean b/tests/elab/grind_debug_neg_lit_congr.lean
+new file mode 100644
+index 0000000000..6565bb3c39
+--- /dev/null
++++ b/tests/elab/grind_debug_neg_lit_congr.lean
+@@ -0,0 +1,13 @@
++/-!
++Negative literals of signed fixed-width types such as `(-1 : Int8)` are internalized as literals
++and are not added to the congruence table. After `x = 1`, a congruence table lookup for `-1`
++finds `-x`, and the `grind.debug` invariant checker used to fail on it.
++-/
++
++set_option grind.debug true
++
++example (x : Int8) (h : x = 1) : -x = -1 := by grind
++example (x : Int16) (h : x = 1) : -x = -1 := by grind
++example (x : Int8) (h : x = 100) : -x = -100 := by grind
++example (x : Int8) (f : Int8 → Nat) (h : x = 1) : f (-x) = f (-1) := by grind
++example (x1 : Int32) : x1 = 8 → -x1 = -8 := by grind

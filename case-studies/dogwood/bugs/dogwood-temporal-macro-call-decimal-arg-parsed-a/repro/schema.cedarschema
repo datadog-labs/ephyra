@@ -1,0 +1,9 @@
+namespace App {
+  type In = { user: String, amt: decimal };
+  entity Gateway;
+  entity User;
+  action "Pay" appliesTo {
+    principal: [User], resource: [Gateway],
+    context: { input: In }
+  };
+}

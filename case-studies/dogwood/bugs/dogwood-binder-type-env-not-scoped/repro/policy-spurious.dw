@@ -1,0 +1,7 @@
+permit (principal, action == App::Action::"Login", resource);
+
+forbid (principal, action == App::Action::"Login", resource)
+when temporal {
+    (exists (u: Long). App::Action::"Login"::request{ input.n: u })
+    && (exists (u: String). App::Action::"Login"::request{ input.user: u })
+};

@@ -1,0 +1,2 @@
+permit (principal, action, resource)
+when { !(if context.input.n == 0 then true else (false && false)) };
