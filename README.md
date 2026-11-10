@@ -22,9 +22,15 @@ have their own respective documentation, mostly written in an information dense 
 coding agents. Almost all of the code in this repository is experimental and subject to change,
 please let us know any issues you experience while using it.
 
-**Testing a project with an agent?** Point it at [STARTUP.md](STARTUP.md):
-"Let's test `<my project>` with ephyra; start from
-https://github.com/datadog-labs/ephyra/blob/main/STARTUP.md".
+**Testing a project with an agent?** Give your coding agent this prompt; it
+starts from [STARTUP.md](STARTUP.md):
+
+```text
+Let's test <my library> with ephyra
+(https://github.com/datadog-labs/ephyra). Read its README and
+STARTUP.md first, then autonomously start writing and optimizing
+Ephyra tests until we find any bugs; validate, triage, and notify me.
+```
 
 ## Using
 
