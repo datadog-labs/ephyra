@@ -1,0 +1,35 @@
+diff --git a/lib/elixir/lib/module/types/apply.ex b/lib/elixir/lib/module/types/apply.ex
+index ad20852..c4c8420 100644
+--- a/lib/elixir/lib/module/types/apply.ex
++++ b/lib/elixir/lib/module/types/apply.ex
+@@ -1431,7 +1431,9 @@ defp remote_apply(:maps, :from_keys, _info, [list, value_type] = args_types, sta
+           domain_keys = to_domain_keys(key_type)
+ 
+           keys =
+-            case atom_fetch(key_type) do
++            # Wrapping in dynamic() makes atom_fetch return the atom part of the
++            # key type even when it also has non-atom keys, such as [:a, "b"].
++            case atom_fetch(dynamic(key_type)) do
+               {:finite, atom_keys} -> [List.delete(domain_keys, :atom) | atom_keys]
+               _ -> [domain_keys]
+             end
+diff --git a/lib/elixir/test/elixir/module/types/map_test.exs b/lib/elixir/test/elixir/module/types/map_test.exs
+index 01017f1..c66246b 100644
+--- a/lib/elixir/test/elixir/module/types/map_test.exs
++++ b/lib/elixir/test/elixir/module/types/map_test.exs
+@@ -334,6 +334,15 @@ test "checking" do
+                )
+              ) ==
+                closed_map([{domain_key(:integer), integer()}, {domain_key(:binary), integer()}])
++
++      assert typecheck!(
++               (
++                 x = [:key, "key"]
++                 Map.from_keys(x, 123)
++               )
++             ) ==
++               closed_map([{domain_key(:binary), integer()}, {:key, {integer(), true}}])
++               |> opt_difference(empty_map())
+     end
+ 
+     test "reports errors from static part of optionalized gradual value" do

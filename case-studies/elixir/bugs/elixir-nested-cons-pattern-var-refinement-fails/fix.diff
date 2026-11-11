@@ -1,0 +1,61 @@
+diff --git a/lib/elixir/lib/module/types/pattern.ex b/lib/elixir/lib/module/types/pattern.ex
+index 9af814c..ab89806 100644
+--- a/lib/elixir/lib/module/types/pattern.ex
++++ b/lib/elixir/lib/module/types/pattern.ex
+@@ -513,8 +513,11 @@ defp of_pattern_var([{:domain, domain} | rest], type, context) do
+     end
+   end
+ 
++  # The value at a :head or :tail step matches a cons pattern, so it is a non-empty
++  # list, even if the type we got from a previous :tail step (`list(t, s) or s`)
++  # may also be the empty list or the terminator
+   defp of_pattern_var([:head | rest], type, context) do
+-    case list_hd(type) do
++    case list_hd(opt_intersection(type, non_empty_list(term(), term()))) do
+       {:ok, head} -> of_pattern_var(rest, head, context)
+       _ -> :error
+     end
+@@ -526,7 +529,7 @@ defp of_pattern_var([{:subpattern, key} | rest], type, context) do
+   end
+ 
+   defp of_pattern_var([:tail | rest], type, context) do
+-    case list_tl(type) do
++    case list_tl(opt_intersection(type, non_empty_list(term(), term()))) do
+       {:ok, tail} -> of_pattern_var(rest, tail, context)
+       :badnonemptylist -> :error
+     end
+diff --git a/lib/elixir/test/elixir/module/types/pattern_test.exs b/lib/elixir/test/elixir/module/types/pattern_test.exs
+index dda717e..0425687 100644
+--- a/lib/elixir/test/elixir/module/types/pattern_test.exs
++++ b/lib/elixir/test/elixir/module/types/pattern_test.exs
+@@ -336,6 +336,30 @@ test "in patterns" do
+                dynamic(tuple([non_empty_list(term(), term()), term(), term()]))
+     end
+ 
++    test "with variables in nested cons patterns" do
++      assert typecheck!(
++               [x],
++               (
++                 list = [x, 2]
++
++                 case list do
++                   [y | [_]] -> y
++                 end
++               )
++             ) == opt_union(dynamic(), integer())
++
++      # y and z are bound to :a and :b at runtime
++      type =
++        typecheck!(
++          [x],
++          case [x, :a | :b] do
++            [_ | [y | z]] -> {y, z}
++          end
++        )
++
++      assert subtype?(tuple([atom([:a]), atom([:b])]), type)
++    end
++
+     test "in patterns through ++" do
+       assert typecheck!([x = [] ++ []], x) == dynamic(empty_list())
+ 

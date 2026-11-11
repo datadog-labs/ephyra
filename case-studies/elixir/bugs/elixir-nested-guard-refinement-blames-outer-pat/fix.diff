@@ -1,0 +1,50 @@
+diff --git a/lib/elixir/lib/module/types/pattern.ex b/lib/elixir/lib/module/types/pattern.ex
+index a68caff..f98cde2 100644
+--- a/lib/elixir/lib/module/types/pattern.ex
++++ b/lib/elixir/lib/module/types/pattern.ex
+@@ -1076,9 +1076,17 @@ defp of_guards(guards, changed, vars, tag, stack, context) do
+       })
+ 
+     {precise?, errored?, context} = of_guards(guards, tag, stack, context)
+-    {%{vars: vars, changed: changed}, context} = pop_pattern_info(context)
+-    context = of_changed(Map.keys(changed), stack, context)
+-    {is_map(vars) and precise?, errored?, context}
++    {%{vars: guard_vars, changed: changed}, context} = pop_pattern_info(context)
++
++    # Variables defined before the clause may be refined by the guard,
++    # and we propagate it to their dependencies. However, if propagation
++    # fails, it means the guard cannot succeed, not that the outer pattern
++    # (which has already matched) does not match, so we don't report it.
++    {outer, inner} = Enum.split_with(Map.keys(changed), &is_map_key(vars, &1))
++    context = of_changed(inner, stack, context)
++    %{failed: failed} = context
++    context = %{of_changed(outer, stack, %{context | failed: true}) | failed: failed}
++    {is_map(guard_vars) and precise?, errored?, context}
+   end
+ 
+   defp of_guards([guard], tag, stack, context) do
+diff --git a/lib/elixir/test/elixir/module/types/pattern_test.exs b/lib/elixir/test/elixir/module/types/pattern_test.exs
+index 863d191..dda717e 100644
+--- a/lib/elixir/test/elixir/module/types/pattern_test.exs
++++ b/lib/elixir/test/elixir/module/types/pattern_test.exs
+@@ -562,6 +562,20 @@ test "propagates across matches and guards" do
+              ) == dynamic(integer())
+     end
+ 
++    test "does not fail outer patterns from nested guards" do
++      assert typecheck!(
++               [x = y],
++               (
++                 elem(x, 0)
++
++                 case Process.get(:unused) do
++                   _ when is_map(y) -> :error
++                   _ -> :ok
++                 end
++               )
++             ) == atom([:error, :ok])
++    end
++
+     test "propagates across binary size in match" do
+       assert typecheck!(
+                [x],

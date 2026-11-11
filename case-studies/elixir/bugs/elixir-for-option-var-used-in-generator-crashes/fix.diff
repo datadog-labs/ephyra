@@ -1,0 +1,69 @@
+diff --git a/lib/elixir/lib/module/types/expr.ex b/lib/elixir/lib/module/types/expr.ex
+index 79206cc..d6da35a 100644
+--- a/lib/elixir/lib/module/types/expr.ex
++++ b/lib/elixir/lib/module/types/expr.ex
+@@ -673,13 +673,15 @@ def of_expr({:receive, meta, [blocks]}, expected, expr, stack, original) do
+   def of_expr({:for, meta, [_ | _] = args}, expected, expr, stack, context) do
+     cache_result(meta, stack, context, fn ->
+       {clauses, [[{:do, block} | opts]]} = Enum.split(args, -1)
+-      context = Enum.reduce(clauses, context, &for_clause(&1, stack, &2))
+ 
+       # We don't need to type check uniq, as it is a compile-time boolean.
+-      # We handle reduce and into accordingly instead.
++      # We handle reduce and into accordingly instead. Options are evaluated
++      # before the generators, and variables they define are visible in them,
++      # so we type check them first.
+       if Keyword.has_key?(opts, :reduce) do
+         reduce = Keyword.fetch!(opts, :reduce)
+         {reduce_type, context} = of_expr(reduce, expected, expr, stack, context)
++        context = Enum.reduce(clauses, context, &for_clause(&1, stack, &2))
+         # TODO: We need to type check against dynamic() instead of using reduce_type
+         # because this is recursive. We need to infer the block type first.
+         args = [dynamic()]
+@@ -691,6 +693,7 @@ def of_expr({:for, meta, [_ | _] = args}, expected, expr, stack, context) do
+         {into_kinds, into_type, expected, context} =
+           for_into(into, meta, expected, stack, context)
+ 
++        context = Enum.reduce(clauses, context, &for_clause(&1, stack, &2))
+         {block_type, context} = of_expr(block, expected, block, stack, context)
+ 
+         result_type =
+diff --git a/lib/elixir/test/elixir/module/types/expr_test.exs b/lib/elixir/test/elixir/module/types/expr_test.exs
+index 2e35754..8907647 100644
+--- a/lib/elixir/test/elixir/module/types/expr_test.exs
++++ b/lib/elixir/test/elixir/module/types/expr_test.exs
+@@ -4349,6 +4349,34 @@ test ":into with non-returning collectable" do
+       assert typecheck!([list], for(x <- list, into: raise("oops"), do: x)) == none()
+     end
+ 
++    test "variables defined in options are visible in generators" do
++      assert typecheck!(
++               [list],
++               for(
++                 x <- list,
++                 into:
++                   (
++                     list = []
++                     list
++                   ),
++                 do: x
++               )
++             ) ==
++               opt_union(empty_list(), dynamic(list(term())))
++
++      assert typecheck!(
++               [list],
++               for _ <- list,
++                   reduce:
++                     (
++                       list = :ok
++                       list
++                     ) do
++                 acc -> acc
++               end
++             ) == opt_union(atom([:ok]), dynamic())
++    end
++
+     test ":reduce checks" do
+       assert typecheck!(
+                [list],
