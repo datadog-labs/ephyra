@@ -1,0 +1,133 @@
+diff --git a/lib/elixir/lib/module/types/apply.ex b/lib/elixir/lib/module/types/apply.ex
+index ad20852..f8f4332 100644
+--- a/lib/elixir/lib/module/types/apply.ex
++++ b/lib/elixir/lib/module/types/apply.ex
+@@ -384,7 +384,7 @@ def remote(fun, args, expected, expr, stack, context, of_fun) do
+     {info, domain} = remote_domain(fun, args, expected, stack)
+ 
+     {args_types, context} =
+-      zip_map_reduce(args, domain, context, &of_fun.(&1, &2, expr, stack, &3))
++      of_args(args, domain, expr, stack, context, of_fun)
+ 
+     remote_apply(info, nil, fun, args_types, expr, stack, context)
+   end
+@@ -407,7 +407,7 @@ def remote(mod, fun, args, expected, expr, stack, context, of_fun) do
+     |> case do
+       {info, domain, context} ->
+         {args_types, context} =
+-          zip_map_reduce(args, domain, context, &of_fun.(&1, &2, expr, stack, &3))
++          of_args(args, domain, expr, stack, context, of_fun)
+ 
+         remote_apply(info, mod, fun, args_types, expr, stack, context)
+ 
+@@ -416,6 +416,56 @@ def remote(mod, fun, args, expected, expr, stack, context, of_fun) do
+     end
+   end
+ 
++  # Arguments are evaluated before the call, so refining a variable by the domain
++  # of an argument must not be visible to the arguments after it, as in
++  # `Map.put(map, :key, case map do ... end)`. Variables given as arguments and
++  # used again by a later argument are refined once all arguments are checked.
++  # Guards cannot observe evaluation order: a failing argument fails the guard.
++  defp of_args(args, domain, expr, stack, context, of_fun) do
++    case :erlang.fun_info(of_fun, :module) do
++      {:module, Module.Types.Pattern} ->
++        zip_map_reduce(args, domain, context, &of_fun.(&1, &2, expr, stack, &3))
++
++      _ ->
++        deferred = deferred_args(args)
++
++        {types, context} =
++          zip_map_reduce(args, Enum.zip(domain, deferred), context, fn
++            arg, {_type, true}, context -> of_fun.(arg, term(), expr, stack, context)
++            arg, {type, false}, context -> of_fun.(arg, type, expr, stack, context)
++          end)
++
++        if true in deferred do
++          zip_map_reduce(Enum.zip([args, types, deferred]), domain, context, fn
++            {arg, _type, true}, type, context -> of_fun.(arg, type, expr, stack, context)
++            {_arg, type, false}, _domain, context -> {type, context}
++          end)
++        else
++          {types, context}
++        end
++    end
++  end
++
++  defp deferred_args([{_, meta, _} = var | args]) when is_var(var) do
++    version = Keyword.get(meta, :version)
++    [version != nil and Enum.any?(args, &uses_version?(&1, version)) | deferred_args(args)]
++  end
++
++  defp deferred_args([_ | args]), do: [false | deferred_args(args)]
++  defp deferred_args([]), do: []
++
++  defp uses_version?(ast, version) do
++    ast
++    |> Macro.prewalk(false, fn
++      {_, meta, _} = var, false when is_var(var) ->
++        {var, Keyword.get(meta, :version) == version}
++
++      node, acc ->
++        {node, acc}
++    end)
++    |> elem(1)
++  end
++
+   # The functions implemented with custom do_remote functions work on values,
+   # rather on types, hence the custom behaviour.
+   defp do_remote(:erlang, name, [left, right], expected, expr, stack, context, of_fun)
+@@ -1755,7 +1805,7 @@ def local(fun, args, expected, {_, meta, _} = expr, stack, context, of_fun) do
+       local_domain(fun, args, expected, meta, stack, context)
+ 
+     {args_types, context} =
+-      zip_map_reduce(args, domain, context, &of_fun.(&1, &2, expr, stack, &3))
++      of_args(args, domain, expr, stack, context, of_fun)
+ 
+     case local_apply(updated_used?, info, fun, args_types, expr, stack, context) do
+       {_indexes, type, context} -> {type, context}
+@@ -1768,7 +1818,7 @@ def local_arrows(fun, args, expected, {_, meta, _} = expr, stack, context, of_fu
+       local_domain(fun, args, expected, meta, stack, context)
+ 
+     {args_types, context} =
+-      zip_map_reduce(args, domain, context, &of_fun.(&1, &2, expr, stack, &3))
++      of_args(args, domain, expr, stack, context, of_fun)
+ 
+     case local_apply(updated_used?, info, fun, args_types, expr, stack, context) do
+       {indexes, _type, context} -> {indexes_to_arrows(indexes, info), context}
+diff --git a/lib/elixir/test/elixir/module/types/expr_test.exs b/lib/elixir/test/elixir/module/types/expr_test.exs
+index 2e35754..0bef667 100644
+--- a/lib/elixir/test/elixir/module/types/expr_test.exs
++++ b/lib/elixir/test/elixir/module/types/expr_test.exs
+@@ -453,6 +453,31 @@ test "infers args" do
+              ) == dynamic(tuple([integer(), integer(), binary()]))
+     end
+ 
++    test "refines args after all args are evaluated" do
++      assert typecheck!(
++               [x],
++               Map.put(
++                 x,
++                 :key,
++                 case x do
++                   [_ | _] -> throw(:list)
++                   _ -> :value
++                 end
++               )
++             ) == dynamic(open_map(key: {term(), false}))
++
++      assert typecheck!(
++               [x],
++               (
++                 Map.put(x, :key, x)
++                 x
++               )
++             ) == dynamic(open_map())
++
++      assert typeerror!([x], Map.put(x, :key, hd([_ | _] = x))) =~
++               "incompatible types given to Map.put/3"
++    end
++
+     test "send returns the message" do
+       assert typecheck!(send(self(), {:msg, 1})) == tuple([atom([:msg]), integer()])
+ 

@@ -1,0 +1,51 @@
+diff --git a/lib/elixir/lib/module/types/of.ex b/lib/elixir/lib/module/types/of.ex
+index 922a100..e7de2e0 100644
+--- a/lib/elixir/lib/module/types/of.ex
++++ b/lib/elixir/lib/module/types/of.ex
+@@ -698,6 +698,11 @@ defp bitstring_segment({:"::", meta, [left, right]}, kind, args, stack, context)
+ 
+     {actual, context} =
+       case kind do
++        # A bitstring segment may bind either a binary or a non-binary
++        # bitstring, which is only known at runtime, so it is gradual.
++        :match when is_var(left) and alignment_type == :bitstring ->
++          Module.Types.Pattern.of_match_var(left, dynamic(type), expr, stack, context)
++
+         :match ->
+           Module.Types.Pattern.of_match_var(left, type, expr, stack, context)
+ 
+diff --git a/lib/elixir/test/elixir/module/types/expr_test.exs b/lib/elixir/test/elixir/module/types/expr_test.exs
+index 4184548..4c6955e 100644
+--- a/lib/elixir/test/elixir/module/types/expr_test.exs
++++ b/lib/elixir/test/elixir/module/types/expr_test.exs
+@@ -747,6 +747,9 @@ test "inference" do
+                  {x, y}
+                )
+              ) == dynamic(tuple([opt_union(float(), integer()), integer()]))
++
++      # A bitstring segment may hold a binary at runtime
++      assert typecheck!([<<x::bitstring>>], <<x::binary>>) == binary()
+     end
+ 
+     test "warnings" do
+diff --git a/lib/elixir/test/elixir/module/types/pattern_test.exs b/lib/elixir/test/elixir/module/types/pattern_test.exs
+index 0425687..e38860a 100644
+--- a/lib/elixir/test/elixir/module/types/pattern_test.exs
++++ b/lib/elixir/test/elixir/module/types/pattern_test.exs
+@@ -426,6 +426,7 @@ test "ok" do
+       assert typecheck!([<<x::float>>], x) == float()
+       assert typecheck!([<<x::binary>>], x) == binary()
+       assert typecheck!([<<x::utf8>>], x) == integer()
++      assert typecheck!([<<x::bitstring>>], x) == dynamic(bitstring())
+     end
+ 
+     test "nested" do
+@@ -446,7 +447,7 @@ test "nested" do
+ 
+              where "x" was given the type:
+ 
+-                 # type: bitstring()
++                 # type: dynamic(bitstring())
+                  # from: types_test.ex:LINE
+                  <<x::bitstring>>
+              """

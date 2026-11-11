@@ -1,0 +1,41 @@
+--- a/lib/elixir/lib/module/types/pattern.ex
++++ b/lib/elixir/lib/module/types/pattern.ex
+@@ -221,7 +221,10 @@
+           {trees, false, true, args_types, previous,
+            warn(__MODULE__, warning, meta, stack, context)}
+ 
+-        precise? ->
++        # If refining the variables failed, their types are no longer
++        # precise (errored variables become dynamic), so we cannot
++        # deduct the arguments types from the next clauses.
++        precise? and not (context.failed and not original.failed) ->
+           {trees, true, errored?, args_types, concat_previous(args_types, previous), context}
+ 
+         true ->
+--- a/lib/elixir/test/elixir/module/types/integration_test.exs
++++ b/lib/elixir/test/elixir/module/types/integration_test.exs
+@@ -186,6 +186,24 @@
+                dynamic(open_map(__struct__: {atom([GenServer]), false}))
+     end
+ 
++    test "does not deduct clauses whose refinement failed from the next ones" do
++      files = %{
++        "a.ex" => """
++        defmodule A do
++          def fun(x = y) when is_integer(x) and is_atom(y), do: raise("unreachable")
++          def fun(_), do: :other
++        end
++        """
++      }
++
++      {modules, _stderr} = with_io(:stderr, fn -> compile_modules(files) end)
++
++      {_, %{sig: {:infer, _, clauses}}} =
++        List.keyfind(read_chunk(modules[A]).exports, {:fun, 1}, 0)
++
++      assert Enum.any?(clauses, fn {[domain], _} -> subtype?(atom([:a]), domain) end)
++    end
++
+     test "ignores additional callbacks on implementations" do
+       files = %{
+         "p.ex" => """

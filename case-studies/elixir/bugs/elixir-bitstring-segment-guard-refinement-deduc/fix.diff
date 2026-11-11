@@ -1,0 +1,69 @@
+diff --git a/lib/elixir/lib/module/types/pattern.ex b/lib/elixir/lib/module/types/pattern.ex
+index a68caff..483de3e 100644
+--- a/lib/elixir/lib/module/types/pattern.ex
++++ b/lib/elixir/lib/module/types/pattern.ex
+@@ -816,6 +816,11 @@ defp of_pattern({:%{}, _meta, args}, path, stack, context) do
+   defp of_pattern({:<<>>, _meta, args} = node, _path, stack, context) do
+     precise? = of_precise_bitstring?(node, context.vars)
+     {type, _fail?, context} = Of.bitstring(args, :match, stack, context)
++
++    # The bitstring type does not depend on the segment variable, so refining
++    # the variable in guards does not refine the pattern. We annotate it like
++    # list subpatterns, which makes guards that use it imprecise.
++    context = if precise?, do: annotate_bitstring_subpattern(node, context), else: context
+     {type, precise?, context}
+   end
+ 
+@@ -1028,6 +1033,12 @@ defp of_precise_bitstring?({:<<>>, _meta, [{:"::", _, [expr, {type, _, _}]}]}, v
+ 
+   defp of_precise_bitstring?(_expr, _vars), do: false
+ 
++  defp annotate_bitstring_subpattern({:<<>>, _meta, [{:"::", _, [expr, _]}]}, context),
++    do: annotate_bitstring_subpattern(expr, context)
++
++  defp annotate_bitstring_subpattern(var, context) when is_var(var),
++    do: annotate_list_subpattern(var, context)
++
+   defp new_var?({_, meta, _} = var, vars) when is_var(var) do
+     version = Keyword.fetch!(meta, :version)
+     not is_map_key(vars, version)
+diff --git a/lib/elixir/test/elixir/module/types/integration_test.exs b/lib/elixir/test/elixir/module/types/integration_test.exs
+index 7f661b4..0d5cf38 100644
+--- a/lib/elixir/test/elixir/module/types/integration_test.exs
++++ b/lib/elixir/test/elixir/module/types/integration_test.exs
+@@ -186,6 +186,35 @@ def this_wont_warn(:ok), do: :ok
+                dynamic(open_map(__struct__: {atom([GenServer]), false}))
+     end
+ 
++    test "does not deduct bitstrings refined by guards from the next clauses" do
++      files = %{
++        "a.ex" => """
++        defmodule A do
++          def fun(<<x::bitstring>>) when is_binary(x), do: :binary
++          def fun(_), do: :other
++
++          def nil_or_true(<<x::binary>>) when is_nil(x) or x, do: :binary
++          def nil_or_true(_), do: :other
++        end
++        """
++      }
++
++      {modules, _stderr} = with_io(:stderr, fn -> compile_modules(files) end)
++      exports = read_chunk(modules[A]).exports
++
++      {_, %{sig: {:infer, _, clauses}}} = List.keyfind(exports, {:fun, 1}, 0)
++
++      assert Enum.any?(clauses, fn {[domain], return} ->
++               subtype?(bitstring(), domain) and subtype?(atom([:other]), return)
++             end)
++
++      {_, %{sig: {:infer, _, clauses}}} = List.keyfind(exports, {:nil_or_true, 1}, 0)
++
++      assert Enum.any?(clauses, fn {[domain], return} ->
++               subtype?(binary(), domain) and subtype?(atom([:other]), return)
++             end)
++    end
++
+     test "ignores additional callbacks on implementations" do
+       files = %{
+         "p.ex" => """
