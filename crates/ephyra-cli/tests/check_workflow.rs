@@ -119,4 +119,8 @@ fn check_lists_runs_and_fails_generators_and_strategies() {
 
     let (code, unknown) = ephyra(root, &["check", "no_such_generator", "--list"]);
     assert_eq!(code, Some(1), "{unknown}");
+    assert!(
+        unknown.contains("no_such_generator: no generator or strategy of that name"),
+        "{unknown}"
+    );
 }

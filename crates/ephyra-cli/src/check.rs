@@ -114,9 +114,9 @@ pub fn run(options: &Options) -> io::Result<Outcome> {
         for name in &passed {
             println!("  passed  {name}");
         }
-        for problem in &failed {
-            println!("  FAILED  {problem}");
-        }
+    }
+    for problem in &failed {
+        println!("  FAILED  {problem}");
     }
     for predicate in &pairing.unserved {
         let Kind::Predicate { input } = &predicate.kind else { continue };
