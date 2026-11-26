@@ -85,7 +85,8 @@ pub(crate) use self::{
 /// Run `property` against inputs from `generator` until [`Config::tests`]
 /// inputs pass, one fails, too many are discarded, or a time limit elapses.
 /// With [`Config::failures`] above 1, a failure does not end the run until
-/// that many distinct failures are found (see [`signature`](crate::signature)).
+/// that many distinct failures are found (see [`signature`](crate::signature)),
+/// and failing inputs count toward [`Config::tests`] as passing ones do.
 ///
 /// Before random testing, an explicit replay point ([`Config::replay`] or
 /// `EPHYRA_REPLAY`) and any stored regressions for this property are
@@ -192,7 +193,7 @@ fn property_name(config: &Config) -> String {
 /// distinct failures: [`test`](Self::test) keeps the first failure of each
 /// new signature, and [`wants_more`](Self::wants_more) shrinks, remembers
 /// and records it, then lets the loop go on until that many are found or
-/// the budget ends. A loop that shrinks by hand calls
+/// the tests or time run out. A loop that shrinks by hand calls
 /// [`shrink`](Self::shrink), [`reproduces`](Self::reproduces) or
 /// [`shrunk_to`](Self::shrunk_to) when a failed test leaves
 /// [`failure`](Self::failure) set, before the next `wants_more`.
@@ -246,6 +247,8 @@ pub struct Run<G: Gen, P> {
     /// With `Config::failures` above 1: the signatures found, in order,
     /// with how many failures had each.
     distinct: Vec<(exec::Signature, u64)>,
+    /// Failing inputs of the search, which count toward `Config::tests`.
+    failed: u64,
     /// Mutations made through [`mutate`](Self::mutate), for the target
     /// summary of hand-written loops.
     mutations: u64,
@@ -311,6 +314,7 @@ where
             rng: ChaCha8Rng::seed_from_u64(mix(seed, u64::MAX - 1)),
             pending: None,
             distinct: Vec::new(),
+            failed: 0,
             mutations: 0,
             shrinking: None,
             #[cfg(feature = "coverage")]

@@ -213,12 +213,12 @@ work as with the default search.
 
 A run stops at its first failure. `Config::failures(n)` (or
 `EPHYRA_FAILURES=n`, or `#[ephyra::test(failures = n)]`) lets it go on
-until it has found `n` distinct failures or its tests or time run out.
-Failures are told apart by a signature: by default the panic location, a
-fixed `returned false`, or the error message with its numbers and quoted
-text blanked. A property names its own with `ephyra::signature(name)`,
-and `Config::signature(f)` names the failures the property did not; the
-property's name wins.
+until it has found `n` distinct failures or its tests or time run out;
+failing inputs count as tests, as passing ones do. Failures are told apart
+by a signature: by default the panic location, a fixed `returned false`, or
+the error message with its numbers and quoted text blanked. A property
+names its own with `ephyra::signature(name)`, and `Config::signature(f)`
+names the failures the property did not; the property's name wins.
 
 ```rust
 use ephyra::{check, gens, signature, Config};
