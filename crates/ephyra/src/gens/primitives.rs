@@ -303,7 +303,11 @@ impl Gen for F64Range {
 
     fn generate(&self, g: &mut Source) -> f64 {
         let u = g.f64();
-        (self.lo + (self.hi - self.lo) * u).clamp(self.lo, self.hi)
+        let width = self.hi - self.lo;
+        // A range wider than `f64::MAX` has no finite width to scale.
+        let value =
+            if width.is_finite() { self.lo + width * u } else { self.lo * (1.0 - u) + self.hi * u };
+        value.clamp(self.lo, self.hi)
     }
 
     fn shrink(&self, value: &f64, visitor: &mut ShrinkVisitor<'_, f64>) -> ShrinkFlow {
@@ -322,12 +326,14 @@ impl Gen for F64Range {
     }
 
     fn mutate(&self, value: &f64, g: &mut Source) -> f64 {
-        let width = self.hi - self.lo;
         if g.bool() {
-            self.generate(g)
-        } else {
-            (value + (g.f64() - 0.5) * width * 0.1).clamp(self.lo, self.hi)
+            return self.generate(g);
         }
+        let u = g.f64() - 0.5;
+        let width = self.hi - self.lo;
+        let step =
+            if width.is_finite() { u * width * 0.1 } else { u * (self.hi * 0.1 - self.lo * 0.1) };
+        (value + step).clamp(self.lo, self.hi)
     }
 }
 
@@ -785,6 +791,29 @@ mod tests {
             let u = f64().mutate(&0.5, &mut g);
             assert!((0.0..1.0).contains(&u));
         }
+    }
+
+    #[test]
+    fn f64_ranges_wider_than_f64_max_are_covered() {
+        let full = f64_range(f64::MIN..=f64::MAX);
+        let mut g = Source::new(7, 5);
+        let mut quarters = [0; 4];
+        for _ in 0..1000 {
+            let x = full.generate(&mut g);
+            quarters[((x / f64::MAX + 1.0) * 2.0).min(3.0) as usize] += 1;
+        }
+        assert!(quarters.iter().all(|&n| n > 150), "{quarters:?}");
+        // Half of the mutants are a step of at most 5% of the width.
+        let mut steps = [0; 2];
+        for _ in 0..1000 {
+            let x = full.mutate(&0.0, &mut g);
+            assert!(x.is_finite());
+            if x != 0.0 && x.abs() <= f64::MAX * 0.1 {
+                steps[usize::from(x > 0.0)] += 1;
+            }
+        }
+        assert!(steps.iter().all(|&n| n > 150), "{steps:?}");
+        assert!((0..100).all(|_| full.mutate(&f64::MAX, &mut g).is_finite()));
     }
 
     #[test]
