@@ -390,7 +390,8 @@ pub struct Report {
     /// Generation attempts made (passing, discarded and failing).
     pub iterations: u64,
     /// Whether the random phase ended because `Config::budget_ms` ran out
-    /// before `Config::tests` inputs had passed.
+    /// before `Config::tests` inputs had passed, or a shipped search loop
+    /// ended because it ran out before the loop's fuel.
     pub stopped_by_budget: bool,
     /// The `max_size` the run used.
     pub max_size: usize,

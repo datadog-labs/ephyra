@@ -129,7 +129,7 @@ the code under test, is a failure, with its message and location.
 let config = Config::default()
     .tests(20_000)                           // passing tests to require
     .seed(7)                                 // a reproducible run
-    .budget(Duration::from_secs(600))        // stop the random phase early
+    .budget(Duration::from_secs(600))        // stop the random phase or a search loop early
     .name("decode_never_panics")             // the regressions file's name
     .no_regressions();                       // don't save or replay .ephyra/regressions
 let report = check(&config, generator, property);
@@ -266,7 +266,9 @@ take `(&mut run, &mut pool, fuel)`: `fuzz` (inputs reaching new coverage
 become seeds; plain random testing without coverage), `target` (seeds
 ranked by `target(score)`), `perf_fuzz` (toward slow inputs), and with the
 `coverage` feature `localize(&mut run, fuel, patience)`. `fuel` counts draws
-and mutations and ignores `Config::tests`; call `run.finish()` afterwards.
+and mutations; the search loops ignore `Config::tests` and the discard limit,
+but stop early at the time budget and the timeout. Call `run.finish()`
+afterwards.
 
 Pools: `Fifo::new()`, `Fifo::with_energy(n)`, `Heap::new()`, `Filo`,
 `Singleton::new(policy)`, `DoubleQueue::new()`. Each seed gets 100 mutations

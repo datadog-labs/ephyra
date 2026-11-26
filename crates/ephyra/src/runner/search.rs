@@ -53,26 +53,37 @@ where
         if self.report.tests + self.failed >= self.config.tests {
             return false;
         }
+        !self.out_of_time() && !self.gave_up(self.report.discarded, self.config.tests)
+    }
+
+    /// The time budget and the timeout, shared by the random phase and the
+    /// shipped loops: whether to stop, with the reason set in the report.
+    pub(crate) fn out_of_time(&mut self) -> bool {
         // Even the shortest budget lets the loop try one input.
         if let Some(budget) = self.config.budget_ms.map(std::time::Duration::from_millis)
             && self.started.elapsed() > budget
             && (self.report.iterations > 0 || std::mem::replace(&mut self.overtime, true))
         {
             self.report.stopped_by_budget = true;
-            return false;
+            return true;
         }
-        !self.timed_out_or_gave_up(self.report.discarded, self.config.tests)
+        self.timed_out()
     }
 
-    /// The timeout and discard-limit stopping rules, shared by the random and
-    /// targeted phases: whether to stop, with the reason set as the status.
-    pub(super) fn timed_out_or_gave_up(&mut self, discarded: u64, tests: u64) -> bool {
+    /// The timeout: whether to stop, with the status set.
+    fn timed_out(&mut self) -> bool {
         if let Some(timeout) = self.config.timeout_duration()
             && self.started.elapsed() > timeout
         {
             self.report.status = Status::TimedOut;
             return true;
         }
+        false
+    }
+
+    /// The discard limit of a phase of `tests` tests, shared by the random
+    /// and targeted phases: whether to stop, with the status set.
+    fn gave_up(&mut self, discarded: u64, tests: u64) -> bool {
         let max_discards = (self.config.max_discard_ratio * tests as f64).max(0.0) as u64;
         if discarded > max_discards {
             self.report.status = Status::GaveUp;
@@ -151,7 +162,7 @@ where
         let mut discarded = 0u64;
 
         while iterations < target_tests {
-            if self.timed_out_or_gave_up(discarded, target_tests) {
+            if self.timed_out() || self.gave_up(discarded, target_tests) {
                 break;
             }
             iterations += 1;
