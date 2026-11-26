@@ -17,7 +17,8 @@ pub fn classify(x: i32) -> &'static str {
     }
 }
 
-/// Never called by any scenario; shows up as never reached.
+/// Never called by any scenario, so the compiler generates no code for it.
+/// Shows up as never reached all the same.
 #[allow(dead_code)]
 pub fn never_called(x: i32) -> i32 {
     x.wrapping_mul(3)

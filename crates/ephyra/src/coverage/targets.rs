@@ -13,6 +13,7 @@ use crate::config::CoverageTarget;
 use super::{
     counters::{
         Delta,
+        Function,
         Functions,
     },
     locate::same_file,
@@ -52,15 +53,22 @@ pub(crate) struct Targets {
     states: Vec<State>,
     /// Function index to the targets it belongs to.
     by_function: BTreeMap<usize, Vec<usize>>,
+    /// Functions without code in the binary that own target lines.
+    absent: Vec<Function>,
 }
 
 impl Targets {
-    /// Resolve targets to lines and functions; `None` without a mapping.
-    pub fn resolve(targets: Vec<CoverageTarget>) -> Option<Targets> {
+    /// Resolve targets to lines and functions; `None` without a mapping. A
+    /// function without code in the binary counts only when it is of the crate
+    /// of the normalized `filter`: a target's file is matched by the end of its
+    /// path, and every dependency has a `src/lib.rs`.
+    pub fn resolve(targets: Vec<CoverageTarget>, filter: &str) -> Option<Targets> {
         let mapping = Mapping::get()?;
         let all = Functions::get().all();
         let mut states = Vec::with_capacity(targets.len());
         let mut by_function: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        let mut absent: Vec<Function> = Vec::new();
+        let absent_in_crate = Functions::get().absent_in(filter);
         for target in targets {
             let mut state = State {
                 outcome: TargetOutcome {
@@ -85,7 +93,7 @@ impl Targets {
                 continue;
             }
             let range = target.begin_line..=target.end_line;
-            for (fi, function) in all.iter().enumerate() {
+            for (fi, function) in all.iter().chain(absent_in_crate.iter()).enumerate() {
                 let Some(mapped) = mapping.function(function.name_ref, function.func_hash) else {
                     continue;
                 };
@@ -109,17 +117,27 @@ impl Targets {
                 }
                 if any {
                     state.outcome.functions.push(function.name.clone());
-                    by_function.entry(fi).or_default().push(states.len());
+                    if fi < all.len() {
+                        by_function.entry(fi).or_default().push(states.len());
+                    } else if !absent.contains(function) {
+                        absent.push(function.clone());
+                    }
                 }
             }
             states.push(state);
         }
-        Some(Targets { mapping, states, by_function })
+        Some(Targets { mapping, states, by_function, absent })
     }
 
-    /// The functions that own target lines, for the tracked set.
+    /// The functions with code in the binary that own target lines, for the
+    /// tracked set.
     pub fn functions(&self) -> Vec<usize> {
         self.by_function.keys().copied().collect()
+    }
+
+    /// The functions without code in the binary that own target lines.
+    pub fn absent(&self) -> &[Function] {
+        &self.absent
     }
 
     /// The targets that matched no instrumented code.

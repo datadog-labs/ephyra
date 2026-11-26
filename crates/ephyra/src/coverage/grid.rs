@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use super::{
     counters::{
         Delta,
+        Function,
         Functions,
     },
     mapping::Mapping,
@@ -73,10 +74,12 @@ impl Grid {
         }
     }
 
-    /// Render the page. `samples` are `(debug, origin, size)`.
+    /// Render the page. `absent` are the tracked functions without code in the
+    /// binary, `samples` are `(debug, origin, size)`.
     pub fn render(
         &self,
         selected: &[usize],
+        absent: &[Function],
         facts: &Facts<'_>,
         targets: &[TargetOutcome],
         samples: &[(String, String, usize)],
@@ -95,8 +98,9 @@ impl Grid {
             .map(|&fi| all[fi].name.clone());
         let mut files: BTreeMap<usize, Vec<serde_json::Value>> = BTreeMap::new();
         let mut reached = 0usize;
-        for &fi in selected {
-            let function = &all[fi];
+        // Indices past the end stand for functions that no input entered.
+        let tracked = selected.iter().map(|&fi| (fi, &all[fi])).chain((all.len()..).zip(absent));
+        for (fi, function) in tracked {
             let Some(mapped) = self.mapping.function(function.name_ref, function.func_hash) else {
                 continue;
             };

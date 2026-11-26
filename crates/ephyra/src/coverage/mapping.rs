@@ -163,6 +163,11 @@ impl Mapping {
     pub fn function(&self, name_ref: u64, func_hash: u64) -> Option<&MappedFunction> {
         self.index.get(&(name_ref, func_hash)).map(|&i| &self.functions[i])
     }
+
+    /// The profile hashes of every function.
+    pub fn keys(&self) -> impl Iterator<Item = (u64, u64)> {
+        self.index.keys().copied()
+    }
 }
 
 fn read_current_exe() -> Result<Mapping, String> {

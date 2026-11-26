@@ -39,6 +39,27 @@
 //! property instead, set `Config::coverage.profraw_dir`; to stop the
 //! process's own dump from a test, call [`suppress_default_dump`].
 //!
+//! # Functions that nothing calls
+//!
+//! The report also counts the functions that the filter selects and nothing
+//! calls. The compiler generates no code for them, or the linker drops it, but
+//! the coverage mapping in the binary still lists them. Such a function is
+//! never reached, and the grid shows it. A target can point at it, also
+//! outside the filter but not in another crate. It has no counters, so
+//! [`Summary::counters_total`] and [`Functions`] leave it out. A `const fn`
+//! that only the compiler runs is such a function too, and so is the
+//! initializer that `thread_local!` generates and does not use.
+//!
+//! When the tests are in a crate of their own (the `tests/` directory
+//! included), the binary has only those object files of the library that they
+//! use something from. The report misses functions whose mapping is in the
+//! other files: modules that the tests do not use, and possibly every
+//! generic, `#[inline]` and private function that nothing calls, because the
+//! compiler puts the mapping of those in one of the files. Properties inside
+//! the crate see all functions. Otherwise, `codegen-units = 1` in the profile
+//! compiles the library to one object file. `-C link-dead-code` brings some of
+//! the functions back, but it can list one that ran as never reached.
+//!
 //! # Targets
 //!
 //! A coverage target is a file and a line range the search should reach,

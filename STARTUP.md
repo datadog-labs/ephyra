@@ -84,7 +84,9 @@ functions and lines were never reached: that is where to aim next. From a
 separate test crate, set `EPHYRA_COVERAGE_FILTER=<crate under test>` (the
 default tracks the test crate itself), and check the report's `coverage:`
 line names that crate; `.ephyra/coverage/<property>.html` shows files and
-lines.
+lines. The report of a separate test crate can miss functions that nothing
+calls (API.md, "Coverage"): put properties inside the crate, or set
+`codegen-units = 1` in the profile.
 
 ## 5. When a property fails
 

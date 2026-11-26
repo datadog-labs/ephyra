@@ -192,7 +192,7 @@ where
         };
         let own_crate =
             crate::coverage::tracker::normalize_filter(&filter) == crate_of(property_type);
-        let targets = self.resolve_targets();
+        let targets = self.resolve_targets(&filter);
         let mut extra = targets.as_ref().map(|t| t.functions()).unwrap_or_default();
         // The property's own function is tracked whichever crate it lives
         // in, so the grid can point at it; it stays out of fault
@@ -205,7 +205,8 @@ where
             .map(|(i, _)| i)
             .collect();
         extra.extend(property_fns.iter().copied());
-        match crate::coverage::tracker::Tracker::new(&filter, &extra) {
+        let absent = targets.as_ref().map(|t| t.absent()).unwrap_or_default();
+        match crate::coverage::tracker::Tracker::new(&filter, &extra, absent) {
             Some(tracker) => {
                 if let Some(warning) = crate::coverage::tracker::filter_warning(
                     tracker.filter(),
@@ -270,7 +271,10 @@ where
 
     /// The configured coverage targets (inline and from the file), resolved.
     #[cfg(feature = "coverage")]
-    pub(super) fn resolve_targets(&mut self) -> Option<crate::coverage::targets::Targets> {
+    pub(super) fn resolve_targets(
+        &mut self,
+        filter: &str,
+    ) -> Option<crate::coverage::targets::Targets> {
         let mut targets = self.config.coverage.targets.clone();
         if let Some(path) = self.config.coverage.targets_file.clone() {
             match crate::config::load_targets(&path) {
@@ -284,13 +288,15 @@ where
         if targets.is_empty() {
             return None;
         }
-        match crate::coverage::targets::Targets::resolve(targets) {
+        let filter = crate::coverage::tracker::normalize_filter(filter);
+        match crate::coverage::targets::Targets::resolve(targets, &filter) {
             Some(resolved) => {
                 for target in resolved.unresolved() {
                     self.report.warn(
                         "coverage_target",
                         format!(
-                            "target {target} matches no instrumented code; check the path and lines"
+                            "target {target} matches no instrumented code; check the path and lines, \
+                             and that the binary links that code"
                         ),
                     );
                 }
@@ -401,6 +407,7 @@ where
                     .collect();
                 let html = grid.render(
                     tracker.selected(),
+                    tracker.absent(),
                     &crate::coverage::grid::Facts {
                         property: &self.report.name,
                         seed: self.report.seed,

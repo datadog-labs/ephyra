@@ -353,6 +353,7 @@ mod instrumented {
         config.coverage.targets = vec![
             ephyra::config::CoverageTarget::new("tests/reports/planted.rs", 14..=14),
             ephyra::config::CoverageTarget::new("tests/reports/planted.rs", 9..=10),
+            ephyra::config::CoverageTarget::new("tests/reports/planted.rs", 24..=24),
         ];
         config.coverage.targets_file = None;
         let report = check(&config, gens::int(-100i32..=100), |x| !planted::classify(x).is_empty());
