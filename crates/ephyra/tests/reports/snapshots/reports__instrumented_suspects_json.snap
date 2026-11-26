@@ -94,13 +94,15 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
   "coverage": {
     "filter": "reports::planted",
     "functions_reached": 2,
-    "functions_total": 2,
+    "functions_total": 3,
     "counters_hit": 5,
     "counters_total": 5,
     "inputs": 104,
     "novel_inputs": 3,
     "last_novelty_at": 63,
-    "unreached": [],
+    "unreached": [
+      "reports::planted::never_called"
+    ],
     "partial": [],
     "growth": {
       "points": [

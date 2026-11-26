@@ -4,12 +4,23 @@
 //! Counter snapshots and function records read from the profile runtime.
 
 use std::{
+    collections::{
+        BTreeMap,
+        HashMap,
+        HashSet,
+    },
     ops::Range,
     sync::{
+        Arc,
         Condvar,
         Mutex,
         OnceLock,
     },
+};
+
+use super::{
+    mapping::Mapping,
+    names,
 };
 
 /// Whether this binary was built with `-C instrument-coverage` and the
@@ -164,23 +175,74 @@ pub fn suppress_default_dump() {
     });
 }
 
-/// Every instrumented function in the binary, from the profile data records
-/// and the names section. Built once per process.
+/// Every instrumented function with code in the binary, from the profile data
+/// records and the names section. Built once per process.
 #[derive(Debug)]
 pub struct Functions {
     functions: Vec<Function>,
+    /// The mangled names of the binary, by hash.
+    names: HashMap<u64, String>,
+    /// What [`absent_in`](Self::absent_in) found, by crate.
+    absent: Mutex<HashMap<String, Arc<[Function]>>>,
 }
 
 impl Functions {
     /// The instrumented functions, or an empty list when uninstrumented.
     pub fn get() -> &'static Functions {
         static FUNCTIONS: OnceLock<Functions> = OnceLock::new();
-        FUNCTIONS.get_or_init(|| Functions { functions: runtime::functions() })
+        FUNCTIONS.get_or_init(|| {
+            let (functions, names) = runtime::functions();
+            Functions { functions, names, absent: Mutex::default() }
+        })
     }
 
     /// All functions.
     pub fn all(&self) -> &[Function] {
         &self.functions
+    }
+
+    /// The functions defined in the crate of the normalized `filter` (in any
+    /// crate when it is empty) that have no code in the binary, and so no data
+    /// record and no counters: nothing calls them, but the coverage mapping
+    /// lists them. Found once per crate and process; empty without a mapping.
+    pub(crate) fn absent_in(&self, filter: &str) -> Arc<[Function]> {
+        let krate = filter.split("::").next().unwrap_or_default();
+        let mut absent = self.absent.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        absent.entry(krate.to_string()).or_insert_with(|| self.find_absent(krate).into()).clone()
+    }
+
+    /// Instantiations of one definition count once, under the shortest name,
+    /// and not at all when any of them has a record.
+    fn find_absent(&self, krate: &str) -> Vec<Function> {
+        let Some(mapping) = Mapping::get() else { return Vec::new() };
+        // The way v0 mangling writes the crate, which most names do not mention.
+        let separated = krate.starts_with(|c: char| c == '_' || c.is_ascii_digit());
+        let separator = if separated { "_" } else { "" };
+        let mention = format!("{}{separator}{krate}", krate.len());
+        let definition = |name_ref: u64| {
+            let name = self.names.get(&name_ref)?;
+            if krate.is_empty() {
+                return names::definition(name);
+            }
+            let definition = name.contains(&mention).then(|| names::definition(name))??;
+            definition.strip_prefix(krate)?.starts_with("::").then_some(definition)
+        };
+        let recorded: HashSet<u64> = self.functions.iter().map(|f| f.name_ref).collect();
+        let definitions: HashSet<String> =
+            recorded.iter().filter_map(|&name_ref| definition(name_ref)).collect();
+        let mut absent: BTreeMap<String, Function> = BTreeMap::new();
+        for (name_ref, func_hash) in mapping.keys().filter(|(r, _)| !recorded.contains(r)) {
+            let Some(definition) = definition(name_ref).filter(|d| !definitions.contains(d)) else {
+                continue;
+            };
+            let name = names::pretty(&self.names[&name_ref]);
+            let function = Function { name, name_ref, func_hash, counters: 0..0 };
+            let shortest = absent.entry(definition).or_insert_with(|| function.clone());
+            if (function.name.len(), &function.name) < (shortest.name.len(), &shortest.name) {
+                *shortest = function;
+            }
+        }
+        absent.into_values().collect()
     }
 
     /// Functions whose demangled name starts with `prefix` (a crate name,
@@ -234,12 +296,16 @@ mod runtime {
         unsafe { __llvm_profile_set_dumped() }
     }
 
-    use std::sync::atomic::{
-        AtomicU64,
-        Ordering,
+    use std::{
+        collections::HashMap,
+        sync::atomic::{
+            AtomicU64,
+            Ordering,
+        },
     };
 
     use super::{
+        super::names,
         Function,
         first_counter,
     };
@@ -266,10 +332,7 @@ mod runtime {
     /// The layout under which the data section divides into whole records
     /// whose `NameRef`s are names in the names section, judged on the first
     /// records; `None` when no layout fits.
-    fn layout(
-        records: &[u8],
-        by_ref: &std::collections::HashMap<u64, &str>,
-    ) -> Option<(usize, usize)> {
+    fn layout(records: &[u8], by_ref: &HashMap<u64, &str>) -> Option<(usize, usize)> {
         LAYOUTS
             .iter()
             .copied()
@@ -318,7 +381,7 @@ mod runtime {
         }
     }
 
-    pub(super) fn functions() -> Vec<Function> {
+    pub(super) fn functions() -> (Vec<Function>, HashMap<u64, String>) {
         // SAFETY: the data and names sections are static, contiguous, and
         // laid out as documented in compiler-rt's InstrProfData.inc.
         let (records, names, counters_base) = unsafe {
@@ -331,10 +394,10 @@ mod runtime {
             let names = std::slice::from_raw_parts(nb, ne.offset_from(nb).max(0) as usize);
             (records, names, first_counter(__llvm_profile_begin_counters()) as usize)
         };
-        let names = super::super::names::parse(names);
-        let by_ref = super::super::names::by_ref(&names);
+        let names = names::parse(names);
+        let by_ref = names::by_ref(&names);
         let Some((record_size, num_counters_at)) = layout(records, &by_ref) else {
-            return Vec::new();
+            return Default::default();
         };
         let mut functions = Vec::with_capacity(records.len() / record_size);
         for (index, record) in records.chunks_exact(record_size).enumerate() {
@@ -350,10 +413,9 @@ mod runtime {
                 continue;
             }
             let start = (counter_addr - counters_base) / 8;
-            let name = by_ref.get(&name_ref).map_or_else(
-                || format!("<unknown {name_ref:#x}>"),
-                |n| super::super::names::pretty(n),
-            );
+            let name = by_ref
+                .get(&name_ref)
+                .map_or_else(|| format!("<unknown {name_ref:#x}>"), |n| names::pretty(n));
             functions.push(Function {
                 name,
                 name_ref,
@@ -362,7 +424,8 @@ mod runtime {
             });
         }
         functions.sort_by_key(|f| f.counters.start);
-        functions
+        let names = by_ref.into_iter().map(|(hash, name)| (hash, name.to_string())).collect();
+        (functions, names)
     }
 }
 
@@ -370,14 +433,16 @@ mod runtime {
 mod runtime {
     pub fn set_dumped() {}
 
+    use std::collections::HashMap;
+
     use super::Function;
 
     pub(super) fn counters(_range: Option<std::ops::Range<usize>>) -> Option<Vec<u64>> {
         None
     }
 
-    pub(super) fn functions() -> Vec<Function> {
-        Vec::new()
+    pub(super) fn functions() -> (Vec<Function>, HashMap<u64, String>) {
+        Default::default()
     }
 
     pub(super) fn profraw() -> Option<Vec<u8>> {
@@ -387,10 +452,7 @@ mod runtime {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::names,
-        *,
-    };
+    use super::*;
 
     #[test]
     fn delta_and_within() {
@@ -455,6 +517,10 @@ mod tests {
                 "{:?}",
                 &functions.all()[..5.min(functions.all().len())]
             );
+            assert!(!functions.absent_in("ephyra").is_empty());
+            // `rand_chacha` defines the impls of `rand_core` traits for its types.
+            let absent = functions.absent_in("rand_core");
+            assert!(!absent.iter().any(|f| f.name.contains("rand_chacha")), "{absent:?}");
             // Running code increments its counters.
             let before = snapshot().unwrap();
             let _ = std::hint::black_box(names::md5(b"delta"));

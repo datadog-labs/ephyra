@@ -10,7 +10,8 @@ ephyra: FAILED, property panicked: planted: too large
   after 1 passing tests (1 distinct, 0 discarded) in [time]
   reproduce: EPHYRA_REPLAY=24301:1
   or rerun the whole search: Config::default().seed(24301)
-  coverage: 2 of 2 functions in `reports::planted` reached, 5 of 5 counters
+  coverage: 2 of 3 functions in `reports::planted` reached, 5 of 5 counters
+  never reached: reports::planted::never_called
   suspects (68 passing and 36 failing runs over 9 regions):
     1. tests/reports/planted.rs:8-18 in `reports::planted::classify`  ochiai=1.00 delta=1.00  HIGH panic-site (singleton_panic_overlap)
   timing: property median [time], p90 [time], max [time]; generation median [time], p90 [time], max [time]

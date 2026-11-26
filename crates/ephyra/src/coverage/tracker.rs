@@ -19,6 +19,7 @@ use crate::report::{
 
 use super::counters::{
     Delta,
+    Function,
     Functions,
     Snapshot,
     snapshot_range,
@@ -46,6 +47,8 @@ pub(crate) struct Tracker {
     window: Range<usize>,
     /// Indices into [`Functions::all`] of the selected functions.
     selected: Vec<usize>,
+    /// The selected functions without code in the binary.
+    absent: Vec<Function>,
     /// Highest hit-count bucket seen per counter in the window.
     virgin: Vec<u8>,
     /// How many inputs touched each counter in the window.
@@ -81,30 +84,33 @@ impl Tracker {
     /// Track the functions whose demangled names start with `filter`
     /// (`crate`, `crate::module` or `crate::Type`; see [`normalize_filter`]),
     /// or every function except ephyra's own when `filter` is empty, plus
-    /// `extra` (indices into [`Functions::all`], for coverage targets).
-    /// `None` when the binary is uninstrumented or nothing is selected.
-    pub fn new(filter: &str, extra: &[usize]) -> Option<Tracker> {
+    /// `extra` (indices into [`Functions::all`]) and `extra_absent` (without
+    /// code in the binary), for coverage targets. `None` when the binary is
+    /// uninstrumented or nothing is selected.
+    pub fn new(filter: &str, extra: &[usize], extra_absent: &[Function]) -> Option<Tracker> {
         let filter = normalize_filter(filter);
         let functions = Functions::get();
+        let wanted = |f: &Function| {
+            if filter.is_empty() { !is_own(&f.name) } else { matches(&f.name, &filter) }
+        };
         let mut selected: Vec<usize> =
-            functions
-                .all()
-                .iter()
-                .enumerate()
-                .filter(|(_, f)| {
-                    if filter.is_empty() { !is_own(&f.name) } else { matches(&f.name, &filter) }
-                })
-                .map(|(i, _)| i)
-                .collect();
-        let matched = selected.len();
+            functions.all().iter().enumerate().filter(|(_, f)| wanted(f)).map(|(i, _)| i).collect();
+        let mut absent: Vec<Function> =
+            functions.absent_in(&filter).iter().filter(|f| wanted(f)).cloned().collect();
+        let matched = selected.len() + absent.len();
         selected.extend(extra.iter().copied().filter(|i| *i < functions.all().len()));
         selected.sort_unstable();
         selected.dedup();
-        if selected.is_empty() {
+        for function in extra_absent {
+            if !absent.contains(function) {
+                absent.push(function.clone());
+            }
+        }
+        if selected.is_empty() && absent.is_empty() {
             return None;
         }
-        let lo = selected.iter().map(|&i| functions.all()[i].counters.start).min()?;
-        let hi = selected.iter().map(|&i| functions.all()[i].counters.end).max()?;
+        let lo = selected.iter().map(|&i| functions.all()[i].counters.start).min().unwrap_or(0);
+        let hi = selected.iter().map(|&i| functions.all()[i].counters.end).max().unwrap_or(0);
         let width = hi - lo;
         let mut selected_mask = vec![false; width];
         for &i in &selected {
@@ -115,6 +121,7 @@ impl Tracker {
         Some(Tracker {
             window: lo..hi,
             selected,
+            absent,
             virgin: vec![0; width],
             touched_by: vec![0; width],
             inputs: 0,
@@ -128,9 +135,15 @@ impl Tracker {
         })
     }
 
-    /// Indices into [`Functions::all`] of the selected functions.
+    /// Indices into [`Functions::all`] of the selected functions with code in
+    /// the binary.
     pub fn selected(&self) -> &[usize] {
         &self.selected
+    }
+
+    /// The selected functions without code in the binary.
+    pub fn absent(&self) -> &[Function] {
+        &self.absent
     }
 
     /// The normalized filter.
@@ -138,8 +151,9 @@ impl Tracker {
         &self.filter
     }
 
-    /// How many functions the filter itself selected, not counting the
-    /// coverage targets' and the property's own functions.
+    /// How many functions the filter itself selected, with or without code in
+    /// the binary, not counting the coverage targets' and the property's own
+    /// functions.
     pub fn matched(&self) -> usize {
         self.matched
     }
@@ -195,7 +209,7 @@ impl Tracker {
     pub fn summary(&self) -> Summary {
         let all = Functions::get().all();
         let mut reached = BTreeSet::new();
-        let mut unreached = BTreeSet::new();
+        let mut unreached: BTreeSet<String> = self.absent.iter().map(|f| f.name.clone()).collect();
         let mut partial = Vec::new();
         let (mut counters_hit, mut counters_total) = (0, 0);
         for &i in &self.selected {
@@ -217,7 +231,7 @@ impl Tracker {
         Summary {
             filter: self.filter.clone(),
             functions_reached: reached.len(),
-            functions_total: self.selected.len(),
+            functions_total: self.selected.len() + self.absent.len(),
             counters_hit,
             counters_total,
             inputs: self.inputs,
@@ -239,11 +253,13 @@ pub struct Summary {
     pub filter: String,
     /// Selected functions reached by at least one input.
     pub functions_reached: usize,
-    /// Selected functions in the binary.
+    /// Selected functions, including those that nothing calls, which have no
+    /// code in the binary. From a separate test crate, some of those can be
+    /// missing (see the [module docs](crate::coverage)).
     pub functions_total: usize,
     /// Counters (regions) hit by at least one input.
     pub counters_hit: usize,
-    /// Counters (regions) in the selected functions.
+    /// Counters (regions) in the selected functions with code in the binary.
     pub counters_total: usize,
     /// Inputs observed.
     pub inputs: u64,
@@ -307,7 +323,7 @@ impl Summary {
 }
 
 fn is_own(name: &str) -> bool {
-    let bare = name.trim_start_matches('<');
+    let bare = normalize_name(name);
     bare.starts_with("ephyra::") || bare.starts_with("ephyra_macros::")
 }
 
@@ -323,9 +339,12 @@ pub(crate) fn normalize_filter(filter: &str) -> String {
 
 /// A demangled name as matched: leading `<`s trimmed and `>::` read as
 /// `::`, the way [`normalize_filter`] reads a filter, so
-/// `<my_crate::Type>::method` is `my_crate::Type::method`.
+/// `<my_crate::Type>::method` is `my_crate::Type::method`. A trait method
+/// that nothing instantiates, `<_ as my_crate::Trait>::method`, is under its
+/// trait.
 fn normalize_name(name: &str) -> Cow<'_, str> {
     let bare = name.trim_start_matches('<');
+    let bare = bare.strip_prefix("_ as ").unwrap_or(bare);
     if bare.contains(">::") { Cow::Owned(bare.replace(">::", "::")) } else { Cow::Borrowed(bare) }
 }
 
@@ -478,8 +497,8 @@ mod tests {
     #[test]
     fn normalized_filters_select_instrumented_functions() {
         let names = |filter: &str| -> Vec<String> {
-            let tracker = Tracker::new(filter, &[]).expect("functions in this module");
-            assert_eq!(tracker.matched(), tracker.selected().len());
+            let tracker = Tracker::new(filter, &[], &[]).expect("functions in this module");
+            assert_eq!(tracker.matched(), tracker.selected().len() + tracker.absent().len());
             let all = Functions::get().all();
             tracker.selected().iter().map(|&i| all[i].name.clone()).collect()
         };
@@ -491,13 +510,68 @@ mod tests {
         let method = names("<ephyra::coverage::tracker::Tracker>::summary");
         assert!(!method.is_empty(), "{method:?}");
         assert!(method.iter().all(|n| n.contains("Tracker>::summary")), "{method:?}");
-        assert!(Tracker::new("ephyra::coverage::tracker", &[]).unwrap().matched() > plain.len());
-        assert!(Tracker::new("ephyra_no_such_crate", &[]).is_none());
+        assert!(
+            Tracker::new("ephyra::coverage::tracker", &[], &[]).unwrap().matched() > plain.len()
+        );
+        assert!(Tracker::new("ephyra_no_such_crate", &[], &[]).is_none());
+    }
+
+    /// Nothing calls these, so no code is generated for them, except for
+    /// `Meters::from(1u8)`.
+    #[cfg(ephyra_instrumented)]
+    #[allow(dead_code)]
+    mod uncalled {
+        pub fn plain(x: u32) -> u32 {
+            if x > 1 { x } else { 1 }
+        }
+
+        pub fn generic<T: Default>() -> Vec<T> {
+            (0..3).map(|_| T::default()).collect()
+        }
+
+        pub trait Provides {
+            fn provided(&self) -> u32 {
+                7
+            }
+        }
+
+        pub struct Meters(pub u64);
+
+        macro_rules! from {
+            ($($t:ty)*) => {$(
+                impl From<$t> for Meters {
+                    fn from(x: $t) -> Self {
+                        Meters(x.into())
+                    }
+                }
+            )*};
+        }
+        from!(u8 u16 u32);
+    }
+
+    #[cfg(ephyra_instrumented)]
+    #[test]
+    fn functions_without_code_are_counted_as_unreached() {
+        let path = "ephyra::coverage::tracker::tests::uncalled";
+        let mut tracker = Tracker::new(path, &[], &[]).expect("functions in the mapping");
+        assert_eq!((tracker.selected().len(), tracker.matched()), (1, 7));
+        let before = tracker.begin().unwrap();
+        std::hint::black_box(uncalled::Meters::from(1u8).0);
+        assert_eq!(tracker.end(&before).novelty, 1);
+        let summary = tracker.summary();
+        assert_eq!((summary.functions_reached, summary.functions_total), (1, 7));
+        assert_eq!((summary.counters_hit, summary.counters_total), (1, 1));
+        let meters = |t: &str| format!("<{path}::Meters as core::convert::From<{t}>>::from");
+        let names = ["generic::<_>", "generic::<_>::{closure#0}", "plain"];
+        let mut unreached = vec![format!("<_ as {path}::Provides>::provided")];
+        unreached.extend([meters("u16"), meters("u32")]);
+        unreached.extend(names.map(|name| format!("{path}::{name}")));
+        assert_eq!(summary.unreached, unreached);
     }
 
     #[test]
     fn tracker_matches_the_build() {
-        match Tracker::new("", &[]) {
+        match Tracker::new("", &[], &[]) {
             None => assert!(!super::super::available()),
             Some(mut tracker) => {
                 let before = tracker.begin().unwrap();
@@ -505,7 +579,7 @@ mod tests {
                 assert_eq!(tracker.inputs, 1);
                 let _ = observation;
                 let summary = tracker.summary();
-                assert_eq!(summary.functions_total, tracker.selected.len());
+                assert_eq!(summary.functions_total, tracker.selected.len() + tracker.absent.len());
             },
         }
     }

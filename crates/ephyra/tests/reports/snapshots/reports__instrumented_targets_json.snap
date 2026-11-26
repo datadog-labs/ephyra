@@ -761,13 +761,15 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
   "coverage": {
     "filter": "reports::planted",
     "functions_reached": 2,
-    "functions_total": 2,
+    "functions_total": 3,
     "counters_hit": 5,
     "counters_total": 5,
     "inputs": 456,
     "novel_inputs": 3,
     "last_novelty_at": 5,
-    "unreached": [],
+    "unreached": [
+      "reports::planted::never_called"
+    ],
     "partial": [],
     "growth": {
       "points": [
@@ -811,6 +813,19 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
         "hits": 456,
         "first_hit_at": 1,
         "function_inputs": 456
+      },
+      {
+        "target": {
+          "file": "tests/reports/planted.rs",
+          "begin_line": 24,
+          "end_line": 24
+        },
+        "functions": [
+          "reports::planted::never_called"
+        ],
+        "hits": 0,
+        "first_hit_at": null,
+        "function_inputs": 0
       }
     ]
   },
@@ -840,6 +855,10 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
     {
       "kind": "coverage_target_missed",
       "message": "target tests/reports/planted.rs:14 was never reached: `reports::planted::classify` was entered by 456 inputs that took other branches"
+    },
+    {
+      "kind": "coverage_target_missed",
+      "message": "target tests/reports/planted.rs:24 was never reached: `reports::planted::never_called` was never entered"
     },
     {
       "kind": "low_distinct_inputs",

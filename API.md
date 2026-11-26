@@ -309,7 +309,11 @@ process-global. For a file and line view, set `EPHYRA_COVERAGE_HTML=dir` (or
 use `ephyra test`, which writes `.ephyra/coverage/<property>.html`). The
 report then shows `coverage: 3 of 5 functions in `tlv`
 reached`, `never reached: ...` and `partly covered: ...` (in code,
-`report.coverage`). Add targets to steer at unreached code:
+`report.coverage`). Functions that nothing calls count as never reached. When
+the tests are in a crate of their own, the linker leaves out object files of
+the library, and the report can miss functions that nothing calls, also in
+modules that the tests use: put properties inside the crate, or set
+`codegen-units = 1` in the profile. Add targets to steer at unreached code:
 `config.coverage.targets.push(ephyra::config::CoverageTarget::new("src/parser.rs", 120..=140))`,
 or one JSON line per target in `.ephyra/targets.jsonl`. Fault localization
 runs on a failure with coverage on and adds `suspects` to the report

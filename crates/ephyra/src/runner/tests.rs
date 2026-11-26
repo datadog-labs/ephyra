@@ -747,6 +747,12 @@ fn branchy(x: i32) -> i32 {
 }
 
 #[cfg(all(ephyra_instrumented, feature = "coverage"))]
+#[allow(dead_code)]
+fn uncalled(x: i32) -> i32 {
+    x.wrapping_mul(3)
+}
+
+#[cfg(all(ephyra_instrumented, feature = "coverage"))]
 #[test]
 fn coverage_targets_are_resolved_tracked_and_reported() {
     use crate::config::CoverageTarget;
@@ -875,6 +881,14 @@ fn the_coverage_grid_is_written() {
             })
         }),
         "{data}"
+    );
+    assert!(
+        data["files"].as_array().unwrap().iter().any(|f| {
+            f["functions"].as_array().unwrap().iter().any(|func| {
+                func["name"] == "ephyra::runner::tests::uncalled" && func["inputs"] == 0
+            })
+        }),
+        "a function without code in the binary"
     );
     assert_eq!(data["targets"][0]["hits"], 0);
 }
