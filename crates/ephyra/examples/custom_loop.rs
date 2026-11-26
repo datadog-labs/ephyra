@@ -45,7 +45,8 @@ fn main() {
         v.windows(2).all(|w| w[0] <= w[1]) && moves <= worst
     });
 
-    // Phase 1: random testing, as `check` does it.
+    // Phase 1: random testing, as `check` does it. The first `wants_more`
+    // replays the `EPHYRA_REPLAY` input and the remembered failures.
     let mut best = 0.0f64;
     while run.wants_more() {
         let Some(input) = run.draw() else { continue };

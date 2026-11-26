@@ -146,7 +146,10 @@ discards inputs that do not apply.
 A `Run` applies the configuration, owns the seed and the report, and offers
 `draw`, `test`, `keep`, `pool_pick`, `mutate` and `wants_more`; `finish`
 shrinks the first failure, localizes it, remembers it and writes the
-report. The `Run` documentation spells out each step, and
+report. The first `wants_more`, or the first iteration of a shipped loop,
+replays the `EPHYRA_REPLAY` input and the remembered failures; a loop that
+uses neither calls `remembered` for that. The `Run` documentation spells
+out each step, and
 [`examples/custom_loop.rs`](https://github.com/datadog-labs/ephyra/blob/main/crates/ephyra/examples/custom_loop.rs)
 replaces the built-in targeted phase with a hill-climb.
 

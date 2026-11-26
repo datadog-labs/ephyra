@@ -217,6 +217,7 @@ Health warnings worth acting on (`report.health[i].kind`):
 | Kind | Meaning |
 |---|---|
 | `flaky` | The failure didn't reproduce on a rerun, so it wasn't shrunk: look for state, time or threads |
+| `replay`, `regressions` | The replay point or stored inputs weren't tested, or an input couldn't be replayed or saved; the message says why |
 | `shrink_budget` | Shrinking stopped early; raise `config.shrink.max_steps` |
 | `cover` | A `cover(cond, label)` share was below 5% |
 | `coverage_plateau` | Coverage stopped growing: the generator is too narrow |
@@ -225,25 +226,26 @@ Health warnings worth acting on (`report.health[i].kind`):
 
 ## Your own loop: `Run`
 
-`check` is this loop:
+`check` is this loop, followed by the targeted phase:
 
 ```rust
 let mut run = Run::new(&config, generator, property);
-if !run.remembered() {                      // replays EPHYRA_REPLAY and saved regressions
-    while run.wants_more() {                // tests, budget, discards, a failure
-        let Some(input) = run.draw() else { continue };
-        let tested = run.test(&input);      // .passed() .failed() .novelty() .score()
-        if tested.passed() { run.keep(input.value, &tested); }
-    }
+// The first `wants_more` replays EPHYRA_REPLAY and the saved regressions.
+while run.wants_more() {                    // tests, budget, discards, a failure
+    let Some(input) = run.draw() else { continue };
+    let tested = run.test(&input);          // .passed() .failed() .novelty() .score()
+    if tested.passed() { run.keep(input.value, &tested); }
 }
 let report = run.finish();                  // shrinks, localizes, saves, reports
 ```
 
-Other steps: `run.mutate(&parent)`, `run.pool_pick()`,
-`run.keep_always(value, score)`, `run.failure()`, `run.shrink()`,
-`run.reproduces(&candidate)`, `run.shrunk_to(minimal)`, `run.report()` and,
-with coverage, `run.suspects()`. [examples/custom_loop.rs](crates/ephyra/examples/custom_loop.rs)
-is a complete one.
+Other steps: `run.remembered()` (the replay alone, for a loop that uses
+neither `wants_more` nor a shipped search loop), `run.mutate(&parent)`,
+`run.pool_pick()`, `run.keep_always(value, score)`, `run.failure()`,
+`run.shrink()`, `run.reproduces(&candidate)`, `run.shrunk_to(minimal)`,
+`run.report()` and, with coverage, `run.suspects()`.
+[examples/custom_loop.rs](crates/ephyra/examples/custom_loop.rs) is a
+complete one.
 
 A loop that alternates fresh draws with mutants of inputs that reached new
 code, through the run's own pool:
@@ -267,8 +269,8 @@ become seeds; plain random testing without coverage), `target` (seeds
 ranked by `target(score)`), `perf_fuzz` (toward slow inputs), and with the
 `coverage` feature `localize(&mut run, fuel, patience)`. `fuel` counts draws
 and mutations; the search loops ignore `Config::tests` and the discard limit,
-but stop early at the time budget and the timeout. Call `run.finish()`
-afterwards.
+but stop early at the time budget and the timeout, and replay first as
+`wants_more` does. Call `run.finish()` afterwards.
 
 Pools: `Fifo::new()`, `Fifo::with_energy(n)`, `Heap::new()`, `Filo`,
 `Singleton::new(policy)`, `DoubleQueue::new()`. Each seed gets 100 mutations
