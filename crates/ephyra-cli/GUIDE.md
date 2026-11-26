@@ -175,6 +175,7 @@ fn shrink(&self, value: &T,
     visit: &mut dyn FnMut(T) -> core::ops::ControlFlow<()>)
     -> core::ops::ControlFlow<()>;
 fn mutate(&self, value: &T, g: &mut ephyra::Source) -> T;
+fn can_produce(&self, value: &T) -> Option<bool>; // None: cannot tell
 ```
 
 A `Fn(&mut Source) -> T + Send + Sync` closure supplies generation. Default
@@ -233,6 +234,18 @@ Combinator semantics:
   rejection is expensive.
 - `.with_shrink(...)` visits custom candidates before the inner candidates;
   `.with_mutate(...)` REPLACES the inner mutator. There is no implicit fallback.
+- `one_of` and `frequency` mutate a value with the alternative that produced
+  it, which they find with `can_produce`. Any other alternative draws a fresh
+  value. Shrink candidates of an alternative that did not produce the value
+  are kept only when it can produce them. Built-in ranges and collections can
+  tell, and so can tuples and filters over them. `constant` (use
+  `pick_from(vec![v])`), `.map`, closures and derived generators cannot. When
+  several alternatives cannot tell, a shrink candidate can mix two of them, so
+  keep their supports compatible, and mutation regenerates, so attach a mutator
+  to the whole choice. The `back` of an `.iso` may panic on a value of another
+  alternative. A custom `Gen` can implement `can_produce`. Check the hooks of
+  an alternative that cannot tell on their own: in a choice its mutator may
+  never run, and a panic in its shrinker is dropped.
 - Tuples combine component generators and hooks. Use a joint generator when
   fields have relational constraints; independently valid fields can form an
   invalid tuple.

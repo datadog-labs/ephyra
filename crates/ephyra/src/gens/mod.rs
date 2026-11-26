@@ -47,6 +47,7 @@ use crate::{
         ShrinkFlow,
         ShrinkVisitor,
     },
+    runner::panic,
 };
 
 /// Something that produces values from a [`Source`], and knows how to make
@@ -65,7 +66,9 @@ pub trait Gen: Send + Sync {
     /// Visit simpler candidates for `value`, most promising first. Candidates
     /// should stay inside this generator's support and be strictly smaller.
     /// Returning [`ControlFlow::Break`] stops candidate production
-    /// immediately. Default: no candidates.
+    /// immediately. In a choice such as [`gens::one_of`](one_of), `value` can
+    /// be one that only another alternative can produce; a panic on it is
+    /// caught. Default: no candidates.
     fn shrink(
         &self,
         _value: &Self::Value,
@@ -84,9 +87,36 @@ pub trait Gen: Send + Sync {
     /// A nearby variant of `value` for targeted search, drawing randomness
     /// from `g`. Must preserve the input domain, but may return an unchanged
     /// value. The default generates a fresh value without requiring `Clone`.
+    /// `value` is one that this generator can produce: a choice between
+    /// generators asks [`can_produce`](Self::can_produce) first.
     fn mutate(&self, _value: &Self::Value, g: &mut Source) -> Self::Value {
         self.generate(g)
     }
+
+    /// Whether this generator can produce `value` at some size, or `None`
+    /// (the default) when it cannot tell. [`gens::one_of`](one_of) and
+    /// [`gens::frequency`](frequency) use it to find the alternative that
+    /// produced a value. Implement it for a generator that has its own hooks
+    /// and is one of several alternatives. It is called with any value of the
+    /// type, so it must not panic, and it must look at the whole value,
+    /// because the hooks run on every value that it claims.
+    fn can_produce(&self, _value: &Self::Value) -> Option<bool> {
+        None
+    }
+}
+
+/// Whether a value made of `parts` can be produced, from the answer for each
+/// part.
+fn all(parts: impl IntoIterator<Item = Option<bool>>) -> Option<bool> {
+    let mut all = Some(true);
+    for part in parts {
+        match part {
+            Some(true) => {},
+            Some(false) => return Some(false),
+            None => all = None,
+        }
+    }
+    all
 }
 
 impl<T, F> Gen for F
@@ -154,6 +184,10 @@ impl<T> Gen for BoxGen<T> {
     fn mutate(&self, value: &T, g: &mut Source) -> T {
         self.0.mutate(value, g)
     }
+
+    fn can_produce(&self, value: &T) -> Option<bool> {
+        self.0.can_produce(value)
+    }
 }
 
 /// Combinators available on every generator.
@@ -171,13 +205,17 @@ pub trait GenExt: Gen + Sized {
 
     /// Apply a bijection: `forward` on generation, `back` before shrinking or
     /// mutating, so the inner generator's hooks carry over. Ideal for
-    /// newtypes: `gens::int(1u8..=6).iso(Die, |d| d.0)`.
+    /// newtypes: `gens::int(1u8..=6).iso(Die, |d| d.0)`. In a
+    /// [`gens::one_of`](one_of), `back` also sees the values of the other
+    /// alternatives. Let it panic on a value that `forward` never returns,
+    /// such as another enum variant: the panic is caught and rules the value
+    /// out.
     fn iso<U, F, B>(self, forward: F, back: B) -> Iso<Self, F, B>
     where
         F: Fn(Self::Value) -> U + Send + Sync,
         B: Fn(&U) -> Self::Value + Send + Sync,
     {
-        Iso { inner: self, forward, back }
+        Iso { inner: self, forward, back, exact: false }
     }
 
     /// Generate a value, then generate the final value with a generator
@@ -232,6 +270,11 @@ pub trait GenExt: Gen + Sized {
 
     /// Attach a mutator, replacing the inner generator's own. Return an
     /// unchanged value or explicitly regenerate when no local change applies.
+    /// In a [`gens::one_of`](one_of), the mutator runs only on a value that
+    /// this alternative is known to have produced. A neighbor that cannot
+    /// tell, such as [`constant`], can make that unknown: use [`pick_from`]
+    /// instead, or a generator with its own
+    /// [`can_produce`](Gen::can_produce).
     fn with_mutate<M>(self, mutator: M) -> WithMutate<Self, M>
     where
         M: Fn(&Self::Value, &mut Source) -> Self::Value + Send + Sync,
@@ -280,6 +323,14 @@ pub struct Iso<G, F, B> {
     inner: G,
     forward: F,
     back: B,
+    /// `back` inverts `forward` on every value of the type.
+    exact: bool,
+}
+
+impl<G, F, B> Iso<G, F, B> {
+    pub(crate) fn exact(self) -> Self {
+        Iso { exact: true, ..self }
+    }
 }
 
 impl<G, U, F, B> Gen for Iso<G, F, B>
@@ -300,6 +351,15 @@ where
 
     fn mutate(&self, value: &U, g: &mut Source) -> U {
         (self.forward)(self.inner.mutate(&(self.back)(value), g))
+    }
+
+    fn can_produce(&self, value: &U) -> Option<bool> {
+        match panic::catch(|| (self.back)(value)) {
+            Ok(inner) if self.exact => self.inner.can_produce(&inner),
+            // `back` may return something for any value.
+            Ok(_) => None,
+            Err(_) => Some(false),
+        }
     }
 }
 
@@ -344,6 +404,10 @@ where
             let b2 = (self.f)(&a2).generate(&mut source);
             visitor((a2, b2))
         })?;
+        if self.outer.can_produce(a) == Some(false) {
+            // No pair with this first value is in the support.
+            return ControlFlow::Continue(());
+        }
         (self.f)(a).shrink(b, &mut |b2| visitor((a.clone(), b2)))
     }
 
@@ -356,6 +420,13 @@ where
             let a2 = self.outer.mutate(a, g);
             let b2 = (self.f)(&a2).generate(g);
             (a2, b2)
+        }
+    }
+
+    fn can_produce(&self, (a, b): &Self::Value) -> Option<bool> {
+        match self.outer.can_produce(a) {
+            Some(true) => (self.f)(a).can_produce(b),
+            other => other,
         }
     }
 }
@@ -452,6 +523,10 @@ where
         }
         self.generate(g)
     }
+
+    fn can_produce(&self, value: &G::Value) -> Option<bool> {
+        self.inner.can_produce(value).map(|inner| inner && (self.predicate)(value))
+    }
 }
 
 /// See [`GenExt::with_shrink`].
@@ -479,6 +554,10 @@ where
     fn mutate(&self, value: &G::Value, g: &mut Source) -> G::Value {
         self.inner.mutate(value, g)
     }
+
+    fn can_produce(&self, value: &G::Value) -> Option<bool> {
+        self.inner.can_produce(value)
+    }
 }
 
 /// See [`GenExt::with_mutate`].
@@ -504,6 +583,10 @@ where
 
     fn mutate(&self, value: &G::Value, g: &mut Source) -> G::Value {
         (self.mutator)(value, g)
+    }
+
+    fn can_produce(&self, value: &G::Value) -> Option<bool> {
+        self.inner.can_produce(value)
     }
 }
 
@@ -532,6 +615,13 @@ where
     fn mutate(&self, value: &C, g: &mut Source) -> C {
         let items: Vec<T> = value.clone().into_iter().collect();
         self.inner.mutate(&items, g).into_iter().collect()
+    }
+
+    /// The collection may have dropped items, so only a "yes" for the ones it
+    /// kept is certain.
+    fn can_produce(&self, value: &C) -> Option<bool> {
+        let items: Vec<T> = value.clone().into_iter().collect();
+        self.inner.can_produce(&items).filter(|yes| *yes)
     }
 }
 
@@ -568,6 +658,10 @@ macro_rules! impl_tuple_gen {
                     }
                 )+
                 out
+            }
+
+            fn can_produce(&self, value: &Self::Value) -> Option<bool> {
+                all([$(self.$i.can_produce(&value.$i),)+])
             }
         }
     };
@@ -616,6 +710,10 @@ where
         let mut out = value.clone();
         out[i] = mutated;
         out
+    }
+
+    fn can_produce(&self, value: &Self::Value) -> Option<bool> {
+        all(self.iter().zip(value).map(|(element, item)| element.can_produce(item)))
     }
 }
 

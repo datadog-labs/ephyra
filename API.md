@@ -48,6 +48,17 @@ Constructors in `gens`:
 `vec(x)` and `string()` without an explicit length stay short. Write
 `.len(0..=N)` or `string_len(c, 0..=N)` when long inputs matter.
 
+**Choice.** `one_of` and `frequency` mutate a value with the alternative that
+produced it and draw a fresh value from any other. They find it with
+`Gen::can_produce`, which ranges, strings, collections and tuples of them
+answer and a custom `Gen` can implement. `constant` (unlike
+`pick_from(vec![v])`), `map`, `and_then`, `sized`, closures and derived
+generators cannot tell, and neither can an `iso` unless its `back` panics on
+the values of the other alternatives. When several alternatives cannot tell,
+mutation draws a fresh value, and a shrink candidate can mix two of them, so
+keep their supports compatible. Their mutators then do not run and a panic in
+their shrinkers is dropped, so check the hooks of each on its own.
+
 Combinators (`GenExt`):
 
 | Combinator | Keeps shrink and mutate? | For |

@@ -142,7 +142,7 @@ impl<T: Arbitrary, E: Arbitrary> Arbitrary for Result<T, E> {
 
 impl<T: Arbitrary + Clone> Arbitrary for Box<T> {
     fn arbitrary() -> BoxGen<Self> {
-        any::<T>().iso(Box::new, |b| (**b).clone()).boxed()
+        any::<T>().iso(Box::new, |b| (**b).clone()).exact().boxed()
     }
 }
 

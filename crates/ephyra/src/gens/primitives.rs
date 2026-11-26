@@ -5,6 +5,7 @@
 
 use std::{
     fmt,
+    iter::once,
     ops::{
         ControlFlow,
         RangeBounds,
@@ -18,6 +19,7 @@ use crate::{
         BoxGen,
         Gen,
         GenExt,
+        all,
     },
     hooks::{
         ShrinkFlow,
@@ -30,6 +32,7 @@ use crate::{
         shrink_int,
         shrink_seq,
     },
+    runner::panic,
     source::{
         Int,
         resolve_range,
@@ -86,6 +89,11 @@ impl<T: Clone + PartialEq + Send + Sync> Gen for PickFrom<T> {
         }
         ControlFlow::Continue(())
     }
+
+    fn can_produce(&self, value: &T) -> Option<bool> {
+        // A value that is not equal to itself, such as NaN, is never found.
+        value.eq(value).then(|| self.0.contains(value))
+    }
 }
 
 /// An integer uniform in `range`. Shrinks toward the value closest to zero,
@@ -116,6 +124,10 @@ impl<T: Int> Gen for IntGen<T> {
 
     fn mutate(&self, value: &T, g: &mut Source) -> T {
         mutate_int(*value, self.lo, self.hi, g)
+    }
+
+    fn can_produce(&self, value: &T) -> Option<bool> {
+        Some((self.lo..=self.hi).contains(&value.to_i128()))
     }
 }
 
@@ -155,6 +167,10 @@ impl<T: Int> Gen for Edges<T> {
         }
         ControlFlow::Continue(())
     }
+
+    fn can_produce(&self, value: &T) -> Option<bool> {
+        Some(self.values.contains(value))
+    }
 }
 
 /// A fair boolean; shrinks toward `false`.
@@ -181,11 +197,16 @@ impl Gen for BoolGen {
     }
 
     fn shrink(&self, value: &bool, visitor: &mut ShrinkVisitor<'_, bool>) -> ShrinkFlow {
-        if *value { visitor(false) } else { ControlFlow::Continue(()) }
+        if *value && self.p < 1.0 { visitor(false) } else { ControlFlow::Continue(()) }
     }
 
     fn mutate(&self, value: &bool, _g: &mut Source) -> bool {
-        !*value
+        // With a probability of 0 or 1 there is no other value.
+        if self.can_produce(&!*value) == Some(true) { !*value } else { *value }
+    }
+
+    fn can_produce(&self, value: &bool) -> Option<bool> {
+        Some(if *value { self.p > 0.0 } else { self.p < 1.0 })
     }
 }
 
@@ -218,11 +239,38 @@ impl Gen for F64Gen {
     fn mutate(&self, value: &f64, g: &mut Source) -> f64 {
         if g.bool() { g.f64() } else { (value + (g.f64() - 0.5) * 0.1).clamp(0.0, 0.999_999_999) }
     }
+
+    fn can_produce(&self, value: &f64) -> Option<bool> {
+        Some((0.0..1.0).contains(value))
+    }
 }
 
 /// An `f32` uniform in `[0, 1)`: [`f64()`] narrowed, with its hooks.
 pub fn f32() -> impl Gen<Value = f32> {
-    f64().iso(|x| x as f32, |x: &f32| f64::from(*x))
+    F32Gen
+}
+
+struct F32Gen;
+
+impl Gen for F32Gen {
+    type Value = f32;
+
+    fn generate(&self, g: &mut Source) -> f32 {
+        F64Gen.generate(g) as f32
+    }
+
+    fn shrink(&self, value: &f32, visitor: &mut ShrinkVisitor<'_, f32>) -> ShrinkFlow {
+        F64Gen.shrink(&f64::from(*value), &mut |candidate| visitor(candidate as f32))
+    }
+
+    fn mutate(&self, value: &f32, g: &mut Source) -> f32 {
+        F64Gen.mutate(&f64::from(*value), g) as f32
+    }
+
+    fn can_produce(&self, value: &f32) -> Option<bool> {
+        // Narrowing can round up to 1.
+        Some((0.0..=1.0).contains(value))
+    }
 }
 
 /// An `f64` with a uniformly random bit pattern (any value including NaN,
@@ -250,6 +298,10 @@ impl Gen for F64Bits {
     fn mutate(&self, value: &f64, g: &mut Source) -> f64 {
         mutate_f64(*value, g)
     }
+
+    fn can_produce(&self, _value: &f64) -> Option<bool> {
+        Some(true)
+    }
 }
 
 /// An `f32` with a uniformly random bit pattern. See [`Source::f32_bits`].
@@ -274,6 +326,10 @@ impl Gen for F32Bits {
 
     fn mutate(&self, value: &f32, g: &mut Source) -> f32 {
         mutate_f64(f64::from(*value), g) as f32
+    }
+
+    fn can_produce(&self, _value: &f32) -> Option<bool> {
+        Some(true)
     }
 }
 
@@ -312,7 +368,7 @@ impl Gen for F64Range {
 
     fn shrink(&self, value: &f64, visitor: &mut ShrinkVisitor<'_, f64>) -> ShrinkFlow {
         let target = 0.0f64.clamp(self.lo, self.hi);
-        if *value != target {
+        if value.is_nan() || target.abs() < value.abs() {
             visitor(target)?;
         }
         shrink_f64(*value, &mut |candidate| {
@@ -334,6 +390,10 @@ impl Gen for F64Range {
         let step =
             if width.is_finite() { u * width * 0.1 } else { u * (self.hi * 0.1 - self.lo * 0.1) };
         (value + step).clamp(self.lo, self.hi)
+    }
+
+    fn can_produce(&self, value: &f64) -> Option<bool> {
+        Some((self.lo..=self.hi).contains(value))
     }
 }
 
@@ -407,6 +467,10 @@ impl Gen for CharGen {
         shrink_char(*value, &mut |candidate| {
             if self.admits(candidate) { visitor(candidate) } else { ControlFlow::Continue(()) }
         })
+    }
+
+    fn can_produce(&self, value: &char) -> Option<bool> {
+        Some(self.admits(*value))
     }
 }
 
@@ -484,6 +548,12 @@ where
         let fresh = |g: &mut Source| self.element.generate(g);
         mutate_seq(value, self.min, max, g, fresh, |x, g| self.element.mutate(x, g))
     }
+
+    fn can_produce(&self, value: &Vec<G::Value>) -> Option<bool> {
+        let max = self.max.unwrap_or(usize::MAX).max(self.min);
+        let length = Some((self.min..=max).contains(&value.len()));
+        all(once(length).chain(value.iter().map(|item| self.element.can_produce(item))))
+    }
 }
 
 /// A `String` of [`char()`]s with length in `0..=size`.
@@ -496,7 +566,10 @@ pub fn string_len<G: Gen<Value = char>>(
     chars: G,
     range: impl RangeBounds<usize>,
 ) -> impl Gen<Value = String> {
-    vec(chars).len(range).iso(|cs| cs.into_iter().collect(), |s: &String| s.chars().collect())
+    vec(chars)
+        .len(range)
+        .iso(|cs| cs.into_iter().collect(), |s: &String| s.chars().collect())
+        .exact()
 }
 
 /// `Some(value)` or `None`; shrinks toward `None`.
@@ -543,6 +616,10 @@ impl<G: Gen> Gen for OptionGen<G> {
             },
         }
     }
+
+    fn can_produce(&self, value: &Option<G::Value>) -> Option<bool> {
+        all(value.as_ref().map(|x| self.inner.can_produce(x)))
+    }
 }
 
 /// `Ok` or `Err`; shrinks within the variant.
@@ -587,16 +664,46 @@ impl<GT: Gen, GE: Gen> Gen for ResultGen<GT, GE> {
             Err(e) => Err(self.err.mutate(e, g)),
         }
     }
+
+    fn can_produce(&self, value: &Self::Value) -> Option<bool> {
+        match value {
+            Ok(x) => self.ok.can_produce(x),
+            Err(e) => self.err.can_produce(e),
+        }
+    }
 }
 
 // --------------------------------------------------------------------------
 // Choice between generators
 // --------------------------------------------------------------------------
 
-/// Pick one of `alternatives` uniformly, then generate from it. Shrink
-/// candidates come from every alternative's shrinker (a value cannot tell
-/// which alternative produced it), so keep alternatives' supports
-/// compatible or add a `filter`.
+/// Pick one of `alternatives` uniformly, then generate from it.
+///
+/// A value does not carry the alternative that produced it, so shrinking and
+/// mutation ask the alternatives with [`Gen::can_produce`]:
+///
+/// - Mutation picks an alternative the way generation does. It mutates the
+///   value with the alternative that produced it, and generates a fresh value
+///   from any other.
+/// - Shrink candidates come from every alternative's shrinker. An alternative
+///   that did not produce the value offers only candidates that it can
+///   produce, so a long vector may not reach an alternative of short ones,
+///   and a pair may not reach one that needs both parts to change. A
+///   panic in an alternative that may not have produced the value only ends
+///   its candidates.
+///
+/// Ranges, characters, strings and collections can tell, and so can tuples,
+/// [`filter`](GenExt::filter) and [`dependent`](GenExt::dependent) over them.
+/// [`iso`](GenExt::iso) can only rule a value out, with a panic of its `back`.
+/// [`constant`] (unlike [`pick_from`]), derived generators, closures and what
+/// is built from a closure, such as [`map`](GenExt::map) and [`sized`], cannot
+/// tell. When this leaves several alternatives for a value, a shrink candidate
+/// can mix two of them, so keep their supports compatible or add a `filter`,
+/// and mutation draws a fresh value, so attach a mutator to the whole choice
+/// with [`with_mutate`](GenExt::with_mutate) if that is too weak. A choice can
+/// thus hide a broken hook of an alternative that cannot tell, so check its
+/// hooks ([`check_shrinker`](crate::check_shrinker),
+/// [`check_mutator`](crate::check_mutator)) before you combine it.
 ///
 /// # Panics
 /// If `alternatives` is empty.
@@ -606,7 +713,7 @@ pub fn one_of<T>(alternatives: Vec<BoxGen<T>>) -> Frequency<T> {
 }
 
 /// Pick one of `alternatives` with probability proportional to its weight,
-/// then generate from it. See [`one_of`] for how it shrinks.
+/// then generate from it. See [`one_of`] for how it shrinks and mutates.
 ///
 /// # Panics
 /// If all weights are zero.
@@ -615,9 +722,30 @@ pub fn frequency<T>(alternatives: Vec<(u32, BoxGen<T>)>) -> Frequency<T> {
     Frequency { alternatives }
 }
 
+/// Candidates that a choice skips before it gives up on an alternative that
+/// did not produce the value: the visitor does not see them, so the shrink
+/// budget does not end them.
+const STRAYS: usize = 1000;
+
 /// See [`one_of`] and [`frequency`].
 pub struct Frequency<T> {
     alternatives: Vec<(u32, BoxGen<T>)>,
+}
+
+impl<T> Frequency<T> {
+    /// The alternatives that generate.
+    fn live(&self) -> impl Iterator<Item = &BoxGen<T>> {
+        self.alternatives.iter().filter(|(weight, _)| *weight > 0).map(|(_, g)| g)
+    }
+
+    /// Whether `alternative` can have produced `value`. When none of the
+    /// others can have, one that cannot tell did.
+    fn produced(&self, alternative: &BoxGen<T>, value: &T) -> Option<bool> {
+        alternative.can_produce(value).or_else(|| {
+            let mut others = self.live().filter(|other| !Arc::ptr_eq(&other.0, &alternative.0));
+            others.all(|other| other.can_produce(value) == Some(false)).then_some(true)
+        })
+    }
 }
 
 impl<T> Gen for Frequency<T> {
@@ -629,15 +757,57 @@ impl<T> Gen for Frequency<T> {
     }
 
     fn shrink(&self, value: &T, visitor: &mut ShrinkVisitor<'_, T>) -> ShrinkFlow {
-        for (_, alternative) in self.alternatives.iter().filter(|(weight, _)| *weight > 0) {
-            alternative.shrink(value, visitor)?;
+        // A value that some alternative claims shrinks to one of those.
+        let claimed = self.can_produce(value) == Some(true);
+        for alternative in self.live() {
+            let produced = self.produced(alternative, value);
+            if produced == Some(true) {
+                alternative.shrink(value, visitor)?;
+                continue;
+            }
+            // The value may be another alternative's: this one's code may
+            // not expect it, and a candidate that keeps a part of it can lie
+            // outside both.
+            let mut flow = ControlFlow::Continue(());
+            let mut strays = 0;
+            panic::catch_visiting(|visit| alternative.shrink(value, visit), &mut |candidate| {
+                if flow.is_break() || strays == STRAYS {
+                    return ControlFlow::Break(());
+                }
+                let keep = alternative.can_produce(&candidate).unwrap_or_else(|| {
+                    produced.is_none() && (!claimed || self.can_produce(&candidate) == Some(true))
+                });
+                if keep {
+                    flow = visitor(candidate);
+                } else {
+                    strays += 1;
+                }
+                flow
+            });
+            flow?;
         }
         ControlFlow::Continue(())
     }
 
     fn mutate(&self, value: &T, g: &mut Source) -> T {
-        let alt = g.weighted(&self.alternatives).clone();
-        alt.mutate(value, g)
+        let chosen = g.weighted(&self.alternatives);
+        if self.produced(chosen, value) == Some(true) {
+            chosen.mutate(value, g)
+        } else {
+            chosen.generate(g)
+        }
+    }
+
+    fn can_produce(&self, value: &T) -> Option<bool> {
+        let mut any = Some(false);
+        for alternative in self.live() {
+            match alternative.can_produce(value) {
+                Some(true) => return Some(true),
+                Some(false) => {},
+                None => any = None,
+            }
+        }
+        any
     }
 }
 
@@ -722,6 +892,10 @@ impl<T: 'static> Gen for Recursive<T> {
     fn mutate(&self, value: &T, g: &mut Source) -> T {
         self.top().mutate(value, g)
     }
+
+    fn can_produce(&self, value: &T) -> Option<bool> {
+        self.top().can_produce(value)
+    }
 }
 
 /// Build a generator from the current [`Source::size`], for example to scale
@@ -779,6 +953,7 @@ mod tests {
         assert_eq!(bool().shrink_candidates(&true), vec![false]);
         assert_eq!(f64_range(2.0..=8.0).shrink_candidates(&6.0), vec![2.0, 3.0]);
         assert!(f64_range(-1.0..=1.0).shrink_candidates(&-0.0).is_empty());
+        assert!(f64_range(2.0..=8.0).shrink_candidates(&1.0).is_empty());
         assert_eq!(ascii_char().shrink_candidates(&'z'), vec!['a', 'n', 't', 'w', 'y']);
         assert!(alphanumeric().shrink_candidates(&'0').iter().all(|c| c.is_ascii_alphanumeric()));
         let mut g = Source::new(2, 5);
@@ -834,6 +1009,59 @@ mod tests {
         assert!(m.chars().count() <= 8);
         let text = string_len(alphanumeric(), 3..=3).generate(&mut g);
         assert_eq!(text.chars().count(), 3);
+    }
+
+    #[test]
+    fn built_ins_tell_which_values_they_can_produce() {
+        assert_eq!(int(1..=6).can_produce(&6), Some(true));
+        assert_eq!(int(1..=6).can_produce(&7), Some(false));
+        assert_eq!(edges(0..=9).can_produce(&5), Some(false));
+        assert_eq!(bool_with(0.0).can_produce(&true), Some(false));
+        assert!(!bool_with(0.0).mutate(&false, &mut Source::new(1, 5)));
+        assert!(bool_with(1.0).shrink_candidates(&true).is_empty());
+        assert_eq!(f64_range(0.0..=1.0).can_produce(&f64::NAN), Some(false));
+        assert_eq!(f32().can_produce(&0.5), Some(true));
+        assert_eq!(alphanumeric().can_produce(&' '), Some(false));
+        assert_eq!(string_len(alphanumeric(), 2..).can_produce(&"a1".to_string()), Some(true));
+        assert_eq!(string_len(alphanumeric(), 2..).can_produce(&"a".to_string()), Some(false));
+        assert_eq!(pick_from(vec![1.0, f64::NAN]).can_produce(&2.0), Some(false));
+        assert_eq!(pick_from(vec![1.0, f64::NAN]).can_produce(&f64::NAN), None);
+        assert_eq!(constant(1).can_produce(&1), None);
+        assert_eq!(option(int(0..=9)).can_produce(&None), Some(true));
+        assert_eq!(result(int(0..=9), bool()).can_produce(&Ok(10)), Some(false));
+        assert_eq!([bool(), bool()].can_produce(&[true, false]), Some(true));
+        // One part that is out of range decides, even if others cannot tell.
+        assert_eq!((constant(1), int(0..=9)).can_produce(&(1, 5)), None);
+        assert_eq!((constant(1), int(0..=9)).can_produce(&(1, 10)), Some(false));
+
+        // Predicates and inner generators only see what the first part allows.
+        let divisor = int(1..=9).filter("divides 10", |x| 10 % x == 0);
+        assert_eq!(divisor.can_produce(&0), Some(false));
+        assert_eq!(divisor.can_produce(&3), Some(false));
+        assert_eq!(divisor.can_produce(&5), Some(true));
+        let index = vec(bool()).len(1..=3).dependent(|v| int(0..v.len()));
+        assert_eq!(index.can_produce(&(vec![], 0)), Some(false));
+        assert_eq!(index.can_produce(&(vec![true], 0)), Some(true));
+
+        // A function can only rule a value out.
+        let small = int(0u8..=9).iso(u32::from, |x| u8::try_from(*x).expect("a byte"));
+        assert_eq!(small.can_produce(&5), None);
+        assert_eq!(small.can_produce(&1000), Some(false));
+        let set = vec(int(0..=9)).len(2..=3).collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(set.can_produce(&[1, 2].into()), Some(true));
+        assert_eq!(set.can_produce(&[1].into()), None);
+
+        let either = one_of(vec![int(0..=9).boxed(), constant(50).boxed()]);
+        assert_eq!(either.can_produce(&5), Some(true));
+        assert_eq!(either.can_produce(&50), None);
+        let either = frequency(vec![(0, int(0..=9).boxed()), (1, int(20..=29).boxed())]);
+        assert_eq!(either.can_produce(&5), Some(false));
+    }
+
+    #[test]
+    fn default_integers_still_shrink_through_the_edges() {
+        let candidates = crate::any::<i32>().shrink_candidates(&1000);
+        assert_eq!(candidates[..5], [0, -1, 1, 0, 500]);
     }
 
     #[test]

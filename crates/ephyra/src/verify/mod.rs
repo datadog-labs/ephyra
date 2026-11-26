@@ -292,7 +292,7 @@ mod tests {
         let size = |v: &Vec<i32>| v.iter().map(|x| *x as u64 + 1).sum::<u64>();
         assert!(check_shrinker(&cfg(), lists, support, size).passed());
 
-        let escapes = gens::int(1u8..=6).with_shrink(|_, visitor| visitor(0u8));
+        let escapes = gens::int(1u8..=6).with_shrink(|_, visitor| visitor(7u8));
         let report = check_shrinker(&cfg(), escapes, |d| (1..=6).contains(d), |d| u64::from(*d));
         assert!(
             report

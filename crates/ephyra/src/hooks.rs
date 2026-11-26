@@ -28,7 +28,9 @@ pub type ShrinkVisitor<'a, T> = dyn FnMut(T) -> ShrinkFlow + 'a;
 // --------------------------------------------------------------------------
 
 /// Candidates for an integer in `lo..=hi`: the value closest to zero, then
-/// binary steps from `value` toward it.
+/// binary steps from `value` toward it. For a value outside the range, the
+/// steps start at the nearest bound, which is the last candidate, and a range
+/// that is not closer to zero has no candidates.
 pub(crate) fn shrink_int<T: Int>(
     value: T,
     lo: i128,
@@ -37,8 +39,13 @@ pub(crate) fn shrink_int<T: Int>(
 ) -> ShrinkFlow {
     let v = value.to_i128();
     let target = 0i128.clamp(lo, hi);
-    if v == target {
+    if target.abs() >= v.abs() {
         return ControlFlow::Continue(());
+    }
+    if !(lo..=hi).contains(&v) {
+        let bound = T::from_i128(v.clamp(lo, hi));
+        shrink_int(bound, lo, hi, visitor)?;
+        return visitor(bound);
     }
     visitor(T::from_i128(target))?;
     let mut last_emitted = target;
@@ -237,6 +244,8 @@ mod tests {
         assert_eq!(int_candidates(20, 10, 30), vec![10, 15, 18, 19]);
         assert_eq!(int_candidates(-20, -30, -10), vec![-10, -15, -18, -19]);
         assert_eq!(int_candidates(10, 10, 30), Vec::<i32>::new());
+        assert_eq!(int_candidates(1000, 10, 30), vec![10, 20, 25, 28, 29, 30]);
+        assert_eq!(int_candidates(5, 10, 30), Vec::<i32>::new());
         assert_eq!(i32_candidates(1), vec![0]);
     }
 

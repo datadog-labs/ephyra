@@ -76,6 +76,37 @@ pub(crate) fn catch<R>(f: impl FnOnce() -> R) -> Result<R, PanicInfo> {
     }
 }
 
+/// Run an `f` that passes values to `visit`, and drop its panic. A panic in
+/// `visit` is not one of `f`'s: it goes on to the caller, as if `visit` ran
+/// outside.
+pub(crate) fn catch_visiting<T, R>(
+    f: impl FnOnce(&mut dyn FnMut(T) -> R) -> R,
+    visit: &mut dyn FnMut(T) -> R,
+) -> Option<R> {
+    install();
+    let outside = DEPTH.with(|d| d.replace(d.get() + 1));
+    let visiting = Cell::new(false);
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        f(&mut |value| {
+            visiting.set(true);
+            DEPTH.with(|d| d.set(outside));
+            let returned = visit(value);
+            DEPTH.with(|d| d.set(outside + 1));
+            visiting.set(false);
+            returned
+        })
+    }));
+    DEPTH.with(|d| d.set(outside));
+    match result {
+        Ok(returned) => Some(returned),
+        Err(payload) if visiting.get() => panic::resume_unwind(payload),
+        Err(_) => {
+            SLOT.with(|slot| slot.borrow_mut().take());
+            None
+        },
+    }
+}
+
 fn payload_message(payload: &(dyn Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
@@ -108,6 +139,25 @@ mod tests {
             panic!("outer")
         });
         assert_eq!(outer.unwrap_err().message, "outer");
+        assert_eq!(DEPTH.with(Cell::get), 0);
+    }
+
+    #[test]
+    fn a_panic_in_the_visitor_passes_through() {
+        let own = |visit: &mut dyn FnMut(u8)| {
+            visit(1);
+            panic!("own")
+        };
+        let mut seen = Vec::new();
+        assert_eq!(catch_visiting(own, &mut |v| seen.push(v)), None);
+        assert_eq!(seen, [1]);
+        // Each level gives way to the visitor, not only the outermost one.
+        let nested = |visit: &mut dyn FnMut(u8)| {
+            catch_visiting(own, visit);
+        };
+        let info = catch(|| catch_visiting(nested, &mut |_| panic!("visitor"))).unwrap_err();
+        assert_eq!(info.message, "visitor");
+        assert!(info.location.is_some());
         assert_eq!(DEPTH.with(Cell::get), 0);
     }
 
