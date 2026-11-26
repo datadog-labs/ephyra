@@ -10,10 +10,14 @@ use std::collections::{
     HashSet,
 };
 
-use crate::gens::{
-    self,
-    BoxGen,
-    GenExt,
+use crate::{
+    Source,
+    gens::{
+        self,
+        BoxGen,
+        GenExt,
+    },
+    hooks::ShrinkVisitor,
 };
 
 /// Types with a default generator. Use [`any`] to obtain it.
@@ -90,8 +94,16 @@ macro_rules! impl_arbitrary_float {
                     $t::NAN,
                 ];
                 const FRACTIONS: [$t; 4] = [0.0, 0.5, 0.25, 0.1];
+                // Special values shrink to the plain ones at the start of the
+                // list, not to all before them: NaN is not simpler than the
+                // smallest subnormal.
+                let special = |g: &mut Source| *g.pick(&SPECIALS);
+                let plain = |value: &$t, visitor: &mut ShrinkVisitor<'_, $t>| {
+                    let index = SPECIALS.iter().position(|s| s == value).unwrap_or(0);
+                    SPECIALS[..index.min(6)].iter().try_for_each(|s| visitor(*s))
+                };
                 gens::frequency(vec![
-                    (1, gens::pick_from(SPECIALS.to_vec()).boxed()),
+                    (1, special.with_shrink(plain).boxed()),
                     (
                         2,
                         (gens::int(-100i32..=100), gens::int(0usize..4))

@@ -61,8 +61,8 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
     "shrink": {
       "steps": 99,
       "accepted": 99,
-      "rejected_not_smaller": 1,
-      "rejected_seen": 5,
+      "rejected_not_smaller": 0,
+      "rejected_seen": 4,
       "budget_exhausted": false,
       "duration": "[duration]"
     }

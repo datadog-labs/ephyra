@@ -4,10 +4,11 @@
 //! The shrink driver: greedy descent over a generator's candidates.
 //!
 //! Starting from the failing input, ask the generator for candidates, take
-//! the first one that still fails with the same signature and is not
-//! rendered longer than the current best, and repeat until no candidate is
-//! accepted or the budget runs out. A seen-set of `Debug` renderings stops
-//! cycles; the step and time budget bound the wall clock.
+//! the first one that still fails with the same signature, and repeat until
+//! no candidate is accepted or the budget runs out. The generator alone
+//! decides what is simpler. A seen-set of `Debug` renderings stops cycles,
+//! the step and time budget bound the wall clock, and candidates that render
+//! far longer than the failing input are skipped.
 
 use std::{
     collections::HashSet,
@@ -27,6 +28,13 @@ use crate::{
         ShrinkStats,
     },
 };
+
+/// A candidate may render this many bytes longer than the failing input, or
+/// eight times as long if that is more. The simpler value can be the longer
+/// one (`false` after `true`), also in every item of a vector. A broken
+/// shrinker, such as one that doubles a vector, grows past this, and it would
+/// fill the memory before the step budget ends.
+const GROWTH: usize = 1024;
 
 /// What the oracle returns for a candidate that fails the same way: the
 /// failure's message and location.
@@ -66,8 +74,8 @@ pub(crate) fn collect_candidates<T>(
 
 /// Shrink `initial`. `candidates` proposes simpler values; `fails` runs the
 /// property and reports whether the candidate fails the same way. Values are
-/// compared by their full `Debug` rendering: seen before, or longer than the
-/// current best, and a candidate is skipped.
+/// compared by their full `Debug` rendering: seen before, or grown past
+/// [`GROWTH`], and a candidate is skipped.
 pub(crate) fn shrink<T: Clone + Debug>(
     config: &ShrinkConfig,
     initial: T,
@@ -81,7 +89,7 @@ pub(crate) fn shrink<T: Clone + Debug>(
 
     let mut current = initial;
     let current_debug = format!("{current:?}");
-    let mut current_len = current_debug.len();
+    let max_len = (current_debug.len() * 8).max(current_debug.len() + GROWTH);
     let mut seen: HashSet<u64> = HashSet::new();
     seen.insert(hasher.hash_one(&current_debug));
     let mut failure: SameFailure = None;
@@ -98,27 +106,25 @@ pub(crate) fn shrink<T: Clone + Debug>(
                 return ControlFlow::Break(());
             }
             let debug = format!("{candidate:?}");
-            let len = debug.len();
             if !seen.insert(hasher.hash_one(&debug)) {
                 stats.rejected_seen += 1;
                 return ControlFlow::Continue(());
             }
-            if len > current_len {
+            if debug.len() > max_len {
                 stats.rejected_not_smaller += 1;
                 return ControlFlow::Continue(());
             }
             stats.steps += 1;
             if let Some(details) = fails(candidate.clone()) {
                 stats.accepted += 1;
-                accepted = Some((candidate, details, len));
+                accepted = Some((candidate, details));
                 return ControlFlow::Break(());
             }
             ControlFlow::Continue(())
         });
-        if let Some((candidate, details, len)) = accepted {
+        if let Some((candidate, details)) = accepted {
             failure = Some(details);
             current = candidate;
-            current_len = len;
             continue 'outer;
         }
         break;
@@ -162,8 +168,29 @@ mod tests {
             |v, visitor| visitor(v + 1),
             |_| Some((None, None)),
         );
-        // 6..9 are accepted (same length); 10 is longer and rejected.
-        assert_eq!(shrunk.value, 9);
+        assert_eq!(shrunk.value, 10_005, "every step of the budget is taken");
+        assert!(shrunk.stats.budget_exhausted);
+
+        // Doubling runs into the bound on the rendering long before that.
+        let shrunk = shrink(
+            &ShrinkConfig::default(),
+            vec![1u8],
+            |v, visitor| visitor(v.repeat(2)),
+            |_| Some((None, None)),
+        );
+        // 256 elements render in 768 bytes, 512 in 1536, past 3 + 1024.
+        assert_eq!(shrunk.value.len(), 256);
+        assert_eq!(shrunk.stats.rejected_not_smaller, 1);
+        assert!(!shrunk.stats.budget_exhausted);
+
+        // A long failing input may become eight times as long.
+        let shrunk = shrink(
+            &ShrinkConfig::default(),
+            vec![1u8; 2000],
+            |v, visitor| visitor(v.repeat(2)),
+            |_| Some((None, None)),
+        );
+        assert_eq!(shrunk.value.len(), 16_000);
         assert_eq!(shrunk.stats.rejected_not_smaller, 1);
     }
 

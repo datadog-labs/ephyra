@@ -16,6 +16,7 @@ use std::{
 use {
     super::{
         ShrinkRules,
+        Suspect,
         mutant,
         shrinks,
     },
@@ -135,8 +136,8 @@ where
     D: FnMut(&G::Value) -> Option<String>,
     M: Fn(&G::Value, usize) -> Vec<(&'static str, f64)>,
 {
-    let shared = BoxGen::new(generator);
-    let hooks = shared.clone();
+    let hooks = BoxGen::new(generator);
+    let shared = BoxGen::new(Suspect(hooks.clone()));
     let progress = Rc::new(Progress { drawing: Cell::new(true), ..Progress::default() });
     let seen = progress.clone();
     let filter_max_attempts = config.filter_max_attempts;
@@ -289,6 +290,12 @@ mod tests {
         let cycle = gens::constant(1u8).with_shrink(|v, visit| visit(if *v == 1 { 2 } else { 1 }));
         let report = __check_generator(&cfg(), cycle, |_| true, no_metrics);
         assert!(problem(&report).contains("revisits"), "{report}");
+
+        // A shrinker that grows the value does not move the counterexample.
+        let grows = gens::constant(String::new()).with_shrink(|s, visit| visit(format!("{s}a")));
+        let report = __check_generator(&cfg(), grows, |_| true, no_metrics);
+        assert!(problem(&report).contains("did not settle"), "{report}");
+        assert_eq!(report.counterexample().unwrap().debug, "\"\"");
     }
 
     #[test]

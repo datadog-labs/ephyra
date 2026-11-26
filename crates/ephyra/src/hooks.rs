@@ -71,7 +71,10 @@ pub(crate) fn mutate_int<T: Int>(value: T, lo: i128, hi: i128, g: &mut Source) -
     T::from_i128(next.clamp(lo, hi))
 }
 
-/// Candidates for a float: zero, the positive value, its integer part, half.
+/// Candidates for a float: zero, the positive value, its integer part, then
+/// binary steps along its exponent toward one, the last of which halves it.
+/// For a fraction below one, the power of two below it instead: halving would
+/// go on to the smallest subnormal.
 pub(crate) fn shrink_f64(value: f64, visitor: &mut ShrinkVisitor<'_, f64>) -> ShrinkFlow {
     if value == 0.0 {
         return ControlFlow::Continue(());
@@ -86,19 +89,33 @@ pub(crate) fn shrink_f64(value: f64, visitor: &mut ShrinkVisitor<'_, f64>) -> Sh
         visitor(candidate)
     };
     emit(0.0)?;
+    if value < 0.0 {
+        emit(-value)?;
+    }
     if value.is_nan() {
         emit(1.0)?;
     } else if value.is_infinite() {
         emit(if value > 0.0 { f64::MAX } else { f64::MIN })?;
     } else {
-        if value < 0.0 {
-            emit(-value)?;
-        }
         let truncated = value.trunc();
         if truncated != value {
             emit(truncated)?;
         }
-        emit(value / 2.0)?;
+        // Above its 52 bits of fraction a float holds the exponent plus 1023.
+        let bits = value.to_bits();
+        let exponent = ((bits >> 52) & 0x7ff) as i32 - 1023;
+        if exponent < 0 {
+            // A subnormal has no implicit bit: its power of two is the top
+            // bit of its fraction.
+            let fraction = bits & ((1 << 52) - 1);
+            let low = if value.is_subnormal() { fraction.ilog2() } else { 52 };
+            emit(f64::from_bits((bits >> low) << low))?;
+        }
+        let mut step = (exponent + 1) / 2;
+        while step > 0 {
+            emit(value / 2f64.powi(step))?;
+            step /= 2;
+        }
     }
     ControlFlow::Continue(())
 }
@@ -244,6 +261,13 @@ mod tests {
     fn floats_and_chars_shrink_sensibly() {
         let floats = |value| collect_candidates(|visit| shrink_f64(value, visit));
         assert_eq!(floats(-7.5), vec![0.0, 7.5, -7.0, -3.75]);
+        assert_eq!(floats(1000.0), vec![0.0, 31.25, 250.0, 500.0]);
+        assert_eq!(floats(1.5), vec![0.0, 1.0]);
+        assert_eq!(floats(0.7), vec![0.0, 0.5]);
+        assert_eq!(floats(0.5), vec![0.0]);
+        assert_eq!(floats(f64::from_bits(1)), vec![0.0]);
+        assert_eq!(floats(f64::from_bits(5)), vec![0.0, f64::from_bits(4)]);
+        assert_eq!(floats(f64::NEG_INFINITY), vec![0.0, f64::INFINITY, f64::MIN]);
         assert_eq!(floats(f64::NAN), vec![0.0, 1.0]);
         assert_eq!(floats(0.0), Vec::<f64>::new());
         let chars = |value| collect_candidates(|visit| shrink_char(value, visit));
