@@ -56,7 +56,7 @@ Combinators (`GenExt`):
 | `.and_then(f)` | No | Rarely; prefer `dependent` |
 | `.iso(forward, back)` | Yes, through a bijection | Newtypes and wrappers |
 | `.dependent(\|a\| gen_b)` | Yes; returns `(A, B)` | A query over a schema, an index into a length |
-| `.filter("why", pred)` | Filters candidates and mutants too; discards after 100 misses | Rare exclusions; construct valid values instead |
+| `.filter("why", pred)` | Filters candidates and mutants too; discards after 100 misses (a panic in code that then gets the rejected value counts as the discard) | Rare exclusions; construct valid values instead |
 | `.with_shrink(f)` | Adds candidates, tried first | A shrinker on the final type |
 | `.with_mutate(f)` | Replaces the mutator | A custom mutator |
 | `.collect::<C>()` | Yes | `Vec<(K, V)>` into a map |

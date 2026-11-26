@@ -336,8 +336,10 @@ where
         self.report.gen_time += generate;
         self.stats.gen_micros.push(micros(generate));
         match (made, source.discarded()) {
-            (Err(info), _) => Err(Skipped::Panicked(info)),
-            (Ok(_), Some(reason)) => Err(Skipped::Discarded(reason.to_string(), generate)),
+            // The code after a discard can meet a value that a filter
+            // rejected: its panic is part of the discard.
+            (_, Some(reason)) => Err(Skipped::Discarded(reason.to_string(), generate)),
+            (Err(info), None) => Err(Skipped::Panicked(info)),
             (Ok(value), None) => {
                 Ok(Input { value, point: None, size, iteration, origin, generate })
             },

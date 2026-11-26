@@ -206,7 +206,10 @@ pub trait GenExt: Gen + Sized {
 
     /// Keep only values for which `predicate` holds. After
     /// [`Source::filter_max_attempts`] rejections the input is
-    /// [discarded](Source::discard) with reason `filter:<label>`. Shrink and
+    /// [discarded](Source::discard) with reason `filter:<label>`. Generation
+    /// then goes on with the last rejected value, so code after the filter (a
+    /// [`map`](Self::map), [`dependent`](Self::dependent) or closure) still
+    /// runs on it; a panic there counts as the discard. Shrink and
     /// mutation candidates are filtered by the same predicate. Mutation retries
     /// a bounded number of times, then falls back to filtered generation (which
     /// can also discard).
