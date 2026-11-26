@@ -7,10 +7,11 @@
 //! appended to `<dir>/<name>.jsonl` (one JSON object per line: name, seed,
 //! iteration, the input's `Debug` rendering, the shrunk rendering, creation
 //! time). The next run of the same property regenerates every stored input
-//! before random testing and checks it still renders the same; an entry
-//! whose generator has changed is reported as stale rather than silently
-//! testing a different input. Commit the directory to keep that guarantee
-//! for the whole team.
+//! before random testing and checks it still renders the same (in any
+//! order, when it renders in another order every time, as hash collections
+//! do); an entry whose generator has changed is reported as stale rather
+//! than silently testing a different input. Commit the directory to keep
+//! that guarantee for the whole team.
 //!
 //! Requires the default `json` feature.
 
