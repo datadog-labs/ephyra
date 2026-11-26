@@ -42,6 +42,10 @@ use crate::{
     check,
     classify,
     gens::BoxGen,
+    hooks::{
+        ShrinkFlow,
+        ShrinkVisitor,
+    },
     runner::{
         SAMPLE_CHARS,
         cap,
@@ -101,8 +105,8 @@ where
     G: Gen + 'static,
     G::Value: Clone + Debug + 'static,
 {
-    let shared = BoxGen::new(generator);
-    let hooks = shared.clone();
+    let hooks = BoxGen::new(generator);
+    let shared = Suspect(hooks.clone());
     let config = authored_by(config, &support);
     check(&config, shared, move |value| {
         let rules = ShrinkRules { candidates: None, size: Some(&size), chain_in_domain: false };
@@ -240,6 +244,34 @@ pub(crate) fn shrinks<T: Debug>(
         "the first-candidate shrink chain did not settle within {CHAIN} steps; last value {}",
         cap(format!("{current:?}"), SAMPLE_CHARS)
     ))
+}
+
+/// A generator whose shrinker is under test, for the run that tests it. The
+/// same shrinker proposes the smaller counterexamples, so a candidate that
+/// renders longer is left out: a shrinker that grows the value would take the
+/// counterexample along.
+struct Suspect<T>(BoxGen<T>);
+
+impl<T: Debug> Gen for Suspect<T> {
+    type Value = T;
+
+    fn generate(&self, g: &mut Source) -> T {
+        self.0.generate(g)
+    }
+
+    fn shrink(&self, value: &T, visitor: &mut ShrinkVisitor<'_, T>) -> ShrinkFlow {
+        let longest = format!("{value:?}").len();
+        self.0.shrink(value, &mut |candidate| {
+            if format!("{candidate:?}").len() > longest {
+                return ControlFlow::Continue(());
+            }
+            visitor(candidate)
+        })
+    }
+
+    fn mutate(&self, value: &T, g: &mut Source) -> T {
+        self.0.mutate(value, g)
+    }
 }
 
 /// A mutant of `value` drawn from `source` without a discard and inside the

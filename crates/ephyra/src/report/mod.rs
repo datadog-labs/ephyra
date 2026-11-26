@@ -88,7 +88,8 @@ pub struct ShrinkStats {
     pub steps: u64,
     /// Candidates accepted.
     pub accepted: u64,
-    /// Candidates skipped because they rendered longer than the current best.
+    /// Candidates skipped because they rendered far longer than the original
+    /// input: more than eight times as long, and by more than 1024 bytes.
     pub rejected_not_smaller: u64,
     /// Candidates skipped because they had been seen before.
     pub rejected_seen: u64,
