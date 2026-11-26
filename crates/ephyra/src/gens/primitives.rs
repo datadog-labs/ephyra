@@ -222,7 +222,9 @@ impl Gen for F64Gen {
 
 /// An `f32` uniform in `[0, 1)`: [`f64()`] narrowed, with its hooks.
 pub fn f32() -> impl Gen<Value = f32> {
-    f64().iso(|x| x as f32, |x: &f32| f64::from(*x))
+    // `as f32` rounds draws above `1 - 2^-25` up to `1.0`; keep them below it.
+    const BELOW_ONE: f32 = 1.0 - f32::EPSILON / 2.0;
+    f64().iso(|x| (x as f32).min(BELOW_ONE), |x: &f32| f64::from(*x))
 }
 
 /// An `f64` with a uniformly random bit pattern (any value including NaN,
@@ -269,7 +271,19 @@ impl Gen for F32Bits {
     }
 
     fn shrink(&self, value: &f32, visitor: &mut ShrinkVisitor<'_, f32>) -> ShrinkFlow {
-        shrink_f64(f64::from(*value), &mut |candidate| visitor(candidate as f32))
+        // The f64 shrinker's candidates, narrowed. A finite candidate beyond
+        // f32's range (f64::MAX, for an infinity) narrows to f32::MAX rather
+        // than back to infinity, and one that narrows to the input itself is
+        // dropped: a shrinker never offers its input (#47).
+        let bits = value.to_bits();
+        shrink_f64(f64::from(*value), &mut |candidate| {
+            let narrowed = if candidate.is_finite() && candidate.abs() > f64::from(f32::MAX) {
+                f32::MAX.copysign(candidate as f32)
+            } else {
+                candidate as f32
+            };
+            if narrowed.to_bits() == bits { ControlFlow::Continue(()) } else { visitor(narrowed) }
+        })
     }
 
     fn mutate(&self, value: &f32, g: &mut Source) -> f32 {
@@ -731,6 +745,25 @@ pub fn sized<G: Gen>(f: impl Fn(usize) -> G + Send + Sync) -> impl Gen<Value = G
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f32_bits_shrinks_infinity_to_the_largest_finite_value() {
+        // #47: inf went through f64::MAX, which narrows back to inf.
+        assert_eq!(f32_bits().shrink_candidates(&f32::INFINITY), vec![0.0, f32::MAX]);
+        assert_eq!(f32_bits().shrink_candidates(&f32::NEG_INFINITY), vec![0.0, f32::MIN]);
+    }
+
+    #[test]
+    fn f32_stays_below_one() {
+        let g = f32();
+        // Seed found in #40: the f64 draw rounds up to 1.0 as f32.
+        assert!(g.generate(&mut Source::new(6_166_858, 0)) < 1.0);
+        let mut src = Source::new(0, 0);
+        for _ in 0..1000 {
+            let m = g.mutate(&0.99999, &mut src);
+            assert!((0.0..1.0).contains(&m), "mutated to {m}");
+        }
+    }
 
     #[test]
     fn vec_lengths_follow_size_and_len() {

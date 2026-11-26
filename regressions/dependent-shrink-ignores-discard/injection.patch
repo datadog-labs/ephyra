@@ -1,0 +1,15 @@
+diff --git a/crates/ephyra/src/gens/mod.rs b/crates/ephyra/src/gens/mod.rs
+--- a/crates/ephyra/src/gens/mod.rs
++++ b/crates/ephyra/src/gens/mod.rs
+@@ -342,11 +342,6 @@
+             let mut source = Source::new(crate::source::mix(REGENERATE_SEED, index), 0);
+             index += 1;
+             let b2 = (self.f)(&a2).generate(&mut source);
+-            // A filter in `f(a2)` that ran out of attempts marks the source and
+-            // returns a value that fails it: not in the joint support (#44).
+-            if source.discarded().is_some() {
+-                return ControlFlow::Continue(());
+-            }
+             visitor((a2, b2))
+         })?;
+         (self.f)(a).shrink(b, &mut |b2| visitor((a.clone(), b2)))

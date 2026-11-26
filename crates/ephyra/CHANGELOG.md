@@ -5,6 +5,28 @@ All notable changes to `ephyra` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `gens::f32()` could generate and mutate to `1.0`, outside its documented
+  `[0, 1)` (#40). Fix by Yusuf Eren Bozkurt (#137).
+- `gens::dependent` could shrink to a pair outside its joint support when the
+  inner generator filters: a regenerated second value whose filter ran out of
+  attempts is no longer a candidate (#44).
+- `gens::f32_bits()` shrank an infinity to itself; it now shrinks to
+  `f32::MAX` / `f32::MIN` (#47).
+- `any::<f32>()` and `any::<f64>()` shrank in cycles (`0.5 -> 1.0 -> 0.5`,
+  `MAX -> inf -> MAX`): the special values are now listed in the order the
+  float shrinker reduces.
+
+### Added
+
+- `tests/gen_contract.rs`: one property, every built-in generator keeps its
+  contract (replay, support under generate, mutate and shrink, shrinking that
+  settles), over generated arguments. It catches each of the bugs above.
+- `regressions/`: every fixed bug as a reversed patch, with the properties
+  that must catch it; CI checks fix and bug soundness on every pull request.
+  CONTRIBUTING.md describes the method.
+
 ## [0.0.1] - 2026-10-29
 
 The first release on crates.io.

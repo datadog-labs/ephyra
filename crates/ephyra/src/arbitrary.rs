@@ -69,21 +69,25 @@ macro_rules! impl_arbitrary_float {
     ($($t:ident: $unit:ident, $bits:ident);*) => {$(
         impl Arbitrary for $t {
             fn arbitrary() -> BoxGen<Self> {
+                // `pick_from` shrinks toward earlier entries, so list them in
+                // the order the float shrinker reduces: by magnitude, the
+                // positive value before the negative one, NaN last. Any other
+                // order lets the two shrinkers undo each other (0.5 -> 1.0 -> 0.5).
                 const SPECIALS: [$t; 14] = [
                     0.0,
                     -0.0,
-                    1.0,
-                    -1.0,
+                    $t::from_bits(1), // the smallest subnormal
+                    $t::MIN_POSITIVE,
+                    $t::EPSILON,
                     0.5,
                     -0.5,
-                    $t::NAN,
-                    $t::INFINITY,
-                    $t::NEG_INFINITY,
+                    1.0,
+                    -1.0,
                     $t::MAX,
                     $t::MIN,
-                    $t::EPSILON,
-                    $t::MIN_POSITIVE,
-                    $t::from_bits(1), // the smallest subnormal
+                    $t::INFINITY,
+                    $t::NEG_INFINITY,
+                    $t::NAN,
                 ];
                 const FRACTIONS: [$t; 4] = [0.0, 0.5, 0.25, 0.1];
                 gens::frequency(vec![
@@ -207,6 +211,44 @@ mod tests {
             Source,
         },
     };
+
+    #[test]
+    fn any_float_has_no_two_step_shrink_cycle() {
+        // Found by ephyra-agent: the special values shrank toward earlier
+        // entries of their list, the float shrinker the other way (0.5 -> 1.0 -> 0.5).
+        fn check<T: Arbitrary + Clone + std::fmt::Debug>(values: &[T]) {
+            let g = crate::any::<T>();
+            let key = |v: &T| format!("{v:?}");
+            for v in values {
+                for c in g.shrink_candidates(v) {
+                    let back = g.shrink_candidates(&c).iter().any(|d| key(d) == key(v));
+                    assert!(!back, "{v:?} -> {c:?} -> {v:?}");
+                }
+            }
+        }
+        check(&[
+            0.5f64,
+            -0.5,
+            1.0,
+            -1.0,
+            f64::MAX,
+            f64::MIN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ]);
+        check(&[
+            0.5f32,
+            -0.5,
+            1.0,
+            -1.0,
+            f32::MAX,
+            f32::MIN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ]);
+    }
 
     #[test]
     fn std_types_have_default_generators() {

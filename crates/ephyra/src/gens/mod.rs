@@ -342,6 +342,11 @@ where
             let mut source = Source::new(crate::source::mix(REGENERATE_SEED, index), 0);
             index += 1;
             let b2 = (self.f)(&a2).generate(&mut source);
+            // A filter in `f(a2)` that ran out of attempts marks the source and
+            // returns a value that fails it: not in the joint support (#44).
+            if source.discarded().is_some() {
+                return ControlFlow::Continue(());
+            }
             visitor((a2, b2))
         })?;
         (self.f)(a).shrink(b, &mut |b2| visitor((a.clone(), b2)))
@@ -632,6 +637,16 @@ mod tests {
             },
         },
     };
+
+    #[test]
+    fn dependent_drops_a_shrink_candidate_whose_regeneration_discarded() {
+        // #44: the filter in f(0) cannot hold at size 0, so (0, b) is not a pair
+        // the generator can make; it used to be a candidate.
+        let pairs = dependent(gens::int(0u16..=1), |&a| {
+            gens::int(0u16..=1000).filter("one value", move |b| *b == a + 500)
+        });
+        assert_eq!(pairs.shrink_candidates(&(1, 501)), Vec::<(u16, u16)>::new());
+    }
 
     #[test]
     fn lazy_shrinker_stops_when_the_visitor_breaks() {

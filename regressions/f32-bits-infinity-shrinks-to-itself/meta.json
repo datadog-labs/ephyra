@@ -1,0 +1,22 @@
+{
+ "id": "f32-bits-infinity-shrinks-to-itself",
+ "title": "gens::f32_bits() shrinks infinity to itself",
+ "class": "shrink-progress",
+ "symptom": "wrong-result",
+ "issue": 47,
+ "cause": "the f64 shrinker offers f64::MAX for an infinity, and f64::MAX narrowed to f32 is infinity again",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:gen_contract",
+   "name": "every_builtin_generator_keeps_its_contract"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "gens::primitives::tests::f32_bits_shrinks_infinity_to_the_largest_finite_value"
+  }
+ ]
+}

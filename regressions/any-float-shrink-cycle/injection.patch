@@ -1,0 +1,37 @@
+diff --git a/crates/ephyra/src/arbitrary.rs b/crates/ephyra/src/arbitrary.rs
+--- a/crates/ephyra/src/arbitrary.rs
++++ b/crates/ephyra/src/arbitrary.rs
+@@ -69,25 +69,21 @@
+     ($($t:ident: $unit:ident, $bits:ident);*) => {$(
+         impl Arbitrary for $t {
+             fn arbitrary() -> BoxGen<Self> {
+-                // `pick_from` shrinks toward earlier entries, so list them in
+-                // the order the float shrinker reduces: by magnitude, the
+-                // positive value before the negative one, NaN last. Any other
+-                // order lets the two shrinkers undo each other (0.5 -> 1.0 -> 0.5).
+                 const SPECIALS: [$t; 14] = [
+                     0.0,
+                     -0.0,
+-                    $t::from_bits(1), // the smallest subnormal
+-                    $t::MIN_POSITIVE,
+-                    $t::EPSILON,
+-                    0.5,
+-                    -0.5,
+                     1.0,
+                     -1.0,
+-                    $t::MAX,
+-                    $t::MIN,
++                    0.5,
++                    -0.5,
++                    $t::NAN,
+                     $t::INFINITY,
+                     $t::NEG_INFINITY,
+-                    $t::NAN,
++                    $t::MAX,
++                    $t::MIN,
++                    $t::EPSILON,
++                    $t::MIN_POSITIVE,
++                    $t::from_bits(1), // the smallest subnormal
+                 ];
+                 const FRACTIONS: [$t; 4] = [0.0, 0.5, 0.25, 0.1];
+                 gens::frequency(vec![

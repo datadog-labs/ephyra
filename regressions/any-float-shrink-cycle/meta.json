@@ -1,0 +1,22 @@
+{
+ "id": "any-float-shrink-cycle",
+ "title": "any::<f32>() and any::<f64>() shrink in cycles (0.5 -> 1.0 -> 0.5, MAX -> inf -> MAX)",
+ "class": "shrink-termination",
+ "symptom": "non-termination",
+ "issue": null,
+ "cause": "pick_from(SPECIALS) shrinks toward earlier list entries, which put 1.0 before 0.5 and INFINITY before MAX; the float shrinker goes the other way",
+ "reported_by": "ephyra-agent (an automated Ephyra campaign on this library)",
+ "fixed_by": "ephyra-agent's patch, in this pull request",
+ "oracles": [
+  {
+   "target": "test:gen_contract",
+   "name": "every_builtin_generator_keeps_its_contract"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "arbitrary::tests::any_float_has_no_two_step_shrink_cycle"
+  }
+ ]
+}

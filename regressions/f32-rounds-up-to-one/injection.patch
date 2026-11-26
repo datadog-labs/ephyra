@@ -1,0 +1,14 @@
+diff --git a/crates/ephyra/src/gens/primitives.rs b/crates/ephyra/src/gens/primitives.rs
+--- a/crates/ephyra/src/gens/primitives.rs
++++ b/crates/ephyra/src/gens/primitives.rs
+@@ -222,9 +222,7 @@
+ 
+ /// An `f32` uniform in `[0, 1)`: [`f64()`] narrowed, with its hooks.
+ pub fn f32() -> impl Gen<Value = f32> {
+-    // `as f32` rounds draws above `1 - 2^-25` up to `1.0`; keep them below it.
+-    const BELOW_ONE: f32 = 1.0 - f32::EPSILON / 2.0;
+-    f64().iso(|x| (x as f32).min(BELOW_ONE), |x: &f32| f64::from(*x))
++    f64().iso(|x| x as f32, |x: &f32| f64::from(*x))
+ }
+ 
+ /// An `f64` with a uniformly random bit pattern (any value including NaN,
