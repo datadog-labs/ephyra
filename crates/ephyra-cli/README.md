@@ -13,10 +13,11 @@ ephyra visualize
 ```
 
 `ephyra test` routes reports, OpenPBTStats observation traces, coverage
-pages, targets, profraw images and regressions into `.ephyra` and uses an
-isolated instrumented Cargo target directory. Pass `--no-instrument` for the
-ordinary build, `--dir` to choose another artifact root, or `--` before test
-harness arguments.
+pages, targets and profraw images into `.ephyra` and uses an isolated
+instrumented Cargo target directory. Saved failures (regressions) stay where
+`cargo test` keeps them, by default in `.ephyra/regressions` of each package.
+Pass `--no-instrument` for the ordinary build, `--dir` to choose another
+artifact root, or `--` before test harness arguments.
 
 `ephyra visualize` opens a local page over the artifact root (grid pages,
 latest reports, targets, discovered tests) that discovers and runs any

@@ -34,8 +34,9 @@ fn usage(code: i32) -> ! {
            ephyra check [NAME...] [--list] [--tests N] [--dir DIR] [--no-instrument] [--target-dir DIR] [--cargo PATH] [-- CARGO ARGS...]\n\
            ephyra guide\n\
            ephyra visualize [--dir DIR] [--port PORT] [--cargo-args ARGS] [--no-instrument] [--target-dir DIR] [--cargo PATH]\n\n\
-         `test` runs cargo test with Ephyra reports, traces, coverage pages, targets and\n\
-         regressions routed into DIR (default .ephyra). Instrumentation is on by default.\n\n\
+         `test` runs cargo test with Ephyra reports, traces, coverage pages and targets\n\
+         routed into DIR (default .ephyra). Saved failures stay where cargo test keeps\n\
+         them, by default in each package. Instrumentation is on by default.\n\n\
          `check` reads the workspace's #[ephyra::test] and #[ephyra::generator]\n\
          functions from source and runs the check of every generator and strategy (or of\n\
          the NAMEd ones) over thousands of inputs, into the same DIR. It lists predicates\n\
