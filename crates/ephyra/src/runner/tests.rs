@@ -834,6 +834,29 @@ fn novelty_counts_what_an_input_reached_first() {
 
 #[cfg(all(ephyra_instrumented, feature = "coverage"))]
 #[test]
+fn a_panicking_mutator_stops_localizing_only() {
+    let mut config = cfg();
+    config.coverage.enabled = true;
+    config.locate.enabled = true;
+    let generator = gens::int(0i32..=4000).with_mutate(|_, _| panic!("no neighbour"));
+    let report = check(&config, generator, |x| branchy(x) == 2);
+    assert_eq!(report.counterexample().expect("fails").debug, "1001", "{report}");
+    assert!(report.locate.is_some(), "{report}");
+    let warnings: Vec<_> = report.health.iter().filter(|w| w.kind == "mutator_panicked").collect();
+    assert!(warnings.len() == 1 && warnings[0].message.contains("no neighbour"), "{report}");
+
+    // After a discard, the panic is part of it.
+    let generator = gens::int(0i32..=4000).with_mutate(|_, g| {
+        g.discard("no neighbour");
+        panic!("after the discard")
+    });
+    let report = check(&config, generator, |x| branchy(x) == 2);
+    assert!(report.locate.is_some(), "{report}");
+    assert!(!report.health.iter().any(|w| w.kind == "mutator_panicked"), "{report}");
+}
+
+#[cfg(all(ephyra_instrumented, feature = "coverage"))]
+#[test]
 fn the_coverage_grid_is_written() {
     use crate::config::CoverageTarget;
     let dir = std::env::temp_dir().join(format!("ephyra-grid-{}", std::process::id()));

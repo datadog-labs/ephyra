@@ -16,6 +16,7 @@ use std::{
         Cell,
         RefCell,
     },
+    fmt,
     panic::{
         self,
         AssertUnwindSafe,
@@ -30,6 +31,15 @@ use crate::report::Location;
 pub(crate) struct PanicInfo {
     pub message: String,
     pub location: Option<Location>,
+}
+
+impl fmt::Display for PanicInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.location {
+            Some(at) => write!(f, "panicked at {at}: {}", self.message),
+            None => write!(f, "panicked: {}", self.message),
+        }
+    }
 }
 
 thread_local! {

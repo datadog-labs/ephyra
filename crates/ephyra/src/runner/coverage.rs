@@ -337,9 +337,21 @@ where
         let neighbourhood = mix(self.report.seed, u64::MAX - 3);
         for i in 0..self.config.locate.neighbourhood as u64 {
             let mut source = Source::new(mix(neighbourhood, i), size);
-            let mutant = self.generator.mutate(minimal, &mut source);
-            if source.discarded().is_none() {
-                self.run_property(mutant, At { origin: "neighbourhood", ..at });
+            let mutant = super::panic::catch(|| self.generator.mutate(minimal, &mut source));
+            if source.discarded().is_some() {
+                continue; // With any panic of the code that ran on after it.
+            }
+            match mutant {
+                Ok(mutant) => {
+                    self.run_property(mutant, At { origin: "neighbourhood", ..at });
+                },
+                Err(info) => {
+                    self.report.warn(
+                        "mutator_panicked",
+                        format!("the mutator {info}; the suspects are ranked without more mutants"),
+                    );
+                    break;
+                },
             }
         }
         let panic = location.map(|l| (l.file.as_str(), l.line));

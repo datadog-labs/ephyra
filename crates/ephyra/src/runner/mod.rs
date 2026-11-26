@@ -289,7 +289,11 @@ where
         }
         sinks.extend(crate::sink::open(&crate::sink::RunInfo { property: &report.name, seed }));
         let naming = (config.failures > 1).then(|| {
-            Naming { name: config.signature.clone(), limit: config.report.truncate_debug_at }
+            Naming {
+                name: config.signature.clone(),
+                limit: config.report.truncate_debug_at,
+                panicked: None,
+            }
         });
         #[cfg_attr(not(feature = "coverage"), allow(unused_mut))]
         let mut run = Run {
