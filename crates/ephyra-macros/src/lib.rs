@@ -514,9 +514,10 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// `config`. A search expression is called with `&mut Run` after replaying
 /// remembered failures and is responsible for driving the run; for example,
 /// `|run| loops::fuzz(run, &mut loops::Fifo::new(), 1_000)`. Ephyra still
-/// owns final shrinking, regression storage and reporting. The function may
-/// return anything `Testable`. Other attributes (such as `#[ignore]`) are
-/// kept.
+/// owns final shrinking, regression storage and reporting. If the search
+/// returned `Err`, the test fails after that (a failure of the property is
+/// reported first); any other value is ignored. The function may return
+/// anything `Testable`. Other attributes (such as `#[ignore]`) are kept.
 ///
 /// A failing run panics with its report. A passing run prints it
 /// (`cargo test -- --show-output` or `-- --nocapture` shows it). If the run
@@ -699,24 +700,31 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
     };
     let generator = strategy.as_ref().map_or(generator, |strategy| quote!((#strategy)));
 
-    let report = if let Some(search) = search {
-        quote! {
-            fn __ephyra_search<G, P, S, O>(run: &mut ::ephyra::Run<G, P>, search: S)
+    let (report, assert_passed) = if let Some(search) = search {
+        let report = quote! {
+            fn __ephyra_search<G, P, S, O>(run: &mut ::ephyra::Run<G, P>, search: S) -> O
             where
                 G: ::ephyra::Gen,
                 S: ::core::ops::FnOnce(&mut ::ephyra::Run<G, P>) -> O,
             {
-                let _ = search(run);
+                search(run)
             }
 
             let mut __run = ::ephyra::Run::new(&__config, #generator, #property);
             if !__run.remembered() {
-                __ephyra_search(&mut __run, #search);
+                let __returned = __ephyra_search(&mut __run, #search);
+                let __error = {
+                    use ::ephyra::__search::*;
+                    (&&&::ephyra::__search::Returned(__returned)).__ephyra_search_error()
+                };
+                ::ephyra::__search::record(&mut __run, __error);
             }
             __run.finish()
-        }
+        };
+        (report, quote!(::ephyra::__search::assert_passed(&__report)))
     } else {
-        quote!(::ephyra::check(&__config, #generator, #property))
+        let report = quote!(::ephyra::check(&__config, #generator, #property));
+        (report, quote!(__report.assert_passed()))
     };
 
     let check = checked.then(|| {
@@ -756,7 +764,7 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
             };
             let __report = { #report };
             ::ephyra::__print_passed(&__report);
-            __report.assert_passed();
+            #assert_passed;
         }
 
         #check

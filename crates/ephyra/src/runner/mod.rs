@@ -9,6 +9,8 @@ mod failures;
 pub mod labels;
 pub(crate) mod panic;
 mod remember;
+#[doc(hidden)]
+pub mod returned;
 mod search;
 mod shrinking;
 mod stats;

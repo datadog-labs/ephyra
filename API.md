@@ -226,6 +226,7 @@ Health warnings worth acting on (`report.health[i].kind`):
 | `coverage_plateau` | Coverage stopped growing: the generator is too narrow |
 | `slow_generation` | Generation dominates the time |
 | `config_env` | An `EPHYRA_*` variable has a bad value |
+| `search_error` | The search of `#[ephyra::test(search = ...)]` returned an `Err`, which fails the test |
 
 ## Your own loop: `Run`
 

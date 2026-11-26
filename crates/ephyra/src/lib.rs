@@ -179,6 +179,8 @@ pub use {
 #[doc(hidden)]
 pub use report::__print_passed;
 #[doc(hidden)]
+pub use runner::returned as __search;
+#[doc(hidden)]
 pub use verify::{
     __check_generator,
     __check_strategy,
