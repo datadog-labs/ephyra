@@ -97,7 +97,9 @@ is a counterexample, not a reason to exclude that input.
 
 ## Writing properties
 
-A property may return `()`, `bool`, `Result<_, E: Debug>` or `TestResult`.
+A property may return `()`, `bool`, `TestResult` or a `Result<_, E: Debug>`
+of one of these: `Err` fails, and `Ok` takes the verdict of its value
+(`Ok(false)` fails). Map an `Ok` value that is no verdict to `()`.
 Prefer `()` with `assert!` and `assert_eq!`: a panic is a failure with its
 message and location in the report, `assert_eq!` shows both values, and
 shrinking keeps the failure at the same assertion. Return `TestResult` only to
@@ -119,11 +121,13 @@ loops are rarely needed.
 ## What `ephyra check` verifies
 
 Each generator gets an ignored `__ephyra_check_<name>` test, and so does
-each property with a strategy that can discard (it returns `TestResult`). A
-property returning `()`, `bool` or `Result` never discards, so its strategy
-has nothing to check beyond its generators' own checks. `ephyra check` runs
-these tests over thousands of inputs as full ephyra runs, with coverage,
-reports and a counterexample when one fails. Per input:
+each property with a strategy that can discard (it returns `TestResult` or a
+`Result` of one). A property returning `()`, `bool` or a `Result` of these
+never discards, so its strategy has nothing to check beyond its generators'
+own checks. A `Result` without type arguments (an alias such as `fmt::Result`)
+counts as one that never discards, so write `Result<TestResult, E>` out.
+`ephyra check` runs these tests over thousands of inputs as full ephyra runs,
+with coverage, reports and a counterexample when one fails. Per input:
 
 - A generator's value satisfies its predicate. A strategy's value may be
   discarded by the property (it is counted, and too many make the run give up).

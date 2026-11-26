@@ -136,9 +136,10 @@ let report = check(&Config::default().tests(500), gens::vec(gens::int(-50i32..=5
 report.assert_passed();
 ```
 
-Properties may return `bool`, `()`, `Result<_, E: Debug>` or `TestResult`;
-a panic is a failure with its message and location captured. `assume!`
-discards inputs that do not apply.
+Properties may return `bool`, `()`, `TestResult` or a `Result<_, E: Debug>`
+of one of these, where `Ok` takes the verdict of its value; a panic is a
+failure with its message and location captured. `assume!` discards inputs
+that do not apply.
 
 ## Writing your own loop
 
