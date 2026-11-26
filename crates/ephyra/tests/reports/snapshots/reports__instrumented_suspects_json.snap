@@ -72,6 +72,7 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
       "seed": 24301,
       "iteration": 1
     },
+    "seed": 24301,
     "flaky": false,
     "shrink": {
       "steps": 38,

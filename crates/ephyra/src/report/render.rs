@@ -90,11 +90,15 @@ impl fmt::Display for Report {
                         writeln!(
                             f,
                             "  reproduce: EPHYRA_SEED={} (found in the targeted phase)",
-                            self.seed
+                            failure.seed
                         )?
                     },
                 }
-                writeln!(f, "  or rerun the whole search: Config::default().seed({})", self.seed)?;
+                writeln!(
+                    f,
+                    "  or rerun the whole search: Config::default().seed({})",
+                    failure.seed
+                )?;
                 if let Some(file) = &self.regressions.file
                     && self.regressions.saved
                 {
@@ -304,7 +308,7 @@ fn write_failures(f: &mut fmt::Formatter<'_>, report: &Report) -> fmt::Result {
                 writeln!(
                     f,
                     "    reproduce: EPHYRA_SEED={} (found in the targeted phase)",
-                    report.seed
+                    failure.seed
                 )?
             },
         }

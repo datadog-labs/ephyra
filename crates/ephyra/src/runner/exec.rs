@@ -214,6 +214,10 @@ pub struct Input<T> {
     /// The value.
     pub value: T,
     pub(super) point: Option<ReplayPoint>,
+    /// The seed its randomness comes from.
+    pub(super) seed: u64,
+    /// The value a mutant was made from, while failures are saved.
+    pub(super) parent: Option<T>,
     pub(super) size: usize,
     pub(super) iteration: u64,
     pub(super) origin: crate::report::Origin,
@@ -242,11 +246,15 @@ impl<T> Input<T> {
         self.origin
     }
 
-    /// Where it sits in the observation file, recorded as `origin`; mutants
-    /// carry the run's `seed`.
-    pub(super) fn at(&self, origin: &'static str, seed: u64) -> At {
-        let seed = self.point.map_or(seed, |p| p.seed);
-        At { origin, seed, iteration: self.iteration, size: self.size, generate: self.generate }
+    /// Where it sits in the observation file, recorded as `origin`.
+    pub(super) fn at(&self, origin: &'static str) -> At {
+        At {
+            origin,
+            seed: self.seed,
+            iteration: self.iteration,
+            size: self.size,
+            generate: self.generate,
+        }
     }
 }
 
@@ -340,7 +348,8 @@ where
             (Err(info), _) => Err(Skipped::Panicked(info)),
             (Ok(_), Some(reason)) => Err(Skipped::Discarded(reason.to_string(), generate)),
             (Ok(value), None) => {
-                Ok(Input { value, point: None, size, iteration, origin, generate })
+                let (point, parent) = (None, None);
+                Ok(Input { value, point, seed, parent, size, iteration, origin, generate })
             },
         }
     }
@@ -486,7 +495,8 @@ where
         self.generated += 1;
         let hash = debug_hash(&input.value);
         self.note_distinct(hash);
-        let at = input.at(input.origin.as_str(), self.report.seed);
+        self.tested = input.made().map(|made| (hash, made));
+        let at = input.at(input.origin.as_str());
         let Ran { result, observed, elapsed, novelty, signature } =
             self.run_property(input.value.clone(), at);
         let limit = self.config.report.truncate_debug_at;
@@ -546,7 +556,7 @@ where
         match self
             .produce(self.report.seed, iteration, origin, |g, source| g.mutate(parent, source))
         {
-            Ok(input) => Some(input),
+            Ok(input) => Some(Input { parent: self.saves().then(|| parent.clone()), ..input }),
             Err(Skipped::Discarded(reason, _)) => {
                 self.record_discard(reason);
                 None

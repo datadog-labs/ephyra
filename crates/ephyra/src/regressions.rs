@@ -3,15 +3,15 @@
 
 //! The regressions file: failing inputs remembered across runs.
 //!
-//! When a property fails in the random phase, where the input came from is
-//! appended to `<dir>/<name>.jsonl` (one JSON object per line: name, seed,
-//! iteration, the input's `Debug` rendering, the shrunk rendering, creation
-//! time). The next run of the same property regenerates every stored input
-//! before random testing and checks it still renders the same (in any
-//! order, when it renders in another order every time, as hash collections
-//! do); an entry whose generator has changed is reported as stale rather
-//! than silently testing a different input. Commit the directory to keep
-//! that guarantee for the whole team.
+//! When a property fails, where the input came from is appended to
+//! `<dir>/<name>.jsonl` (one JSON object per line: name, seed, iteration,
+//! the iterations that mutated it if any, the input's `Debug` rendering, the
+//! shrunk rendering, creation time). The next run of the same property
+//! regenerates every stored input before random testing and checks it still
+//! renders the same (in any order, when it renders in another order every
+//! time, as hash collections do); an entry whose generator or mutator has
+//! changed is reported as stale rather than silently testing a different
+//! input. Commit the directory to keep that guarantee for the whole team.
 //!
 //! Requires the default `json` feature.
 
@@ -31,6 +31,8 @@ use std::{
     },
 };
 
+use crate::config::ReplayPoint;
+
 /// One remembered failure.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
@@ -40,8 +42,12 @@ pub struct Entry {
     pub seed: u64,
     /// Generation attempt within that run.
     pub iteration: u64,
-    /// `Debug` rendering of the input as generated, used to detect that the
-    /// generator has changed.
+    /// The attempts of that run that mutated the generated input into the
+    /// failing one, in order; empty when it failed as generated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mutations: Vec<u64>,
+    /// `Debug` rendering of the input as generated (and mutated), used to
+    /// detect that the generator has changed.
     pub debug: String,
     /// `Debug` rendering of the shrunk input, for humans reading the file.
     pub shrunk: Option<String>,
@@ -52,13 +58,14 @@ pub struct Entry {
 impl Entry {
     pub(crate) fn new(
         name: &str,
-        seed: u64,
-        iteration: u64,
+        point: ReplayPoint,
+        mutations: Vec<u64>,
         debug: String,
         shrunk: Option<String>,
     ) -> Self {
         let created = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        Entry { name: name.to_string(), seed, iteration, debug, shrunk, created }
+        let (name, seed, iteration) = (name.to_string(), point.seed, point.iteration);
+        Entry { name, seed, iteration, mutations, debug, shrunk, created }
     }
 }
 
@@ -81,12 +88,14 @@ pub fn load(dir: &Path, name: &str) -> Vec<Entry> {
     text.lines().filter_map(|line| serde_json::from_str::<Entry>(line).ok()).collect()
 }
 
-/// Append `entry` unless an entry for the same seed and iteration is
-/// already stored. Returns the file's path and whether a line was appended.
+/// Append `entry` unless an entry for the same seed, iteration and mutations
+/// is already stored. Returns the file's path and whether a line was appended.
 pub fn save(dir: &Path, entry: &Entry) -> io::Result<(PathBuf, bool)> {
     let path = path_for(dir, &entry.name);
-    if load(dir, &entry.name).iter().any(|e| e.seed == entry.seed && e.iteration == entry.iteration)
-    {
+    let same = |e: &Entry| {
+        (e.seed, e.iteration) == (entry.seed, entry.iteration) && e.mutations == entry.mutations
+    };
+    if load(dir, &entry.name).iter().any(same) {
         return Ok((path, false));
     }
     fs::create_dir_all(dir)?;
@@ -121,16 +130,24 @@ mod tests {
     fn save_then_load_dedupes_by_point() {
         let dir = temp_dir("dedupe");
         assert!(load(&dir, "p").is_empty());
-        let entry = Entry::new("p", 7, 3, "[1]".into(), Some("[]".into()));
+        let point = |seed, iteration| ReplayPoint { seed, iteration };
+        let entry = Entry::new("p", point(7, 3), vec![], "[1]".into(), Some("[]".into()));
         let (path, appended) = save(&dir, &entry).unwrap();
         assert_eq!(path, dir.join("p.jsonl"));
         assert!(appended);
         assert!(!save(&dir, &entry).unwrap().1);
-        save(&dir, &Entry::new("p", 8, 0, "[2]".into(), None)).unwrap();
+        save(&dir, &Entry::new("p", point(8, 0), vec![], "[2]".into(), None)).unwrap();
+        let mutant = Entry::new("p", point(7, 3), vec![5, 9], "[3]".into(), None);
+        assert!(save(&dir, &mutant).unwrap().1, "another input than the one it comes from");
+        assert!(!save(&dir, &mutant).unwrap().1);
         let loaded = load(&dir, "p");
-        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded.len(), 3);
         assert_eq!(loaded[0].iteration, 3);
         assert_eq!(loaded[1].seed, 8);
+        assert_eq!(loaded[2], mutant);
+        // Files without mutations are written and read as before.
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("mutations").count(), 1, "{text}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

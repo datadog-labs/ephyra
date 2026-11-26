@@ -54,7 +54,8 @@ fn sorting_keeps_every_element(mut v: Vec<i32>) -> bool {
 ```
 
 `cargo test` runs it. A failure prints the shrunk counterexample and an
-`EPHYRA_REPLAY=<seed>:<iteration>` line that reruns exactly that case, and is
+`EPHYRA_REPLAY=<seed>:<iteration>` line that reruns exactly that case (for an
+input found by mutation, an `EPHYRA_SEED` line that repeats the search), and is
 remembered in `.ephyra/regressions/` so the next run tries it first. Settings
 such as the number of tests (`EPHYRA_TESTS`), the seed (`EPHYRA_SEED`) or a
 time budget (`EPHYRA_BUDGET_MS`) can be changed from the environment without

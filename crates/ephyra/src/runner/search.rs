@@ -115,9 +115,11 @@ where
         let guided = self.guided();
         let by_score = tested.score.is_some_and(|s| self.pool.improves(s));
         if by_score {
+            self.note_seed(&value);
             self.pool.add(value, tested.score.unwrap_or(0.0));
             true
         } else if tested.novel() && guided {
+            self.note_seed(&value);
             self.pool.add_forced(value, tested.score.unwrap_or(0.0));
             true
         } else {
@@ -127,6 +129,7 @@ where
 
     /// Keep an input as a seed with `score`, whatever the pool's threshold.
     pub fn keep_always(&mut self, value: G::Value, score: f64) {
+        self.note_seed(&value);
         self.pool.add_forced(value, score);
     }
 

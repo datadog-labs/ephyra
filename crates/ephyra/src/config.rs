@@ -391,7 +391,7 @@ pub struct RegressionsConfig {
     /// `.ephyra/regressions`, relative to the working directory (the
     /// crate root under `cargo test`).
     pub dir: PathBuf,
-    /// Append the shrunk failing input on failure. Default true.
+    /// Append how the failing input is made, on failure. Default true.
     pub save: bool,
     /// Replay stored entries before random testing. Default true.
     pub replay: bool,

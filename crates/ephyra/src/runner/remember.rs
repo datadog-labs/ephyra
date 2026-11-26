@@ -9,24 +9,52 @@ use {
     super::{
         Run,
         Testable,
-        exec::Skipped,
+        exec::{
+            Input,
+            Skipped,
+            debug_hash,
+        },
     },
     crate::{
         Gen,
+        config::ReplayPoint,
         report::ReplayOutcome,
     },
 };
 #[cfg(feature = "json")]
 use {
     super::{
+        exec::Signature,
         shrinking::Found,
-        stats::cap,
+        stats::{
+            SAMPLE_CHARS,
+            cap,
+        },
     },
-    crate::{
-        config::ReplayPoint,
-        report::Counterexample,
+    crate::report::{
+        Counterexample,
+        Origin,
     },
 };
+
+/// How an input was made, so that it can be made again: drawn at a point, or
+/// mutated from `parent`, a value or the hash of a seed, at `iteration`.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Made<P> {
+    Drawn(ReplayPoint),
+    Mutated { parent: P, iteration: u64 },
+}
+
+impl<T: Clone> Input<T> {
+    /// How it was made, if that is known.
+    pub(super) fn made(&self) -> Option<Made<T>> {
+        match (self.point, self.parent.clone()) {
+            (Some(point), _) => Some(Made::Drawn(point)),
+            (None, Some(parent)) => Some(Made::Mutated { parent, iteration: self.iteration }),
+            (None, None) => None,
+        }
+    }
+}
 
 /// How often an input that does not render as stored is regenerated. A hash
 /// collection of two items then shows only one of its two orders once in
@@ -131,21 +159,25 @@ where
             let limit = self.config.report.truncate_debug_at;
             for entry in entries {
                 let point = ReplayPoint { seed: entry.seed, iteration: entry.iteration };
+                let stored = match entry.mutations.len() {
+                    0 => format!("stored input {point}"),
+                    n => format!("stored input {point} (mutations: {n})"),
+                };
                 self.report.regressions.replayed += 1;
-                let Ok(mut input) = self.generate(point, crate::report::Origin::Replay) else {
+                let Ok(mut input) = self.remake(point, &entry.mutations) else {
                     self.report.regressions.stale += 1;
-                    self.report.warn("regressions", format!("stored input {point} could not be regenerated (discarded or the generator panicked)"));
+                    self.report.warn("regressions", format!("{stored} could not be regenerated (discarded or the generator panicked)"));
                     continue;
                 };
                 let debug = cap(format!("{:?}", input.value), limit);
-                let again = || self.regenerate(point);
+                let again = || Some(self.remake(point, &entry.mutations).ok()?.value);
                 let found = as_stored(&entry.debug, limit, input.value, again);
                 let Some((value, same_order)) = found else {
                     self.report.regressions.stale += 1;
                     self.report.warn(
                         "regressions",
                         format!(
-                            "stored input {point} no longer matches the generator (stored {}, regenerated {debug}); \
+                            "{stored} no longer matches the generator (stored {}, regenerated {debug}); \
                              delete the entry or rerun the property",
                             entry.debug
                         ),
@@ -153,7 +185,7 @@ where
                     continue;
                 };
                 input.value = value;
-                let at = input.at("regression", self.report.seed);
+                let at = input.at("regression");
                 let ran = self.run_property(input.value.clone(), at);
                 if let Some(signature) = ran.signature {
                     self.note_failure(Found { input, result: ran.result, signature });
@@ -164,7 +196,7 @@ where
                     self.report.warn(
                         "regressions",
                         format!(
-                            "stored input {point} did not fail, but its items were not in the \
+                            "{stored} did not fail, but its items were not in the \
                              stored order, which may be part of the failure"
                         ),
                     );
@@ -174,19 +206,124 @@ where
         false
     }
 
-    /// Remember the failure at `point` in the regressions file, with its
-    /// renderings.
+    /// Whether failing inputs are saved.
+    pub(super) fn saves(&self) -> bool {
+        cfg!(feature = "json") && self.config.regressions.save
+    }
+
+    /// `value` becomes a seed for mutation. When it is the last input tested,
+    /// note how it was made, so that a failing mutant of it can be remembered.
+    pub(crate) fn note_seed(&mut self, value: &G::Value) {
+        if self.saves()
+            && let Some((hash, made)) = &self.tested
+            && debug_hash(value) == *hash
+            && let Some(made) = self.known(made)
+        {
+            // The first way to make a value stays, so that no seed descends
+            // from itself.
+            self.seeds.entry(*hash).or_insert(made);
+        }
+    }
+
+    /// `made` in terms of this run's seeds, when it can be.
+    fn known(&self, made: &Made<G::Value>) -> Option<Made<u64>> {
+        match made {
+            Made::Drawn(point) => (point.seed == self.report.seed).then_some(Made::Drawn(*point)),
+            Made::Mutated { parent, iteration } => {
+                let (parent, iteration) = (debug_hash(parent), *iteration);
+                let noted = self.seeds.contains_key(&parent);
+                noted.then_some(Made::Mutated { parent, iteration })
+            },
+        }
+    }
+
+    /// The input generated at `point` and then mutated at each of `mutations`.
+    #[cfg(feature = "json")]
+    fn remake(
+        &mut self,
+        point: ReplayPoint,
+        mutations: &[u64],
+    ) -> Result<Input<G::Value>, Skipped> {
+        let mut input = self.generate(point, Origin::Replay)?;
+        for &iteration in mutations {
+            let parent = input.value;
+            input = self.produce(point.seed, iteration, Origin::Replay, |g, source| {
+                g.mutate(&parent, source)
+            })?;
+        }
+        Ok(input)
+    }
+
+    /// The point and the mutations that [`remake`](Self::remake) a failing
+    /// `input`; for a mutant, after they did and it failed like `signature`.
+    #[cfg(feature = "json")]
+    fn recipe(
+        &mut self,
+        input: &Input<G::Value>,
+        signature: &Signature,
+    ) -> Option<(ReplayPoint, Vec<u64>)> {
+        if let Some(point) = input.point {
+            return Some((point, Vec::new()));
+        }
+        let mut made = self.known(&input.made()?)?;
+        let mut mutations = Vec::new();
+        let point = loop {
+            match made {
+                Made::Drawn(point) => break point,
+                Made::Mutated { parent, iteration } => {
+                    mutations.push(iteration);
+                    made = *self.seeds.get(&parent)?;
+                },
+            }
+        };
+        mutations.reverse();
+        // Each time: a mutant that depends on the order of a hash collection
+        // is made again only by chance.
+        let text = format!("{:?}", input.value);
+        let mut value = None;
+        for _ in 0..REGENERATIONS {
+            let made = self.remake(point, &mutations).ok()?.value;
+            let debug = format!("{made:?}");
+            if debug == text || value.is_none() {
+                value = Some(made);
+            }
+            if debug != text && !reordered(&text, &debug) {
+                return None;
+            }
+        }
+        let value = value?;
+        (self.rerun(&value).as_ref() == Some(signature)).then_some((point, mutations))
+    }
+
+    /// Remember the `input` that failed like `signature` in the regressions
+    /// file, with its renderings.
     #[cfg(feature = "json")]
     pub(super) fn remember_failure(
         &mut self,
-        point: ReplayPoint,
+        input: &Input<G::Value>,
+        signature: &Signature,
         original: &Counterexample,
         shrunk: Option<&Counterexample>,
     ) {
+        if input.point.is_none() && input.origin == Origin::Replay {
+            return; // A mutant from the file.
+        }
+        let Some((point, mutations)) = self.recipe(input, signature) else {
+            self.report.warn(
+                "regressions",
+                format!(
+                    "the failing input {} was found by mutation and could not be saved, because \
+                     it cannot be made again on its own; repeat the search with EPHYRA_SEED={}",
+                    cap(original.debug.clone(), SAMPLE_CHARS),
+                    self.report.seed
+                ),
+            );
+            return;
+        };
         let entry = crate::regressions::Entry::new(
             &self.report.name,
-            point.seed,
-            point.iteration,
+            point,
+            mutations,
             original.debug.clone(),
             shrunk.map(|c| c.debug.clone()),
         );

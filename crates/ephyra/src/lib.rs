@@ -15,7 +15,8 @@
 //!   generator (`#[derive(Arbitrary)]` with the `derive` feature).
 //! - [`check`] runs a property, shrinks the first failure with the
 //!   generator's shrinker, remembers it in a regressions file and returns a
-//!   [`Report`] with a replay point. [`quickcheck`] is `check` with defaults.
+//!   [`Report`] with a replay point (the seed, for a mutant). [`quickcheck`]
+//!   is `check` with defaults.
 //!   With [`Config::failures`] it collects several distinct failures,
 //!   grouped by [`signature`].
 //! - [`check_generator`], [`check_shrinker`] and [`check_mutator`] verify a

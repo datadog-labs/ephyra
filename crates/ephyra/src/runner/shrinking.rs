@@ -97,12 +97,7 @@ where
         };
         let signature = found.signature.clone();
         let value = found.input.value.clone();
-        let started = Instant::now();
-        let (rerun, observed) = evaluate(&mut self.exec.property, value.clone(), false);
-        self.report.prop_time += started.elapsed();
-        self.stats.prop_micros.push(micros(started.elapsed()));
-        let rerun = self.exec.signature(&rerun, observed.signature, Some(&value));
-        let flaky = rerun.as_ref() != Some(&signature);
+        let flaky = self.rerun(&value).as_ref() != Some(&signature);
         if flaky {
             self.report.warn(
                 "flaky",
@@ -120,6 +115,15 @@ where
             started: None,
         });
         !flaky
+    }
+
+    /// How the property fails on `value`, if it does.
+    pub(super) fn rerun(&mut self, value: &G::Value) -> Option<Signature> {
+        let started = Instant::now();
+        let (result, observed) = evaluate(&mut self.exec.property, value.clone(), false);
+        self.report.prop_time += started.elapsed();
+        self.stats.prop_micros.push(micros(started.elapsed()));
+        self.exec.signature(&result, observed.signature, Some(value))
     }
 
     /// Whether `candidate` fails the way the pending failure did (same
@@ -313,11 +317,8 @@ where
         }
 
         #[cfg(feature = "json")]
-        if self.config.regressions.save
-            && !flaky
-            && let Some(point) = input.point
-        {
-            self.remember_failure(point, &original, shrunk.as_ref());
+        if self.config.regressions.save && !flaky {
+            self.remember_failure(&input, &shrinking.signature, &original, shrunk.as_ref());
         }
 
         Some(Failure {
@@ -329,6 +330,7 @@ where
             iteration: input.iteration,
             shrunk,
             replay: input.point,
+            seed: input.seed,
             flaky,
             shrink: shrink_stats,
         })

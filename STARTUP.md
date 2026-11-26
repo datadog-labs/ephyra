@@ -88,7 +88,8 @@ lines.
 
 ## 5. When a property fails
 
-1. **Replay** it with the `EPHYRA_REPLAY` value the report prints, and put
+1. **Replay** it with the `reproduce:` line of the report (`EPHYRA_REPLAY`,
+   or `EPHYRA_SEED` for an input found by mutation), and put
    the shrunk counterexample in a plain test that fails on the unmodified
    code.
 2. **Triage** it:
