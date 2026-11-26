@@ -112,7 +112,8 @@ a failure, with its message and location.
 
 - Prefer `()` with `assert!` and `assert_eq!` (which prints both values).
 - Skip inputs that don't apply with `ephyra::assume!(cond)`; too many
-  discards end the run with `GaveUp`.
+  discards end the run with `GaveUp`, and a run that ends with discards and
+  no passing test is reported as `GaveUp` too.
 - Shrinking keeps "the same failure": the same kind and, for a panic, the
   same file and line. Give each check its own `assert!` line so shrinking
   never drifts from one bug to another. An `Err` or `TestResult::fail` from
