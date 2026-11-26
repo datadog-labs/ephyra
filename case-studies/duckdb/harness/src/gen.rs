@@ -186,8 +186,7 @@ fn opt_mask(l: &[&'static str]) -> u64 {
     l.iter().map(|n| OPTIMIZERS.iter().position(|o| o == n).map_or(0, |i| 1u64 << i)).fold(0, |a, b| a | b)
 }
 
-/// Compact Debug: ephyra's shrinker only accepts candidates whose Debug text is not longer, so
-/// NoOpt must print longer than "every optimizer disabled" for the localization steps to be taken.
+/// Compact Debug: pass lists print as bit masks.
 impl std::fmt::Debug for Variant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

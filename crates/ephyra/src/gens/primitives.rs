@@ -275,7 +275,8 @@ impl Gen for F32Gen {
 
 /// An `f64` with a uniformly random bit pattern (any value including NaN,
 /// infinities and subnormals). See [`Source::f64_bits`]. Shrinks toward
-/// `0.0`, then positive, integral, halved.
+/// `0.0`, then positive, integral, halved down to one. A fraction below one
+/// shrinks to a power of two.
 pub fn f64_bits() -> F64Bits {
     F64Bits
 }
