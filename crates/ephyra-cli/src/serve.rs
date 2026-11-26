@@ -320,12 +320,15 @@ pub(crate) fn workspace_members(cargo: &Path) -> Vec<Member> {
 
 /// The extra cargo arguments for a run of `package` (or of the whole
 /// workspace): `--features` values a selected package does not declare are
-/// dropped, since cargo refuses them, and each drop is explained.
+/// dropped, since cargo refuses them, and each drop is explained. Arguments
+/// from `--` on are for the test harness, and stay last.
 pub(crate) fn cargo_args_for(
     package: Option<&str>,
     given: &[String],
     members: &[Member],
 ) -> (Vec<String>, Vec<String>) {
+    let separator = given.iter().position(|arg| arg == "--").unwrap_or(given.len());
+    let (given, harness) = given.split_at(separator);
     let mut args = Vec::new();
     let mut features = Vec::new();
     let mut it = given.iter();
@@ -363,6 +366,7 @@ pub(crate) fn cargo_args_for(
         args.push("--features".to_string());
         args.push(kept.join(","));
     }
+    args.extend_from_slice(harness);
     (args, notes)
 }
 
@@ -537,9 +541,9 @@ fn handle(stream: TcpStream, state: &Arc<State>) -> io::Result<()> {
             } else {
                 let members = workspace_members(&state.options.cargo);
                 let (extra, notes) = cargo_args_for(None, &state.options.cargo_args, &members);
-                let mut args = vec!["test".to_string()];
+                let mut args =
+                    ["test", "--no-run", "--message-format=json"].map(String::from).to_vec();
                 args.extend(extra);
-                args.extend(["--no-run", "--message-format=json"].map(String::from));
                 start_run(state, "discover tests", args, notes, Some(Box::new(finish_discovery)))
             };
             match started {
@@ -625,6 +629,7 @@ fn run_request(state: &State, body: &[u8]) -> Result<(String, Option<RunSpec>), 
 /// The cargo arguments for a spec (`None` runs every test). Its values come
 /// from a request or a report file: they are passed where neither cargo nor
 /// the test harness reads flags, and one that looks like a flag is refused.
+/// `extra` can end with `--` and test harness arguments.
 fn run_args(spec: Option<&RunSpec>, extra: &[String]) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = match spec {
         None => ["test", "--tests"].map(String::from).into(),
@@ -652,7 +657,13 @@ fn run_args(spec: Option<&RunSpec>, extra: &[String]) -> Result<Vec<String>, Str
     };
     args.extend_from_slice(extra);
     if let Some(test) = spec.filter(|s| s.kind != "example").and_then(|s| s.test.as_deref()) {
-        args.extend(["--", "--exact", "--", test].map(String::from));
+        // Each once: `extra` can have them.
+        for arg in ["--", "--exact"] {
+            if !extra.iter().any(|given| given == arg) {
+                args.push(arg.to_string());
+            }
+        }
+        args.extend(["--", test].map(String::from));
     }
     Ok(args)
 }
@@ -1414,6 +1425,22 @@ mod tests {
             ["run", "--package=ephyra", "--example=bst"]
         );
         assert_eq!(run_args(None, &extra).unwrap(), ["test", "--tests", "--features", "coverage"]);
+        // The test joins harness arguments after the one `--`.
+        let harness = ["--release", "--", "--nocapture"].map(String::from);
+        assert_eq!(
+            run_args(Some(&spec), &harness).unwrap(),
+            [
+                "test",
+                "--package=ephyra",
+                "--tests",
+                "--release",
+                "--",
+                "--nocapture",
+                "--exact",
+                "--",
+                "planted::bst"
+            ]
+        );
         assert!(run_args(Some(&RunSpec { package: None, ..spec }), &[]).is_err());
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote("plain"), "plain");
@@ -1519,6 +1546,13 @@ mod tests {
         assert_eq!(
             cargo_args_for(Some("ephyra"), &scoped, &members).0,
             ["--features", "ephyra/coverage"]
+        );
+        // What follows `--` is for the test harness and stays behind it.
+        let harness: Vec<String> =
+            ["--features", "coverage", "--release", "--", "--nocapture"].map(String::from).to_vec();
+        assert_eq!(
+            cargo_args_for(None, &harness, &members).0,
+            ["--release", "--features", "coverage", "--", "--nocapture"]
         );
         // Without metadata, pass everything through.
         assert_eq!(
