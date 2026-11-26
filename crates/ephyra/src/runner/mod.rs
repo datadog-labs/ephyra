@@ -315,6 +315,9 @@ where
         #[cfg(feature = "coverage")]
         {
             run.lease = run.enable_coverage();
+            // The time limits are for the run, not for waiting until other
+            // runs have released the coverage lock.
+            run.started = Instant::now();
         }
         run
     }

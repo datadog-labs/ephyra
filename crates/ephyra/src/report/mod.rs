@@ -391,7 +391,8 @@ pub struct Report {
     pub stopped_by_budget: bool,
     /// The `max_size` the run used.
     pub max_size: usize,
-    /// Wall-clock time of the whole run.
+    /// Wall-clock time of the whole run, not counting the setup of coverage
+    /// collection (which waits for other runs to end).
     pub duration: Duration,
     /// Time spent generating inputs.
     pub gen_time: Duration,
