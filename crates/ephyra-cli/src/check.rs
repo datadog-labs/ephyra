@@ -204,7 +204,7 @@ fn run_group(
             continue;
         };
         println!("\n== checking {entry}: {}", entry.kind.describe());
-        let mut command = Command::new(&executable);
+        let mut command = serve::test_binary(&executable);
         command
             .args([test.as_str(), "--exact", "--ignored", "--nocapture"])
             .envs(env.iter().cloned())
