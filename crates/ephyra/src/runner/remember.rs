@@ -41,12 +41,62 @@ where
     /// whether one failed, in which case the loop should stop and
     /// [`finish`](Self::finish) reports it.
     ///
+    /// The first [`wants_more`](Self::wants_more) and the first iteration of
+    /// a shipped search [loop](crate::loops) call this, unless the run has
+    /// ended before. A loop calls it itself only when it uses neither, or to
+    /// do something between the replay and the search. A run tests its
+    /// remembered inputs once: a later call returns the same answer.
+    ///
     /// With [`Config::failures`](crate::Config::failures) above 1, every
     /// stored regression is replayed and each failing one is kept like a
     /// failure [`test`](Self::test) found; `true` then means the replay
     /// point failed or that many distinct failures are already known, and
     /// on `false` the search goes on for the rest.
     pub fn remembered(&mut self) -> bool {
+        if let Some(failed) = self.remembered {
+            return failed;
+        }
+        let failed = self.test_remembered();
+        self.remembered = Some(failed);
+        failed
+    }
+
+    /// Warn about remembered inputs when no step of the loop tested them.
+    pub(super) fn warn_untested(&mut self) {
+        if self.remembered.is_some() {
+            return;
+        }
+        const WHY: &str = "the run ended before a call to `wants_more` or `remembered`";
+        if let Some(point) = self.config.replay {
+            self.report.warn("replay", format!("replay point {point} was not tested: {WHY}"));
+        }
+        #[cfg(feature = "json")]
+        if self.config.regressions.replay {
+            let dir = &self.config.regressions.dir;
+            let stored = self.stored().len();
+            if stored > 0 {
+                let file = crate::regressions::path_for(dir, &self.report.name);
+                self.report.warn(
+                    "regressions",
+                    format!(
+                        "{stored} input(s) stored in {} were not tested: {WHY}",
+                        file.display()
+                    ),
+                );
+            }
+        }
+    }
+
+    /// The stored regressions, without those that this run appended.
+    #[cfg(feature = "json")]
+    fn stored(&self) -> Vec<crate::regressions::Entry> {
+        let mut entries = crate::regressions::load(&self.config.regressions.dir, &self.report.name);
+        entries.truncate(entries.len().saturating_sub(self.appended));
+        entries
+    }
+
+    /// [`remembered`](Self::remembered), the first time.
+    fn test_remembered(&mut self) -> bool {
         if let Some(point) = self.config.replay {
             let origin = crate::report::Origin::Replay;
             let failed = match self.generate(point, origin) {
@@ -66,7 +116,7 @@ where
 
         #[cfg(feature = "json")]
         if self.config.regressions.replay {
-            let entries = crate::regressions::load(&self.config.regressions.dir, &self.report.name);
+            let entries = self.stored();
             if !entries.is_empty() {
                 self.report.regressions.file = Some(crate::regressions::path_for(
                     &self.config.regressions.dir,
@@ -128,6 +178,7 @@ where
             Ok((path, appended)) => {
                 self.report.regressions.file = Some(path);
                 self.report.regressions.saved |= appended;
+                self.appended += usize::from(appended);
             },
             Err(e) => {
                 self.report.warn(

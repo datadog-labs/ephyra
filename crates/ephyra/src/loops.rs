@@ -50,9 +50,11 @@
 //! assert!(best.is_some());
 //! ```
 //!
-//! Each of the three runs for `fuel` iterations (each a draw or a mutation),
-//! or until the property fails, the generator panics, or the run's time
-//! limits ([`Config::budget_ms`](crate::Config::budget_ms) and
+//! The first iteration of each of the three tests the
+//! [remembered](Run::remembered) inputs, unless the run already did. The loop
+//! runs for `fuel` iterations (each a draw or a mutation), or until the
+//! property fails, the generator panics, or the run's time limits
+//! ([`Config::budget_ms`](crate::Config::budget_ms) and
 //! [`Config::timeout_ms`](crate::Config::timeout_ms)) end it, and leaves the
 //! report to [`Run::finish`]. The steps behind them are public, so a loop
 //! that fits none of the three is a page of code: see
@@ -516,7 +518,7 @@ where
     P: FnMut(G::Value) -> R,
     S: SeedPool<G::Value, Validity> + ?Sized,
 {
-    if !run.carry_on() || run.report().status != Status::Passed || run.out_of_time() {
+    if !run.searching() || run.out_of_time() {
         return false;
     }
     let (input, mutated) = match pool.sample() {

@@ -153,7 +153,7 @@ fn property_name(config: &Config) -> String {
 }
 
 /// One property-based test as a sequence of steps, for testing loops
-/// written by hand. [`check`] is this loop:
+/// written by hand. [`check`] is this loop, followed by the targeted phase:
 ///
 /// ```
 /// use ephyra::{Config, Run, gens};
@@ -180,11 +180,13 @@ fn property_name(config: &Config) -> String {
 /// verdict, labels, features, timing and coverage in the report. Passing
 /// inputs may be [kept](Self::keep) as seeds for mutation and taken back
 /// with [`pool_pick`](Self::pool_pick). [`wants_more`](Self::wants_more)
-/// applies the stopping rules (the number of tests, the time budget, the
-/// timeout, the discard limit, and a failure). Shrinking is a step too:
-/// [`shrink`](Self::shrink) runs the built-in driver on the failure
-/// whenever the loop likes, or [`reproduces`](Self::reproduces) and
-/// [`shrunk_to`](Self::shrunk_to) let the loop drive its own.
+/// tests the replay point and the stored regressions the first time it is
+/// called (see [`remembered`](Self::remembered)) and applies the stopping
+/// rules (the number of tests, the time budget, the timeout, the discard
+/// limit, and a failure). Shrinking is a step too: [`shrink`](Self::shrink)
+/// runs the built-in driver on the failure whenever the loop likes, or
+/// [`reproduces`](Self::reproduces) and [`shrunk_to`](Self::shrunk_to) let
+/// the loop drive its own.
 /// [`finish`](Self::finish) shrinks the first failure if nothing did,
 /// localizes it, remembers it and writes the report, its files and its
 /// pages.
@@ -254,6 +256,11 @@ pub struct Run<G: Gen, P> {
     mutations: u64,
     /// The pending failure's shrinking, once it was reproduced.
     shrinking: Option<Shrinking<G::Value>>,
+    /// What [`remembered`](Self::remembered) returned, once it ran.
+    remembered: Option<bool>,
+    /// How many failures this run appended to the regressions file.
+    #[cfg(feature = "json")]
+    appended: usize,
     /// Held while coverage is collected, so runs do not interleave.
     #[cfg(feature = "coverage")]
     lease: Option<crate::coverage::Lease>,
@@ -317,6 +324,9 @@ where
             failed: 0,
             mutations: 0,
             shrinking: None,
+            remembered: None,
+            #[cfg(feature = "json")]
+            appended: 0,
             #[cfg(feature = "coverage")]
             lease: None,
         };
@@ -353,6 +363,7 @@ where
     /// the final statistics, health checks and report output (JSON,
     /// observations, profile, the coverage grid).
     pub fn finish(mut self) -> Report {
+        self.warn_untested();
         if self.wanted() > 1 {
             self.finish_failures();
         } else if self.pending.is_some() {

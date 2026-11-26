@@ -32,7 +32,9 @@ where
     P: FnMut(G::Value) -> R,
 {
     /// Whether the run still wants inputs: none of the stopping rules has
-    /// fired. The rules, in order: the number of tests reached
+    /// fired, and [`remembered`](Self::remembered), which the first call
+    /// runs unless the loop already did, has not returned `true`. The
+    /// rules, in order: the number of tests reached
     /// [`Config::tests`](crate::Config::tests); the time budget
     /// ([`Config::budget_ms`](crate::Config::budget_ms)) ran out (a run
     /// that has tried no input yet is let on once); the timeout
@@ -44,16 +46,20 @@ where
     ///
     /// With [`Config::failures`](crate::Config::failures) above 1, a
     /// failure kept by [`test`](Self::test) is first shrunk, remembered and
-    /// recorded, and the run stops only once that many distinct failures
-    /// are found or another rule fires. Failing inputs then count as tests.
+    /// recorded, and ends the run only once that many distinct failures are
+    /// found. Failing inputs then count as tests.
     pub fn wants_more(&mut self) -> bool {
-        if !self.carry_on() || self.report.status != Status::Passed {
-            return false;
-        }
-        if self.report.tests + self.failed >= self.config.tests {
+        if !self.searching() || self.report.tests + self.failed >= self.config.tests {
             return false;
         }
         !self.out_of_time() && !self.gave_up(self.report.discarded, self.config.tests)
+    }
+
+    /// Whether a search may go on, shared by the random phase and the
+    /// shipped loops: nothing has ended the run so far, and the remembered
+    /// inputs, which the first call tests, do not either.
+    pub(crate) fn searching(&mut self) -> bool {
+        self.carry_on() && self.report.status == Status::Passed && !self.remembered()
     }
 
     /// The time budget and the timeout, shared by the random phase and the
