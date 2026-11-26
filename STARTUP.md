@@ -82,7 +82,8 @@ time budget (`EPHYRA_BUDGET_MS`). With the `coverage` feature
 (`RUSTFLAGS="-C instrument-coverage"`, one test thread), reports say which
 functions and lines were never reached: that is where to aim next. From a
 separate test crate, set `EPHYRA_COVERAGE_FILTER=<crate under test>` (the
-default tracks the test crate itself), and check the report's `coverage:`
+default tracks the test crate itself), and check in the report (see that of a
+passing test with `cargo test -- --show-output`) that the `coverage:`
 line names that crate; `.ephyra/coverage/<property>.html` shows files and
 lines.
 

@@ -210,6 +210,12 @@ In code: `report.status` (`Passed`, `Failed`, `GaveUp`, `TimedOut`,
 `report.tests`, `report.iterations`, `report.discarded`, `report.labels`,
 `report.health`, `report.to_json()`.
 
+A passing `#[ephyra::test]` prints its report as well; see it with
+`cargo test -- --show-output`. If the run did not do all it was asked (it
+ignored an `EPHYRA_*` setting, a regression is stale, a `cover` was not met,
+a replay point did not fail), the test says so on standard error, which
+`cargo test` always shows. So does `report.assert_passed()`.
+
 Health warnings worth acting on (`report.health[i].kind`):
 
 | Kind | Meaning |
@@ -302,7 +308,8 @@ loops::fuzz(&mut run, &mut pool, 200_000);
    don't copy the `<...>` of demangled method names. `#[ephyra::test]`
    defaults to the test crate's own name, which is right for tests inside
    the project and wrong for a separate test crate: check the `coverage:`
-   line of the first report names the crate you meant.
+   line of the first report names the crate you meant
+   (`cargo test -- --show-output` shows the report of a passing test).
 
 Run with one test thread (`RUST_TEST_THREADS=1`): counters are
 process-global. For a file and line view, set `EPHYRA_COVERAGE_HTML=dir` (or
