@@ -50,8 +50,10 @@
 //! assert!(best.is_some());
 //! ```
 //!
-//! Every loop runs for `fuel` iterations (each a draw or a mutation) or
-//! until the property fails or the generator panics, and leaves the
+//! Each of the three runs for `fuel` iterations (each a draw or a mutation),
+//! or until the property fails, the generator panics, or the run's time
+//! limits ([`Config::budget_ms`](crate::Config::budget_ms) and
+//! [`Config::timeout_ms`](crate::Config::timeout_ms)) end it, and leaves the
 //! report to [`Run::finish`]. The steps behind them are public, so a loop
 //! that fits none of the three is a page of code: see
 //! `examples/custom_loop.rs`.
@@ -479,7 +481,7 @@ impl<T: Clone> SeedPool<T, Validity> for DoubleQueue<T> {
 
 /// The shared loop shape, for up to `fuel` iterations: ask the pool, draw or
 /// mutate, test, turn the verdict into feedback with `score`, and invest it
-/// when `useful` says so. Stops early at a failure.
+/// when `useful` says so. Stops early at a failure and at the time limits.
 fn drive<G, R, P, S>(
     run: &mut Run<G, P>,
     pool: &mut S,
@@ -514,7 +516,7 @@ where
     P: FnMut(G::Value) -> R,
     S: SeedPool<G::Value, Validity> + ?Sized,
 {
-    if !run.carry_on() || run.report().status != Status::Passed {
+    if !run.carry_on() || run.report().status != Status::Passed || run.out_of_time() {
         return false;
     }
     let (input, mutated) = match pool.sample() {

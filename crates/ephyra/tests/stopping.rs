@@ -9,6 +9,7 @@ use std::time::Duration;
 use ephyra::{
     Config,
     GenExt,
+    Report,
     Run,
     Status,
     TestResult,
@@ -74,6 +75,8 @@ fn a_run_whose_every_input_is_discarded_does_not_pass() {
     loops::fuzz(&mut run, &mut loops::Fifo::new(), 10);
     let shipped = run.finish();
 
+    assert_eq!(shipped.discarded, 10, "the fuel ends the loop, not a discard limit: {shipped}");
+
     for report in [&by_property, &by_generator, &by_hand, &shipped] {
         assert_eq!(report.status, Status::GaveUp, "{report}");
         assert!(report.tests == 0 && report.discarded > 0, "{report}");
@@ -99,6 +102,38 @@ fn one_passing_test_or_no_attempt_at_all_is_still_a_pass() {
         let report = check(&config, gens::int(0u8..=9), discard);
         assert_eq!(report.status, Status::Passed, "{report}");
         assert_eq!((report.iterations, report.tests, report.discarded), (0, 0, 0), "{report}");
+    }
+}
+
+/// Each shipped search loop, for a thousand iterations of 5 ms.
+fn slow_loops(config: &Config) -> [Report; 3] {
+    let slow = |_: u8| {
+        std::thread::sleep(Duration::from_millis(5));
+        true
+    };
+    let mut fuzz = Run::new(config, gens::int(0u8..=9), slow);
+    loops::fuzz(&mut fuzz, &mut loops::Fifo::new(), 1_000);
+    let fuzz = fuzz.finish();
+    let mut target = Run::new(config, gens::int(0u8..=9), slow);
+    loops::target(&mut target, &mut loops::Heap::new(), 1_000);
+    let target = target.finish();
+    let mut perf_fuzz = Run::new(config, gens::int(0u8..=9), slow);
+    loops::perf_fuzz(&mut perf_fuzz, &mut loops::Heap::new(), 1_000);
+    [fuzz, target, perf_fuzz.finish()]
+}
+
+#[test]
+fn shipped_loops_stop_at_the_time_limits() {
+    for limit in [Duration::ZERO, Duration::from_millis(50)] {
+        for report in slow_loops(&cfg().budget(limit)) {
+            assert_eq!(report.status, Status::Passed, "{report}");
+            assert!(report.stopped_by_budget, "{report}");
+            assert!((1..1_000).contains(&report.tests), "{report}");
+        }
+        for report in slow_loops(&cfg().timeout(limit)) {
+            assert_eq!(report.status, Status::TimedOut, "{report}");
+            assert!(report.iterations < 1_000, "{report}");
+        }
     }
 }
 

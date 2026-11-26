@@ -107,8 +107,10 @@ pub struct Config {
     /// to hold. Discarded inputs do not count. Default 10 000.
     pub tests: u64,
     /// Stop the random phase after this many milliseconds even if fewer than
-    /// `tests` inputs have passed; the report says so. The run can try at
-    /// least one input, however short the budget. Default none.
+    /// `tests` inputs have passed; the report says so. The search
+    /// [`loops`](crate::loops) (`fuzz`, `target` and `perf_fuzz`) stop then
+    /// too. The run can try at least one input, however short the budget.
+    /// Default none.
     pub budget_ms: Option<u64>,
     /// Seed for the run. `None` picks a fresh random seed; the seed actually
     /// used is always in the report.
@@ -119,9 +121,12 @@ pub struct Config {
     pub max_size: usize,
     /// Give up once more than `max_discard_ratio * tests` inputs have been
     /// discarded. A run that ends earlier, with discarded inputs and no
-    /// passing test, gives up too. Default 10.
+    /// passing test, gives up too. The search [`loops`](crate::loops) have
+    /// their fuel instead of this limit. Default 10.
     pub max_discard_ratio: f64,
-    /// Stop with `TimedOut` after this many milliseconds. Default none.
+    /// Stop with `TimedOut` after this many milliseconds, in the random
+    /// phase, the targeted phase or a search [loop](crate::loops) (`fuzz`,
+    /// `target` or `perf_fuzz`). Default none.
     pub timeout_ms: Option<u64>,
     /// Attempts a `filter` makes before discarding the input. Default 100.
     pub filter_max_attempts: usize,

@@ -173,8 +173,10 @@ when the loop did nothing.
 Three loops ship in `ephyra::loops`, after the loops of Etna's
 PropLang: `fuzz` (feedback: coverage novelty), `target` (the property's
 `target` score) and `perf_fuzz` (how long the property took), each over a
-seed pool policy of your choice; the module documentation lists the pools
-and `loops::localize`. See
+seed pool policy of your choice. A loop stops after the number of
+iterations you give it, at a failure, or at the time budget or the timeout
+of the run. The module documentation lists the pools and
+`loops::localize`. See
 [`examples/shipped_loops.rs`](https://github.com/datadog-labs/ephyra/blob/main/crates/ephyra/examples/shipped_loops.rs)
 and
 [`examples/perf_fuzz.rs`](https://github.com/datadog-labs/ephyra/blob/main/crates/ephyra/examples/perf_fuzz.rs).
