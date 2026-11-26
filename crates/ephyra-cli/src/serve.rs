@@ -22,11 +22,11 @@
 //!
 //! Runs repeat the command the report's [`RunSpec`] records, in the
 //! environment `run_env` builds: every artifact path pointed into the
-//! directory, `-C instrument-coverage` unless `--no-instrument`, and
-//! [`Options::resolved_target_dir`]. Start the server inside the workspace
-//! so `--package` resolves. "Discover tests" builds the test binaries with
-//! `cargo test --no-run --message-format=json` and lists their tests with
-//! `--list`, into `tests.json`.
+//! directory, the project's rustc flags with `-C instrument-coverage` unless
+//! `--no-instrument`, and [`Options::resolved_target_dir`]. Start the server
+//! inside the workspace so `--package` resolves. "Discover tests" builds the
+//! test binaries with `cargo test --no-run --message-format=json` and lists
+//! their tests with `--list`, into `tests.json`.
 //!
 //! The server binds to `127.0.0.1` only and speaks plain HTTP/1.1 from
 //! the standard library. It answers only requests for `127.0.0.1:PORT` or
@@ -110,7 +110,8 @@ pub struct Options {
     pub port: u16,
     /// Extra arguments for every cargo invocation, e.g. `--features coverage`.
     pub cargo_args: Vec<String>,
-    /// Append `-C instrument-coverage` to `RUSTFLAGS` for runs. Default true.
+    /// Append `-C instrument-coverage` to the rustc flags cargo would use for
+    /// runs, exported or from its configuration. Default true.
     pub instrument: bool,
     /// `CARGO_TARGET_DIR` for runs. Default: the environment's, else
     /// `target/cov`, so instrumented builds do not evict the normal ones.
@@ -675,8 +676,9 @@ pub(crate) fn absolute(path: &Path, base: &Path) -> PathBuf {
 
 /// The environment every run gets, as `(name, value)` for the log. Saved
 /// failures are part of the project, not artifacts of a run, so they stay
-/// where `cargo test` keeps them.
-pub(crate) fn run_env(options: &Options) -> Vec<(String, String)> {
+/// where `cargo test` keeps them. `say` gets a line when cargo is slow to tell
+/// the build flags, or does not tell them.
+pub(crate) fn run_env(options: &Options, say: &dyn Fn(String)) -> Vec<(String, String)> {
     // An unknown working directory leaves the paths relative, as given.
     let cwd = std::env::current_dir().unwrap_or_default();
     let dir = absolute(&options.dir, &cwd);
@@ -689,7 +691,6 @@ pub(crate) fn run_env(options: &Options) -> Vec<(String, String)> {
         ("CARGO_TERM_COLOR".to_string(), "never".to_string()),
     ];
     if options.instrument {
-        env.push(("RUSTFLAGS".to_string(), rustflags(true)));
         env.push(("EPHYRA_PROFRAW_DIR".to_string(), dir.join("profraw").display().to_string()));
     }
     env.push((
@@ -697,20 +698,162 @@ pub(crate) fn run_env(options: &Options) -> Vec<(String, String)> {
         absolute(&options.resolved_target_dir(), &cwd).display().to_string(),
     ));
     env.extend(options.environment.iter().cloned());
+    if options.instrument {
+        let variable = instrumented_rustflags(options, &dir, say);
+        env.retain(|(name, _)| *name != variable.0);
+        env.push(variable);
+    }
     env
 }
 
-/// The inherited `RUSTFLAGS`, with `-C instrument-coverage` appended when
-/// `instrument` is set and it is not already there.
-pub(crate) fn rustflags(instrument: bool) -> String {
-    let mut flags = std::env::var("RUSTFLAGS").unwrap_or_default();
-    if instrument && !flags.contains("instrument-coverage") {
-        if !flags.is_empty() {
-            flags.push(' ');
-        }
-        flags.push_str("-C instrument-coverage");
+/// The variable that has cargo build with the rustc flags it would use, looked
+/// up in its order, and `-C instrument-coverage`.
+fn instrumented_rustflags(options: &Options, dir: &Path, say: &dyn Fn(String)) -> (String, String) {
+    let exported = |name: &str| {
+        let given = options.environment.iter().rev().find(|(given, _)| given == name);
+        given.map(|(_, value)| value.clone()).or_else(|| std::env::var(name).ok())
+    };
+    let encoded = exported("CARGO_ENCODED_RUSTFLAGS");
+    let flags = match (&encoded, exported("RUSTFLAGS")) {
+        (Some(flags), _) => Some(decoded(flags)),
+        (None, Some(flags)) => {
+            let flags = flags.split(' ').map(str::trim).filter(|flag| !flag.is_empty());
+            Some(flags.map(String::from).collect())
+        },
+        (None, None) => configured_rustflags(options, dir, say),
+    };
+    let mut flags = flags.unwrap_or_else(|| {
+        say("  could not read rustflags from cargo's configuration; building without them".into());
+        Vec::new()
+    });
+    if !flags.iter().any(|flag| flag.contains("instrument-coverage")) {
+        flags.extend(["-C", "instrument-coverage"].map(String::from));
     }
-    flags
+    // Cargo splits `RUSTFLAGS` at spaces, and ignores it when the other is set.
+    let spaced = |flag: &String| flag.is_empty() || flag.contains(char::is_whitespace);
+    if encoded.is_some() || flags.iter().any(spaced) {
+        ("CARGO_ENCODED_RUSTFLAGS".to_string(), flags.join("\x1f"))
+    } else {
+        ("RUSTFLAGS".to_string(), flags.join(" "))
+    }
+}
+
+/// The flags in a `CARGO_ENCODED_RUSTFLAGS` value.
+fn decoded(flags: &str) -> Vec<String> {
+    if flags.is_empty() {
+        return Vec::new();
+    }
+    flags.split('\x1f').map(String::from).collect()
+}
+
+/// A package to ask cargo for rustc flags with: cargo tells its build script,
+/// and repeats to us, in hexadecimal, what the script passes on.
+const PROBE: [(&str, &str); 4] = [
+    (
+        "Cargo.toml",
+        "[package]\nname = \"ephyra-rustflags\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n\
+         [lib]\npath = \"lib.rs\"\n\n[workspace]\n",
+    ),
+    (
+        "build.rs",
+        r#"//! Written by `ephyra`, to see which rustc flags cargo uses.
+
+fn main() {
+    println!("cargo::rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+    print!("cargo::rustc-env=EPHYRA_RUSTFLAGS=");
+    for byte in std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap().bytes() {
+        print!("{byte:02x}");
+    }
+    println!();
+}
+"#,
+    ),
+    ("lib.rs", "//! Empty: a package needs a target.\n"),
+    (".gitignore", "*\n"),
+];
+
+/// The rustc flags in cargo's configuration: its files, `CARGO_*` variables
+/// and `--config`, for the target it builds. `None` when cargo does not tell,
+/// or when it builds several targets with different flags.
+fn configured_rustflags(
+    options: &Options,
+    dir: &Path,
+    say: &dyn Fn(String),
+) -> Option<Vec<String>> {
+    // Not in the target directory, which cargo marks as a cache if it creates it.
+    let probe = dir.join("rustflags");
+    fs::create_dir_all(&probe).ok()?;
+    for (name, text) in PROBE {
+        let path = probe.join(name);
+        if fs::read_to_string(&path).is_ok_and(|written| written == text) {
+            continue;
+        }
+        // Renamed into place, for another run that asks at the same time.
+        let new = probe.join(format!("{name}.{}", std::process::id()));
+        fs::write(&new, text).and_then(|()| fs::rename(&new, &path)).ok()?;
+    }
+    // The configuration is that of the working directory, not of the package,
+    // and can name the project's own lockfile and build directory. Cargo runs
+    // what it finds in a build directory, so this is the one of the run: the
+    // artifact directory can come from elsewhere. Paths stay relative when they
+    // are given so, because cargo refuses braces in these settings.
+    let target_dir = options.resolved_target_dir();
+    let own = |key: &str, path: &Path| {
+        Some(["--config".to_string(), format!("{key}={}", Value::from(path.to_str()?))])
+    };
+    let mut cargo = Command::new(&options.cargo)
+        .args(["check", "--message-format=json", "--manifest-path"])
+        .arg(probe.join("Cargo.toml"))
+        .args(configuration_args(&options.cargo_args))
+        .args(own("resolver.lockfile-path", &options.dir.join("rustflags/Cargo.lock"))?)
+        .args(own("build.build-dir", &target_dir)?)
+        .envs(options.environment.iter().cloned())
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let stdout = cargo.stdout.take()?;
+    let messages = thread::spawn(move || io::read_to_string(stdout));
+    for line in BufReader::new(cargo.stderr.take()?).lines().map_while(Result::ok) {
+        if line.contains("waiting for file lock") {
+            say(line);
+        }
+    }
+    let _ = cargo.wait();
+    let messages = messages.join().ok()?.ok()?;
+    let mut flags = messages
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        // Cargo can build the standard library too, and run its build scripts.
+        .filter(|message| message["env"][0][0] == "EPHYRA_RUSTFLAGS")
+        .map(|message| message["env"][0][1].as_str().and_then(from_hex));
+    let first = flags.next()??;
+    flags.all(|other| other.as_ref() == Some(&first)).then(|| decoded(&first))
+}
+
+fn from_hex(text: &str) -> Option<String> {
+    let bytes = (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(text.get(at..at + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// The cargo arguments among `args` that its rustc flags depend on.
+fn configuration_args(args: &[String]) -> Vec<String> {
+    let mut selected = Vec::new();
+    let mut args = args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--target" || arg == "--config" {
+            selected.push(arg.clone());
+            selected.extend(args.next().cloned());
+        } else if arg.starts_with("--target=") || arg.starts_with("--config=") {
+            selected.push(arg.clone());
+        }
+    }
+    selected
 }
 
 /// Run `cargo test` in the foreground with reports, observations, coverage
@@ -724,7 +867,7 @@ pub fn run_tests(options: &Options) -> io::Result<std::process::ExitStatus> {
     Command::new(&options.cargo)
         .arg("test")
         .args(&options.cargo_args)
-        .envs(run_env(options))
+        .envs(run_env(options, &|line| println!("{line}")))
         .status()
 }
 
@@ -759,16 +902,7 @@ fn start_run(
         return Err(Problem(409, format!("`{}` is still running", log.name)));
     }
     let id = slot.as_ref().map_or(1, |log| log.id + 1);
-    let env = run_env(&state.options);
     let display = command_line(&state.options.cargo, &args);
-    let mut child = Command::new(&state.options.cargo)
-        .args(&args)
-        .envs(env.iter().cloned())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not start `{display}`: {e}"))?;
     let mut log = RunLog {
         id,
         name: name.to_string(),
@@ -780,15 +914,33 @@ fn start_run(
         dropped: 0,
     };
     log.push(format!("$ {display}"));
-    log.push(format!(
-        "  with {}",
-        env.iter().map(|(k, v)| format!("{k}={}", shell_quote(v))).collect::<Vec<_>>().join(" ")
-    ));
     for note in notes {
         log.push(note);
     }
     *slot = Some(log);
     drop(slot);
+
+    // Cargo can keep this waiting: the run is in the log by now.
+    let env = run_env(&state.options, &|line| push_line(state, id, line));
+    let with = env
+        .iter()
+        // Encoded rustflags have a separator that does not show.
+        .map(|(k, v)| format!("{k}={}", shell_quote(&v.replace('\x1f', "\\x1f"))))
+        .collect::<Vec<_>>()
+        .join(" ");
+    push_line(state, id, format!("  with {with}"));
+    let mut child = Command::new(&state.options.cargo)
+        .args(&args)
+        .envs(env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            let error = format!("could not start `{display}`: {e}");
+            finish_run(state, id, None, error.clone());
+            error
+        })?;
 
     let err_thread = pump(state, id, child.stderr.take(), false);
     let out_thread = pump(state, id, child.stdout.take(), on_stdout.is_some());
@@ -800,19 +952,25 @@ fn start_run(
         if let Some(handler) = on_stdout {
             handler(&state, id, collected);
         }
-        if let Some(log) = state.log().as_mut()
-            && log.id == id
-        {
-            log.push(match status {
-                Some(0) => "finished: ok".to_string(),
-                Some(code) => format!("finished: exit code {code}"),
-                None => "finished: stopped by a signal".to_string(),
-            });
-            log.status = status;
-            log.finished = Some(now());
-        }
+        let line = match status {
+            Some(0) => "finished: ok".to_string(),
+            Some(code) => format!("finished: exit code {code}"),
+            None => "finished: stopped by a signal".to_string(),
+        };
+        finish_run(&state, id, status, line);
     });
     Ok(id)
+}
+
+/// Close run `id`'s log with a last line.
+fn finish_run(state: &State, id: u64, status: Option<i32>, line: String) {
+    if let Some(log) = state.log().as_mut()
+        && log.id == id
+    {
+        log.push(line);
+        log.status = status;
+        log.finished = Some(now());
+    }
 }
 
 /// Stream `pipe` into run `id`'s log line by line, or, with `collect`, into
@@ -1497,8 +1655,13 @@ mod tests {
 
     #[test]
     fn run_environment_routes_every_artifact_through_the_selected_directory() {
-        let options = Options { dir: PathBuf::from("chosen-artifacts"), ..Options::default() };
-        let env: BTreeMap<_, _> = run_env(&options).into_iter().collect();
+        let options = Options {
+            dir: PathBuf::from("chosen-artifacts"),
+            // Exported flags: cargo is not asked for its own.
+            environment: vec![("RUSTFLAGS".into(), String::new())],
+            ..Options::default()
+        };
+        let env: BTreeMap<_, _> = run_env(&options, &|_| ()).into_iter().collect();
         let ends_with = |name: &str, suffix: &str| {
             Path::new(env.get(name).unwrap()).ends_with(Path::new(suffix))
         };
@@ -1625,6 +1788,7 @@ mod tests {
             port: 0,
             cargo: fake.clone(),
             cargo_args: vec!["--features".into(), "coverage".into()],
+            environment: vec![("RUSTFLAGS".into(), String::new())],
             ..Options::default()
         };
         let server = start(options).unwrap();

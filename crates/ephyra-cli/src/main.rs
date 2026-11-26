@@ -47,7 +47,7 @@ fn usage(code: i32) -> ! {
          --list              print what `check` found, without building\n\
          --tests N           inputs per check (default 10000)\n\
          --cargo-args ARGS   extra arguments for every cargo run from the visualization\n\
-         --no-instrument     do not append -C instrument-coverage to RUSTFLAGS\n\
+         --no-instrument     do not add -C instrument-coverage to the rustc flags\n\
          --target-dir DIR    CARGO_TARGET_DIR (default: environment, else target/cov)\n\
          --cargo PATH        cargo executable (default: cargo)"
     );

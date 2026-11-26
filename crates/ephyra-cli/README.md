@@ -14,7 +14,9 @@ ephyra visualize
 
 `ephyra test` routes reports, OpenPBTStats observation traces, coverage
 pages, targets and profraw images into `.ephyra` and uses an isolated
-instrumented Cargo target directory. Saved failures (regressions) stay where
+instrumented Cargo target directory. It builds with the rustc flags that
+`cargo test` would use, from the environment or from cargo's configuration,
+and adds `-C instrument-coverage`. Saved failures (regressions) stay where
 `cargo test` keeps them, by default in `.ephyra/regressions` of each package.
 Pass `--no-instrument` for the ordinary build, `--dir` to choose another
 artifact root, or `--` before test harness arguments.
