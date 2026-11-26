@@ -560,7 +560,8 @@ impl Config {
     /// Set [`signature`](Self::signature): name each failure with `f`
     /// when the property did not call [`signature`](crate::signature).
     /// Failures with the same name count as one; only matters with
-    /// [`failures`](Self::failures) above 1.
+    /// [`failures`](Self::failures) above 1. A failure on which `f` panics
+    /// is named by default, with a warning in the report.
     ///
     /// ```
     /// use ephyra::{check, gens, Config, TestResult};

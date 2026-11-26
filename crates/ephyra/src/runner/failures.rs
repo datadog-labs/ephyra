@@ -95,6 +95,14 @@ where
         for (found, (_, count)) in self.report.failures.iter_mut().zip(&self.distinct) {
             found.count = *count;
         }
+        if let Some(info) = self.exec.naming.as_mut().and_then(|naming| naming.panicked.take()) {
+            self.report.warn(
+                "signature_panicked",
+                format!(
+                    "Config::signature {info}; the failures it panicked on are named by default"
+                ),
+            );
+        }
         if self.report.failures.is_empty() {
             return;
         }

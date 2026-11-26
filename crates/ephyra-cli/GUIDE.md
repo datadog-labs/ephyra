@@ -134,7 +134,7 @@ with coverage, reports and a counterexample when one fails. Per input:
 - The first 64 shrink candidates differ from the value and stay valid
   (satisfy the predicate, or are not discarded by the property).
 - Following first candidates from the value stays valid, never revisits a
-  value, and settles within 1000 steps.
+  value, and settles within 1000 steps. The shrinker never panics.
 - Four mutants are drawn without a discard and stay valid.
 - Every metric is finite; each is reported with its distribution.
 

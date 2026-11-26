@@ -6,6 +6,7 @@
 
 use std::{
     fmt::Debug,
+    ops::ControlFlow,
     time::Instant,
 };
 
@@ -21,7 +22,10 @@ use {
             Signature,
             evaluate,
         },
-        panic::PanicInfo,
+        panic::{
+            self,
+            PanicInfo,
+        },
         stats::{
             cap,
             micros,
@@ -214,16 +218,23 @@ where
     }
 
     /// The built-in shrinking driver over `shrinking.minimal`; candidates are
-    /// observed `at` the failure.
+    /// observed `at` the failure. A shrinker that panics has no more
+    /// candidates for that value.
     pub(super) fn drive_shrink(&mut self, shrinking: &mut Shrinking<G::Value>, at: At) {
         let generator = &self.generator;
         let exec = &mut self.exec;
         let signature = &shrinking.signature;
+        let mut panicked = None;
         let started = Instant::now();
         let result = shrink::shrink(
             &self.config.shrink,
             shrinking.minimal.clone(),
-            |value, visitor| generator.shrink(value, visitor),
+            |value, visitor| {
+                panic::catch(|| generator.shrink(value, visitor)).unwrap_or_else(|info| {
+                    panicked.get_or_insert(info);
+                    ControlFlow::Break(())
+                })
+            },
             |candidate| same_failure(exec.run(candidate, at, Some(signature)), signature),
         );
         self.report.prop_time += started.elapsed();
@@ -231,6 +242,12 @@ where
         shrinking.failure = result.failure;
         shrinking.stats = result.stats;
         shrinking.done = true;
+        if let Some(info) = panicked {
+            self.report.warn(
+                "shrinker_panicked",
+                format!("the shrinker {info}; a smaller counterexample may exist"),
+            );
+        }
         if shrinking.stats.budget_exhausted {
             self.report.warn(
                 "shrink_budget",

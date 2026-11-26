@@ -49,6 +49,7 @@ use crate::{
     runner::{
         SAMPLE_CHARS,
         cap,
+        panic,
     },
     shrink::first_candidate,
     source::mix,
@@ -180,7 +181,8 @@ pub(crate) struct ShrinkRules<'a, T> {
 /// The shrink candidates of `value` differ from it, stay in the domain
 /// (`domain` says why a value is outside it) and follow `rules`, and the
 /// first-candidate chain from it never revisits a value and settles within
-/// `CHAIN` steps. Returns how many candidates were checked.
+/// `CHAIN` steps, all without a panic. Returns how many candidates were
+/// checked.
 pub(crate) fn shrinks<T: Debug>(
     value: &T,
     hooks: &BoxGen<T>,
@@ -189,14 +191,19 @@ pub(crate) fn shrinks<T: Debug>(
 ) -> Result<usize, String> {
     let parent = format!("{value:?}");
     let mut candidates = Vec::new();
-    let _ = hooks.shrink(value, &mut |candidate| {
-        candidates.push(candidate);
-        if rules.candidates.is_none_or(|limit| candidates.len() < limit) {
-            ControlFlow::Continue(())
-        } else {
-            ControlFlow::Break(())
-        }
+    let visited = panic::catch(|| {
+        hooks.shrink(value, &mut |candidate| {
+            candidates.push(candidate);
+            if rules.candidates.is_none_or(|limit| candidates.len() < limit) {
+                ControlFlow::Continue(())
+            } else {
+                ControlFlow::Break(())
+            }
+        })
     });
+    if let Err(info) = visited {
+        return Err(format!("the shrinker {info}"));
+    }
     let value_size = rules.size.map(|size| size(value));
     for candidate in &candidates {
         let rendered = format!("{candidate:?}");
@@ -227,8 +234,15 @@ pub(crate) fn shrinks<T: Debug>(
                 cap(rendered, SAMPLE_CHARS)
             ));
         }
-        let Some(next) = first_candidate(|visit| hooks.shrink(&current, visit)) else {
-            return Ok(checked);
+        let next = match panic::catch(|| first_candidate(|visit| hooks.shrink(&current, visit))) {
+            Ok(Some(next)) => next,
+            Ok(None) => return Ok(checked),
+            Err(info) => {
+                return Err(format!(
+                    "first-candidate shrink chain at {}: the shrinker {info}",
+                    cap(rendered, SAMPLE_CHARS)
+                ));
+            },
         };
         if rules.chain_in_domain
             && let Some(reason) = domain(&next)
@@ -343,6 +357,17 @@ mod tests {
         assert!(
             report.failure.as_ref().unwrap().message.as_deref().unwrap().contains("not smaller")
         );
+    }
+
+    #[test]
+    fn a_panicking_shrinker_fails_the_shrinker_check() {
+        let generator = gens::int(0u32..=1000)
+            .with_shrink(|v, visitor| visitor(v.checked_sub(10).expect("ten or more")));
+        let report = check_shrinker(&cfg(), generator, |_| true, |v| u64::from(*v));
+        let message = report.failure.as_ref().unwrap().message.as_deref().unwrap();
+        assert!(message.contains("the shrinker panicked at ") && message.contains("ten or more"));
+        let smallest: u32 = report.counterexample().unwrap().debug.parse().unwrap();
+        assert!(smallest < 10, "{report}");
     }
 
     #[test]

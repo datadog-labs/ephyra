@@ -123,7 +123,9 @@ a failure, with its message and location.
   inputs has a property.
 - Not caught: stack overflow, `abort`, segmentation faults, infinite loops,
   out-of-memory. Run code that can do these in a child process with a
-  timeout. `Config::timeout_ms` limits the whole run, not one test.
+  timeout. `Config::timeout_ms` limits the whole run, not one test. Panics
+  in an input's own `Debug`, `Clone` or `Drop` and in a sink are not caught
+  either.
 
 ## Running
 
@@ -220,6 +222,8 @@ Health warnings worth acting on (`report.health[i].kind`):
 |---|---|
 | `flaky` | The failure didn't reproduce on a rerun, so it wasn't shrunk: look for state, time or threads |
 | `shrink_budget` | Shrinking stopped early; raise `config.shrink.max_steps` |
+| `shrinker_panicked` | The shrinker panicked, so a smaller counterexample may exist; `check_shrinker` finds the panic |
+| `signature_panicked`, `mutator_panicked` | `Config::signature`, or the mutator during localization, panicked; the report goes on without it |
 | `cover` | A `cover(cond, label)` share was below 5% |
 | `coverage_plateau` | Coverage stopped growing: the generator is too narrow |
 | `slow_generation` | Generation dominates the time |
