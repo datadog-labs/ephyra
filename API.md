@@ -104,9 +104,11 @@ generator and its support predicate with `#[ephyra::generator(pred, metrics
 
 ## Properties
 
-A property takes the generated value and returns `()`, `bool`,
-`Result<_, E: Debug>` or `TestResult`. A panic anywhere in it, including in
-the code under test, is a failure, with its message and location.
+A property takes the generated value and returns `()`, `bool`, `TestResult`
+or a `Result<_, E: Debug>` of one of these: `Err` is a failure, and `Ok` takes
+the verdict of its value (`Ok(false)` fails). Map an `Ok` value that is no
+verdict to `()`. A panic anywhere in it, including in the code under test, is
+a failure, with its message and location.
 
 - Prefer `()` with `assert!` and `assert_eq!` (which prints both values).
 - Skip inputs that don't apply with `ephyra::assume!(cond)`; too many

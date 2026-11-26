@@ -47,8 +47,33 @@ impl TestResult {
     }
 }
 
-/// Types a property may return: `bool`, `()`, `Result<T, E: Debug>` and
-/// [`TestResult`]. A panic inside the property is a failure as well.
+/// Types a property may return: `bool`, `()`, [`TestResult`], and
+/// `Result<T, E: Debug>` of one of these, where `Err` fails and `Ok` takes
+/// the verdict of its value. A panic inside the property is a failure as
+/// well.
+///
+/// An `Ok` value of another type does not compile. Map one that is no verdict
+/// to `()`:
+///
+/// ```
+/// use ephyra::{check, gens, Config};
+///
+/// let report = check(&Config::default().tests(20), gens::int(0..=9), |x: i32| {
+///     x.to_string().parse::<i32>().map(|_| ())
+/// });
+/// report.assert_passed();
+/// ```
+///
+/// ```compile_fail,E0277
+/// # use ephyra::{check, gens, Config};
+/// check(&Config::default().tests(20), gens::int(0..=9), |x: i32| x.to_string().parse::<i32>());
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "a property cannot return `{Self}` or a `Result` of it",
+    label = "`{Self}` is not a verdict",
+    note = "return `bool`, `()`, `TestResult` or a `Result` of one of these",
+    note = "to ignore the `Ok` value of a `Result`, map it to `()`: `.map(|_| ())`"
+)]
 pub trait Testable {
     /// Convert into the runner's view of the result.
     fn into_outcome(self) -> Outcome;
@@ -66,10 +91,10 @@ impl Testable for () {
     }
 }
 
-impl<T, E: Debug> Testable for Result<T, E> {
+impl<T: Testable, E: Debug> Testable for Result<T, E> {
     fn into_outcome(self) -> Outcome {
         match self {
-            Ok(_) => Outcome::Pass,
+            Ok(value) => value.into_outcome(),
             Err(e) => Outcome::Fail(format!("{e:?}")),
         }
     }

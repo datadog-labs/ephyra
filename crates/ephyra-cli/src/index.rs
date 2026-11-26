@@ -82,7 +82,7 @@ pub enum Kind {
     /// (`gen`, or the tuple of per-parameter `#[ephyra(gen = ...)]`s and
     /// defaults) and `metrics` expressions if given, whether its body uses
     /// `assume!`, and whether it can discard at all (it returns
-    /// `TestResult`, or a type the index cannot tell).
+    /// `TestResult`, a `Result` of one, or a type the index cannot tell).
     Property {
         parameters: Vec<(String, String)>,
         strategy: Option<String>,
@@ -398,17 +398,29 @@ fn property(function: &ItemFn, args: &[Meta]) -> Kind {
 }
 
 /// Whether a property returning `output` can discard an input, as
-/// `#[ephyra::test]` decides: not when it returns `()`, `bool` or
-/// `Result`.
+/// `#[ephyra::test]` decides: not when it returns `()`, `bool`, a `Result`
+/// of these, or a `Result` without type arguments.
 fn can_discard(output: &ReturnType) -> bool {
     let ReturnType::Type(_, ty) = output else { return false };
-    match &**ty {
+    type_can_discard(ty)
+}
+
+fn type_can_discard(ty: &Type) -> bool {
+    match ty {
         Type::Tuple(tuple) => !tuple.elems.is_empty(),
         Type::Path(path) if path.qself.is_none() => {
-            path.path
-                .segments
-                .last()
-                .is_none_or(|last| last.ident != "bool" && last.ident != "Result")
+            let Some(last) = path.path.segments.last() else { return true };
+            if last.ident != "Result" {
+                return last.ident != "bool";
+            }
+            let PathArguments::AngleBracketed(arguments) = &last.arguments else { return false };
+            let ok = arguments.args.iter().find_map(|argument| {
+                match argument {
+                    GenericArgument::Type(ty) => Some(ty),
+                    _ => None,
+                }
+            });
+            ok.is_some_and(type_can_discard)
         },
         _ => true,
     }
@@ -666,6 +678,21 @@ mod tests {
             "{:?}",
             index.warnings
         );
+    }
+
+    #[test]
+    fn a_result_discards_when_its_ok_value_can() {
+        let discards = |output: &str| {
+            can_discard(&syn::parse_str::<ReturnType>(&format!("-> {output}")).unwrap())
+        };
+        for output in ["Result<TestResult, String>", "io::Result<Result<TestResult, String>>"] {
+            assert!(discards(output), "{output}");
+        }
+        for output in
+            ["Result<(), TestResult>", "Result<Result<bool, String>, String>", "fmt::Result"]
+        {
+            assert!(!discards(output), "{output}");
+        }
     }
 
     #[test]

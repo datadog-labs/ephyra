@@ -58,9 +58,9 @@ fn midpoints_lie_between(lo: u8, hi: u8) -> TestResult {
 
 The macros add an ignored `__ephyra_check_<name>` test for every generator,
 and for every strategy of a property that can discard (it returns
-`TestResult`); a property returning `()`, `bool` or `Result` never discards,
-so its generators' own checks cover its strategy. Plain `cargo test` never
-runs these tests.
+`TestResult` or a `Result` of one); a property returning `()`, `bool` or a
+`Result` of these never discards, so its generators' own checks cover its
+strategy. Plain `cargo test` never runs these tests.
 
 ## `ephyra check`
 
