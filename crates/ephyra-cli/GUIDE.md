@@ -233,8 +233,9 @@ Combinator semantics:
   and preserves the joint relationship. `A` must be `Clone`.
 - `.filter("reason", |value: &T| ...)` filters generation, shrinking and
   mutation. Mutation retries then falls back to filtered generation; both can
-  discard after a finite retry limit. Prefer direct valid construction when
-  rejection is expensive.
+  discard after a finite retry limit. Code after a filter that discarded still
+  runs on the last rejected value, and a panic there counts as the discard.
+  Prefer direct valid construction when rejection is expensive.
 - `.with_shrink(...)` visits custom candidates before the inner candidates;
   `.with_mutate(...)` REPLACES the inner mutator. There is no implicit fallback.
 - Tuples combine component generators and hooks. Use a joint generator when
