@@ -33,6 +33,12 @@ ephyra: FAILED, property returned false
   remembered in .ephyra/regressions/insertion_sort.jsonl
 ```
 
+A passing `#[ephyra::test]` prints its report too;
+`cargo test -- --show-output` shows it. If the run did not do all it was
+asked (it ignored an `EPHYRA_*` setting, a stored regression is stale, a
+`cover` was not met, a replay point did not fail), the test says so on
+standard error, which `cargo test` shows without a flag.
+
 ## The idea
 
 Most property-testing libraries hide shrinking inside the generator so that

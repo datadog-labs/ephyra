@@ -17,8 +17,11 @@ use std::{
     time::Duration,
 };
 
+mod notice;
 mod render;
 
+#[doc(hidden)]
+pub use self::notice::__print_passed;
 #[cfg(feature = "coverage")]
 pub(crate) use self::render::joined;
 use crate::config::ReplayPoint;
@@ -516,11 +519,17 @@ impl Report {
 
     /// Panic with the rendered report unless the property held. Use this at
     /// the end of a `#[test]`.
+    ///
+    /// If the property held but the run did not do all it was asked (a
+    /// setting was ignored, a stored input is stale, a `cover` was not met,
+    /// a replay point did not fail), say so on standard error, which the
+    /// test harness shows for a passing test too.
     #[track_caller]
     pub fn assert_passed(&self) {
         if !self.passed() {
             panic!("{self}");
         }
+        notice::show(self);
     }
 
     /// Render the report as pretty-printed JSON.

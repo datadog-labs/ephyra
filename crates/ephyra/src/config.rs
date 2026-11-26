@@ -21,7 +21,10 @@
 //! the configuration it is given, so a run can be steered without editing
 //! code. Precedence: code < `EPHYRA_CONFIG` file < `EPHYRA_*`
 //! variables. Problems (unknown `EPHYRA_*` names, unparsable values) are
-//! reported as `config_env` health warnings, never silently ignored.
+//! reported as `config_env` health warnings, never silently ignored: when
+//! the run passes, `#[ephyra::test]` and
+//! [`Report::assert_passed`](crate::Report::assert_passed) write them to
+//! standard error, once per process.
 //!
 //! | Variable | Field |
 //! |---|---|

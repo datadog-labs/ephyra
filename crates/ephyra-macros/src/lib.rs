@@ -518,6 +518,11 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// return anything `Testable`. Other attributes (such as `#[ignore]`) are
 /// kept.
 ///
+/// A failing run panics with its report. A passing run prints it
+/// (`cargo test -- --show-output` or `-- --nocapture` shows it). If the run
+/// did not do all it was asked, `Report::assert_passed` also says so on
+/// standard error.
+///
 /// With coverage on, an empty `Config::coverage.filter` becomes the
 /// package name (dashes as underscores), which covers the library when the
 /// test sits in that package. A test in a separate crate covers only that
@@ -750,6 +755,7 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
                 __config
             };
             let __report = { #report };
+            ::ephyra::__print_passed(&__report);
             __report.assert_passed();
         }
 
