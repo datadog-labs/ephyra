@@ -71,6 +71,7 @@ use std::{
         Arc,
         Mutex,
         MutexGuard,
+        OnceLock,
         atomic::{
             AtomicBool,
             Ordering,
@@ -252,13 +253,21 @@ pub(crate) struct Member {
     pub targets: Vec<Target>,
 }
 
-/// A build target of a package: its first kind (`lib`, `test`, `bin`, ...),
-/// its name and its root source file.
+/// A build target of a package: its first kind (`test`, `bin`, ..., or a
+/// crate type such as `lib` or `cdylib`), its name and its root source file.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Target {
     pub kind: String,
     pub name: String,
     pub src_path: PathBuf,
+}
+
+impl Target {
+    /// Whether it is the package's library. Cargo gives a library its crate
+    /// types as kinds, in manifest order, so the first can be any of them.
+    pub(crate) fn is_library(&self) -> bool {
+        !matches!(self.kind.as_str(), "bin" | "example" | "test" | "bench" | "custom-build")
+    }
 }
 
 /// The workspace's packages, from `cargo metadata` run in the current
@@ -883,9 +892,57 @@ fn package_name(id: &str) -> String {
     }
 }
 
+/// A command that runs a built test binary outside cargo. Proc macro tests link
+/// the standard library dynamically, and a dependency can be a `dylib`, so the
+/// loader needs a library search path, as `cargo test` sets one.
+pub(crate) fn test_binary(executable: &Path) -> Command {
+    let variable = if cfg!(windows) {
+        "PATH"
+    } else if cfg!(target_os = "macos") {
+        "DYLD_FALLBACK_LIBRARY_PATH"
+    } else {
+        "LD_LIBRARY_PATH"
+    };
+    // The binary is in `deps`, with the libraries it was built with, and build
+    // scripts put others in the directory above it.
+    let mut paths: Vec<PathBuf> =
+        executable.ancestors().skip(1).take(2).map(PathBuf::from).collect();
+    paths.extend(rustc_libdir());
+    match std::env::var_os(variable) {
+        Some(inherited) => paths.extend(std::env::split_paths(&inherited)),
+        // What the loader searches while the variable is not set.
+        None if cfg!(target_os = "macos") => {
+            paths.extend(std::env::var_os("HOME").map(|home| Path::new(&home).join("lib")));
+            paths.extend(["/usr/local/lib", "/usr/lib"].map(PathBuf::from));
+        },
+        None => {},
+    }
+    let mut command = Command::new(executable);
+    if let Ok(paths) = std::env::join_paths(paths) {
+        command.env(variable, paths);
+    }
+    command
+}
+
+/// Where rustc keeps the shared standard library, asked once.
+fn rustc_libdir() -> Option<PathBuf> {
+    static LIBDIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    let ask = || {
+        let output = Command::new(std::env::var_os("RUSTC").unwrap_or("rustc".into()))
+            .args(["--print", "target-libdir"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())?;
+        Some(PathBuf::from(String::from_utf8(output.stdout).ok()?.trim()))
+    };
+    LIBDIR.get_or_init(ask).clone()
+}
+
 /// The tests a test binary lists (`--list --format terse`).
 pub(crate) fn list_tests(executable: &Path) -> io::Result<Vec<String>> {
-    let output = Command::new(executable)
+    let output = test_binary(executable)
         .args(["--list", "--format", "terse"])
         .env("RUST_TEST_THREADS", "1")
         .stdin(Stdio::null())

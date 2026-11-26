@@ -69,6 +69,9 @@ fn ephyra(root: &Path, args: &[&str]) -> (Option<i32>, String) {
         .args(args)
         // Shared across runs, so the ephyra library builds once.
         .args(["--target-dir", concat!(env!("CARGO_TARGET_TMPDIR"), "/check-workflow")])
+        // `cargo test` sets these for this test, and a user's shell does not.
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
         .current_dir(root)
         .output()
         .unwrap();
@@ -119,4 +122,36 @@ fn check_lists_runs_and_fails_generators_and_strategies() {
 
     let (code, unknown) = ephyra(root, &["check", "no_such_generator", "--list"]);
     assert_eq!(code, Some(1), "{unknown}");
+}
+
+/// A library is read and its checks run whatever its crate types are, and
+/// whichever comes first.
+#[test]
+fn check_runs_the_checks_of_every_library_kind() {
+    let kinds = [
+        ("cdylib_first", "crate-type = [\"cdylib\", \"rlib\"]"),
+        ("dylib_only", "crate-type = [\"dylib\"]"),
+        ("staticlib_first", "crate-type = [\"staticlib\", \"lib\"]"),
+        ("macros", "proc-macro = true"),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers=[\"crates/*\"]\nresolver=\"3\"\n")
+        .unwrap();
+    for (name, kind) in kinds {
+        let member = root.join("crates").join(name);
+        fs::create_dir_all(member.join("src")).unwrap();
+        common::write_manifest(&member, name, &format!("[lib]\n{kind}\n"));
+        fs::write(
+            member.join("src/lib.rs"),
+            "#[ephyra::generator]\nfn even(n: &u32) -> bool { n % 2 == 0 }\n\
+             #[ephyra::generator(even)]\nfn evens() -> impl ephyra::Gen<Value = u32> \
+             { ephyra::gens::pick_from(vec![0, 2, 4]) }\n",
+        )
+        .unwrap();
+    }
+
+    let (code, checked) = ephyra(root, &["check", "--no-instrument", "--tests", "300"]);
+    assert_eq!(code, Some(0), "{checked}");
+    assert!(checked.contains("ephyra check: 4 passed, 0 failed"), "{checked}");
 }

@@ -67,7 +67,7 @@ pub struct Entry {
     pub package: String,
     /// Where the package's tests run.
     pub manifest_dir: PathBuf,
-    /// The target the function was reached from (`lib` or `test`).
+    /// The target the function was reached from (a library or `test`).
     pub target: Target,
     pub file: PathBuf,
     pub line: usize,
@@ -139,7 +139,7 @@ impl Index {
         let mut seen = BTreeSet::new();
         for member in members {
             for target in &member.targets {
-                if !matches!(target.kind.as_str(), "lib" | "rlib" | "test") {
+                if !target.is_library() && target.kind != "test" {
                     continue;
                 }
                 let mut walk = Walk { member, target, seen: &mut seen, index: &mut index };
