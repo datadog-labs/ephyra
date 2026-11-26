@@ -673,7 +673,9 @@ pub(crate) fn absolute(path: &Path, base: &Path) -> PathBuf {
     if path.is_absolute() { path.to_path_buf() } else { base.join(path) }
 }
 
-/// The environment every run gets, as `(name, value)` for the log.
+/// The environment every run gets, as `(name, value)` for the log. Saved
+/// failures are part of the project, not artifacts of a run, so they stay
+/// where `cargo test` keeps them.
 pub(crate) fn run_env(options: &Options) -> Vec<(String, String)> {
     // An unknown working directory leaves the paths relative, as given.
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -682,7 +684,6 @@ pub(crate) fn run_env(options: &Options) -> Vec<(String, String)> {
         ("EPHYRA_COVERAGE_HTML".to_string(), dir.join("coverage").display().to_string()),
         ("EPHYRA_COVERAGE_TARGETS".to_string(), dir.join("targets.jsonl").display().to_string()),
         ("EPHYRA_OBSERVATIONS".to_string(), dir.join("observations").display().to_string()),
-        ("EPHYRA_REGRESSIONS_DIR".to_string(), dir.join("regressions").display().to_string()),
         ("EPHYRA_REPORT_JSON".to_string(), dir.join("reports.jsonl").display().to_string()),
         ("RUST_TEST_THREADS".to_string(), "1".to_string()),
         ("CARGO_TERM_COLOR".to_string(), "never".to_string()),
@@ -713,8 +714,8 @@ pub(crate) fn rustflags(instrument: bool) -> String {
 }
 
 /// Run `cargo test` in the foreground with reports, observations, coverage
-/// pages, targets and regressions routed through [`Options::dir`]. Extra
-/// cargo and test-harness arguments come from [`Options::cargo_args`].
+/// pages and targets routed through [`Options::dir`]. Extra cargo and
+/// test-harness arguments come from [`Options::cargo_args`].
 ///
 /// This is the non-HTTP half of the local workflow used by the `ephyra
 /// test` command. The child inherits stdin, stdout and stderr.
@@ -1506,7 +1507,6 @@ mod tests {
         assert!(ends_with("EPHYRA_OBSERVATIONS", "chosen-artifacts/observations"));
         assert!(ends_with("EPHYRA_COVERAGE_HTML", "chosen-artifacts/coverage"));
         assert!(ends_with("EPHYRA_COVERAGE_TARGETS", "chosen-artifacts/targets.jsonl"));
-        assert!(ends_with("EPHYRA_REGRESSIONS_DIR", "chosen-artifacts/regressions"));
         assert!(ends_with("EPHYRA_PROFRAW_DIR", "chosen-artifacts/profraw"));
     }
 
