@@ -101,3 +101,55 @@ fn one_passing_test_or_no_attempt_at_all_is_still_a_pass() {
         assert_eq!((report.iterations, report.tests, report.discarded), (0, 0, 0), "{report}");
     }
 }
+
+/// Failures do not end the run; a budget does if the tests do not.
+fn failures(n: usize) -> Config {
+    cfg().failures(n).budget(Duration::from_secs(20))
+}
+
+#[test]
+fn failing_inputs_use_up_the_tests_when_one_failure_does_not_end_the_run() {
+    let all_fail = check(&failures(2), gens::int(0u8..=9), |_| false);
+    let half_fail = check(&failures(2), gens::int(0u8..=9), |x| x % 2 == 0);
+    let mut run = Run::new(&failures(2), gens::int(0u8..=9), |x| x % 2 == 0);
+    while run.wants_more() {
+        let Some(input) = run.draw() else { continue };
+        run.test(&input);
+    }
+    let by_hand = run.finish();
+    for report in [&all_fail, &half_fail, &by_hand] {
+        assert_eq!(report.status, Status::Failed, "{report}");
+        assert!(!report.stopped_by_budget, "{report}");
+        assert_eq!(report.iterations, 100, "{report}");
+        assert_eq!(report.failures.len(), 1, "{report}");
+        assert_eq!(report.tests + report.failures[0].count, 100, "{report}");
+    }
+    assert_eq!(all_fail.tests, 0, "{all_fail}");
+    assert!(half_fail.tests > 0, "{half_fail}");
+}
+
+#[cfg(feature = "derive")]
+#[ephyra::test(config = failures(2))]
+#[should_panic(expected = "(seen 100 times)")]
+fn the_test_attribute_ends_when_every_input_fails(_x: u8) -> bool {
+    false
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn replayed_regressions_do_not_use_up_the_tests() {
+    let dir = std::env::temp_dir().join(format!("ephyra-stopping-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let config = |tests| {
+        let config = Config::default().seed(1).tests(tests).failures(100);
+        config.budget(Duration::from_secs(20)).name("small").regressions_dir(&dir)
+    };
+    // Every value is a failure of its own, so each is stored.
+    let property = |x: u8| TestResult::fail(["none", "one", "two", "three"][usize::from(x)]);
+    let first = check(&config(100), gens::int(0u8..=3), property);
+    assert_eq!(first.failures.len(), 4, "{first}");
+    let second = check(&config(3), gens::int(0u8..=3), property);
+    assert_eq!(second.regressions.replayed, 4, "{second}");
+    assert_eq!(second.iterations, 3, "the search still has its tests: {second}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -172,11 +172,12 @@ let config = Config::default().failures(10);          // or EPHYRA_FAILURES=10
 #[ephyra::test(gen = cases(), failures = 10)]         // the attribute form
 ```
 
-The run goes on until it has `n` distinct failures (or the budget ends).
-Each new failure is shrunk while keeping its signature, remembered as a
-regression, and reported with its own `reproduce:` line; repeats are only
-counted. `report.failures` lists them all (`signature`, `count`, `failure`);
-`report.failure` is still the first.
+The run goes on until it has `n` distinct failures, or its tests or time run
+out; failing inputs count as tests, as passing ones do. Each new failure is
+shrunk while keeping its signature, remembered as a regression, and reported
+with its own `reproduce:` line; repeats are only counted. `report.failures`
+lists them all (`signature`, `count`, `failure`); `report.failure` is still
+the first.
 
 A failure's signature, first match wins:
 

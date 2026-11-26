@@ -135,7 +135,8 @@ pub struct Config {
     /// How many distinct failures to look for. At 1 (the default) the run
     /// stops at the first failure. Above 1 it goes on until it has found
     /// this many failures with distinct signatures (see
-    /// [`signature`](crate::signature)) or the tests or time run out; each
+    /// [`signature`](crate::signature)) or the tests or time run out
+    /// (failing inputs count toward `tests`, as passing ones do); each
     /// is shrunk while keeping its signature, remembered and listed in
     /// [`Report::failures`](crate::Report::failures).
     pub failures: usize,

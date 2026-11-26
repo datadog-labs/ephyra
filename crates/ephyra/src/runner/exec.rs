@@ -460,7 +460,9 @@ where
     /// With [`Config::failures`](crate::Config::failures) above 1, the
     /// first failure of each new [signature](crate::signature) is kept
     /// instead (see [`failure`](Self::failure)), and failures with a
-    /// signature already seen are counted against it. The next call to
+    /// signature already seen are counted against it. Each failing input
+    /// counts toward [`Config::tests`](crate::Config::tests), as a passing
+    /// one does. The next call to
     /// [`wants_more`](Self::wants_more) (or `test`, or `finish`) shrinks,
     /// remembers and records the kept failure, and the run goes on until
     /// that many distinct failures are found; a loop that shrinks by hand
@@ -469,6 +471,7 @@ where
     pub fn test(&mut self, input: &Input<G::Value>) -> Tested {
         let (tested, found) = self.test_input(input, true);
         if let Some(found) = found {
+            self.failed += 1;
             self.note_failure(found);
         }
         tested

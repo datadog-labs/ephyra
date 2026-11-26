@@ -45,12 +45,12 @@ where
     /// With [`Config::failures`](crate::Config::failures) above 1, a
     /// failure kept by [`test`](Self::test) is first shrunk, remembered and
     /// recorded, and the run stops only once that many distinct failures
-    /// are found.
+    /// are found or another rule fires. Failing inputs then count as tests.
     pub fn wants_more(&mut self) -> bool {
         if !self.carry_on() || self.report.status != Status::Passed {
             return false;
         }
-        if self.report.tests >= self.config.tests {
+        if self.report.tests + self.failed >= self.config.tests {
             return false;
         }
         // Even the shortest budget lets the loop try one input.
