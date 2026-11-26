@@ -320,6 +320,10 @@ ephyra::observe("expression nodes", || expression.size());
 let checked = ephyra::measure("type checking", || type_check(&expression));
 ```
 
+Each `test_case` line's `metadata` holds the input's `seed` and `iteration`
+(the `EPHYRA_REPLAY` point) and a `timestamp`: the Unix time in
+milliseconds when the input finished running.
+
 Observation-value closures are evaluated only while a trace is enabled;
 measured operations always run, but incur timing overhead only for traces.
 
