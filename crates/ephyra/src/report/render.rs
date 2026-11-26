@@ -105,8 +105,11 @@ impl fmt::Display for Report {
             Status::GaveUp => {
                 writeln!(
                     f,
-                    "ephyra: GAVE UP after {} discarded inputs ({} tests passed), seed {}",
-                    self.discarded, self.tests, self.seed
+                    "ephyra: GAVE UP after {} discarded inputs ({} tests passed), seed {}{}",
+                    self.discarded,
+                    self.tests,
+                    self.seed,
+                    if self.stopped_by_budget { " (stopped by the time budget)" } else { "" }
                 )?;
             },
             Status::TimedOut => {

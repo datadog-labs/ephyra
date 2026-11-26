@@ -34,7 +34,8 @@ where
     /// Whether the run still wants inputs: none of the stopping rules has
     /// fired. The rules, in order: the number of tests reached
     /// [`Config::tests`](crate::Config::tests); the time budget
-    /// ([`Config::budget_ms`](crate::Config::budget_ms)) ran out; the timeout
+    /// ([`Config::budget_ms`](crate::Config::budget_ms)) ran out (a run
+    /// that has tried no input yet is let on once); the timeout
     /// ([`Config::timeout_ms`](crate::Config::timeout_ms)) elapsed; more
     /// inputs were discarded than
     /// [`Config::max_discard_ratio`](crate::Config::max_discard_ratio)
@@ -52,8 +53,10 @@ where
         if self.report.tests >= self.config.tests {
             return false;
         }
+        // Even the shortest budget lets the loop try one input.
         if let Some(budget) = self.config.budget_ms.map(std::time::Duration::from_millis)
             && self.started.elapsed() > budget
+            && (self.report.iterations > 0 || std::mem::replace(&mut self.overtime, true))
         {
             self.report.stopped_by_budget = true;
             return false;

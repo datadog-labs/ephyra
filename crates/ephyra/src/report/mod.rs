@@ -28,11 +28,14 @@ use crate::config::ReplayPoint;
 #[cfg_attr(feature = "json", derive(serde::Serialize))]
 pub enum Status {
     /// The required number of tests passed (or the time budget ran out
-    /// with every test passing).
+    /// with every test passing). If inputs were discarded, at least one
+    /// other input passed.
     Passed,
     /// A counterexample was found. See [`Report::failure`].
     Failed,
-    /// Too many inputs were discarded. See [`Config::max_discard_ratio`](crate::Config::max_discard_ratio).
+    /// Too many inputs were discarded (see
+    /// [`Config::max_discard_ratio`](crate::Config::max_discard_ratio)), or
+    /// the run ended with discarded inputs and no passing test.
     GaveUp,
     /// The run exceeded [`Config::timeout_ms`](crate::Config::timeout_ms).
     TimedOut,
