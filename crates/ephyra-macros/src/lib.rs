@@ -509,10 +509,10 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// Accepted arguments: `tests = N`, `seed = N`, `max_size = N`,
 /// `failures = N` (collect up to N distinct failures, see
 /// `Config::failures`), `config = <expression>` for a complete `Config`,
-/// `search = <expression>`,
-/// `gen = <expression>` and `metrics = <path>`. A search expression is
-/// called with `&mut Run` after replaying remembered failures and is
-/// responsible for driving the run; for example,
+/// `search = <expression>`, `gen = <expression>` and `metrics = <path>`,
+/// each at most once and in any order: the single settings apply on top of
+/// `config`. A search expression is called with `&mut Run` after replaying
+/// remembered failures and is responsible for driving the run; for example,
 /// `|run| loops::fuzz(run, &mut loops::Fifo::new(), 1_000)`. Ephyra still
 /// owns final shrinking, regression storage and reporting. The function may
 /// return anything `Testable`. Other attributes (such as `#[ignore]`) are
@@ -594,8 +594,8 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
         ));
     }
 
-    let mut config = quote!(::ephyra::Config::default());
-    let (mut search, mut strategy, mut metrics) = (None, None, None);
+    let (mut config, mut search, mut strategy, mut metrics) = (None, None, None, None);
+    let (mut tests, mut seed, mut max_size, mut failures) = (None, None, None, None);
     for meta in args {
         let Meta::NameValue(pair) = meta else {
             return Err(syn::Error::new(
@@ -604,32 +604,39 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
                  metrics)",
             ));
         };
-        let value: &Expr = &pair.value;
         let key = pair.path.get_ident().map(ToString::to_string).unwrap_or_default();
         let slot = match key.as_str() {
+            "tests" => &mut tests,
+            "seed" => &mut seed,
+            "max_size" => &mut max_size,
+            "failures" => &mut failures,
+            "config" => &mut config,
             "search" => &mut search,
             "gen" => &mut strategy,
             "metrics" => &mut metrics,
             _ => {
-                config = match key.as_str() {
-                    "tests" => quote!(#config.tests(#value)),
-                    "seed" => quote!(#config.seed(#value)),
-                    "max_size" => quote!(#config.max_size(#value)),
-                    "failures" => quote!(#config.failures(#value)),
-                    "config" => quote!(#value),
-                    _ => {
-                        return Err(syn::Error::new(
-                            pair.path.span(),
-                            "unknown ephyra::test argument; expected tests, seed, max_size, \
-                             failures, config, search, gen or metrics",
-                        ));
-                    },
-                };
-                continue;
+                return Err(syn::Error::new(
+                    pair.path.span(),
+                    "unknown ephyra::test argument; expected tests, seed, max_size, failures, \
+                     config, search, gen or metrics",
+                ));
             },
         };
-        if slot.replace(pair.value.clone()).is_some() {
+        if slot.replace(pair.value).is_some() {
             return Err(syn::Error::new(pair.path.span(), format!("duplicate `{key}` argument")));
+        }
+    }
+    // Single settings go on top of `config`, whichever was written first.
+    let mut config = match config {
+        Some(config) => quote!(#config),
+        None => quote!(::ephyra::Config::default()),
+    };
+    for (setter, value) in
+        [("tests", tests), ("seed", seed), ("max_size", max_size), ("failures", failures)]
+    {
+        if let Some(value) = value {
+            let setter = format_ident!("{setter}");
+            config = quote!(::ephyra::Config::#setter(#config, #value));
         }
     }
     let per_parameter = parameter_strategies.iter().any(Option::is_some);
@@ -821,5 +828,27 @@ mod tests {
         assert!(expanded.contains("__ephyra_check_p"), "{expanded}");
         assert!(!expanded.contains("# [ephyra"), "the attribute is removed: {expanded}");
         assert!(expand("gen = both()", "fn p(#[ephyra(gen = one())] s: String) {}").is_err());
+    }
+
+    // `test` here would be this crate's own macro.
+    #[::core::prelude::v1::test]
+    fn settings_apply_on_top_of_config_in_any_order() {
+        let item = "fn p(a: u8) {}";
+        let last = "tests = 1, seed = 2, max_size = 3, failures = 4, config = suite()";
+        let first = "config = suite(), failures = 4, max_size = 3, seed = 2, tests = 1";
+        let expanded = expand(last, item).unwrap();
+        assert_eq!(expanded, expand(first, item).unwrap());
+        for setting in ["tests", "seed", "max_size", "failures"] {
+            assert!(expanded.contains(&format!("Config :: {setting} (")), "{expanded}");
+        }
+    }
+
+    // `test` here would be this crate's own macro.
+    #[::core::prelude::v1::test]
+    fn arguments_are_given_once() {
+        for key in ["tests", "seed", "max_size", "failures", "config", "search", "gen", "metrics"] {
+            let error = expand(&format!("{key} = a, {key} = b"), "fn p(a: u8) {}").unwrap_err();
+            assert_eq!(error.to_string(), format!("duplicate `{key}` argument"));
+        }
     }
 }
