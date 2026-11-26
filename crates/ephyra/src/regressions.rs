@@ -72,12 +72,16 @@ pub fn path_for(dir: &Path, name: &str) -> PathBuf {
 }
 
 /// Load the entries stored for `name`. Missing files and unparsable lines
-/// are skipped.
+/// are skipped. Names that differ only in punctuation share a file (see
+/// [`file_name`]), so entries stored under another name are skipped too.
 pub fn load(dir: &Path, name: &str) -> Vec<Entry> {
     let Ok(text) = fs::read_to_string(path_for(dir, name)) else {
         return Vec::new();
     };
-    text.lines().filter_map(|line| serde_json::from_str::<Entry>(line).ok()).collect()
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
+        .filter(|e| e.name == name)
+        .collect()
 }
 
 /// Append `entry` unless an entry for the same seed and iteration is
@@ -130,6 +134,19 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].iteration, 3);
         assert_eq!(loaded[1].seed, 8);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn names_sharing_a_file_keep_their_own_entries() {
+        let dir = temp_dir("shared");
+        assert_eq!(path_for(&dir, "tests::foo"), path_for(&dir, "tests_foo"));
+        save(&dir, &Entry::new("tests::foo", 1, 0, "5".into(), None)).unwrap();
+        assert!(load(&dir, "tests_foo").is_empty());
+        // The same point under the other name is not a duplicate.
+        assert!(save(&dir, &Entry::new("tests_foo", 1, 0, "true".into(), None)).unwrap().1);
+        assert_eq!(load(&dir, "tests::foo")[0].debug, "5");
+        assert_eq!(load(&dir, "tests_foo")[0].debug, "true");
         let _ = fs::remove_dir_all(&dir);
     }
 }

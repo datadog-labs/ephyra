@@ -297,3 +297,21 @@ fn the_test_attribute_collects_failures(x: u8) {
     assert!(x != 3, "three");
     assert!(x != 7, "seven");
 }
+
+/// #48: `tests::foo` and `tests_foo` share a file but not their failures.
+#[cfg(feature = "json")]
+#[test]
+fn names_sharing_a_regressions_file_do_not_replay_each_other() {
+    let dir = std::env::temp_dir().join(format!("ephyra-shared-names-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let config = |name: &str| Config::default().seed(1).tests(50).name(name).regressions_dir(&dir);
+    let first = check(&config("tests::foo"), gens::int(0u8..=9), |_| false);
+    assert!(first.regressions.saved);
+    let other = check(&config("tests_foo"), gens::bool(), |_| true);
+    assert_eq!(other.regressions.replayed, 0);
+    assert_eq!(other.regressions.stale, 0);
+    assert!(other.failure.is_none());
+    let again = check(&config("tests::foo"), gens::int(0u8..=9), |_| false);
+    assert_eq!(again.regressions.replayed, 1, "its own entry is still replayed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
