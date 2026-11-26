@@ -1,0 +1,22 @@
+{
+ "id": "f64-range-width-overflow",
+ "title": "gens::f64_range always returns hi when hi - lo overflows",
+ "class": "generator-spread",
+ "symptom": "soundness-false-pass",
+ "issue": 41,
+ "cause": "lo + (hi - lo) * u: for bounds farther apart than f64::MAX the width is infinite, so every draw clamps to hi (and the mutation step to a bound)",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "Bruno Volpato (@bvolpato-dd), #69",
+ "oracles": [
+  {
+   "target": "test:gen_contract",
+   "name": "every_builtin_generator_keeps_its_contract"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "gens::primitives::tests::f64_ranges_wider_than_f64_max_are_covered"
+  }
+ ]
+}

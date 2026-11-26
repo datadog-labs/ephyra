@@ -12,7 +12,9 @@
 //! 3. `mutate` keeps a value in `S`, along a chain of mutations as the fuzzing loops do,
 //!    unless it discards;
 //! 4. every shrink candidate is in `S` and differs from its input;
-//! 5. shrinking settles: a walk over shrink candidates never comes back to a value.
+//! 5. shrinking settles: a walk over shrink candidates never comes back to a value;
+//! 6. `generate` spreads over the support: when the support has two values (two distinct
+//!    `starts`), draws are not all the same value.
 //!
 //! The generators and their arguments are drawn by ephyra itself, edges first. Every bug in
 //! `regressions/` whose class is a broken generator contract is caught by this one test;
@@ -41,8 +43,10 @@ const CHAIN: usize = 48;
 const CANDIDATES: usize = 48;
 /// Steps of the shrink walk: a correct shrinker settles, or the walk ends here.
 const WALK: usize = 400;
+/// Draws checked for spread (6): from a support of two values, both, all but surely.
+const DRAWS: usize = 64;
 
-/// Checks 1-5 for `generator` from one seed and size. `starts` are values of the support
+/// Checks 1-6 for `generator` from one seed and size. `starts` are values of the support
 /// the chains and walks also start from: its edges, where bugs live.
 fn keeps_contract<G>(
     generator: &G,
@@ -67,6 +71,23 @@ where
     }
     if !support(&first) {
         return Err(format!("generated {first:?}, outside the support"));
+    }
+    // 6
+    if starts.iter().map(show).collect::<HashSet<_>>().len() > 1 {
+        let mut draws = Source::new(seed ^ 0x7370_7265_6164, size);
+        let mut seen = HashSet::new();
+        for _ in 0..DRAWS {
+            let v = generator.generate(&mut draws);
+            if draws.discarded().is_some() {
+                break;
+            }
+            seen.insert(show(&v));
+        }
+        if seen.len() == 1 {
+            return Err(format!(
+                "{DRAWS} draws all gave {first:?}, though the support holds {starts:?}"
+            ));
+        }
     }
     let mut g = Source::new(seed ^ 0x636f_6e74_7261_6374, size);
     for start in std::iter::once(&first).chain(starts) {
@@ -199,7 +220,9 @@ const CATALOGUE: &[Entry] = &[
     ("f64_range", |g, s| {
         let (a, b) = (finite_f64(g), finite_f64(g));
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-        keeps_contract(&gens::f64_range(lo..=hi), |v| (lo..=hi).contains(v), &[lo, hi], s)
+        // -0.0 and 0.0 print apart but are one value of the range
+        let starts = if lo < hi { vec![lo, hi] } else { vec![lo] };
+        keeps_contract(&gens::f64_range(lo..=hi), |v| (lo..=hi).contains(v), &starts, s)
     }),
     ("f64_bits", |_, s| {
         let starts =

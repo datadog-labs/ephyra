@@ -44,8 +44,8 @@ A bug fix comes with two tests and a record:
    the buggy code. A test that only checks the reported input protects that input. A
    property over the contract also catches the next bug of the same kind.
    [`crates/ephyra/tests/gen_contract.rs`](crates/ephyra/tests/gen_contract.rs) is an
-   example: one property, "every built-in generator keeps its contract", catches four
-   unrelated generator bugs (#40, #44, #47 and a shrink cycle). Extend an existing
+   example: one property, "every built-in generator keeps its contract", catches five
+   unrelated generator bugs (#40, #41, #44, #47 and a shrink cycle). Extend an existing
    property when the bug is in its class, rather than adding a new one.
 2. **A narrow regression test** for the reported case, next to the code. It is fast and
    pins the exact input.

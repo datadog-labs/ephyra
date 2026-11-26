@@ -9,6 +9,9 @@ All notable changes to `ephyra` are documented here. The format follows
 
 - `gens::f32()` could generate and mutate to `1.0`, outside its documented
   `[0, 1)` (#40). Fix by Yusuf Eren Bozkurt (#137).
+- `gens::f64_range` returned `hi` on every draw when `hi - lo` overflows
+  (`f64_range(f64::MIN..=f64::MAX)`), and its mutation step went to a bound
+  (#41). Fix by Bruno Volpato (#69).
 - `gens::dependent` could shrink to a pair outside its joint support when the
   inner generator filters: a regenerated second value whose filter ran out of
   attempts is no longer a candidate (#44).
@@ -22,7 +25,7 @@ All notable changes to `ephyra` are documented here. The format follows
 
 - `tests/gen_contract.rs`: one property, every built-in generator keeps its
   contract (replay, support under generate, mutate and shrink, shrinking that
-  settles), over generated arguments. It catches each of the bugs above.
+  settles, generation that spreads over the support), over generated arguments. It catches each of the bugs above.
 - `regressions/`: every fixed bug as a reversed patch, with the properties
   that must catch it; CI checks fix and bug soundness on every pull request.
   CONTRIBUTING.md describes the method.

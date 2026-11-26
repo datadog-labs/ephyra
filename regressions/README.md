@@ -32,12 +32,13 @@ touched and uncommitted changes are tested as they are. It builds in
 | entry | bug | class | reported by | fixed by |
 |---|---|---|---|---|
 | [`f32-rounds-up-to-one`](f32-rounds-up-to-one) | #40 | generator-domain | Doğaç Eldenk | Yusuf Eren Bozkurt (#137) |
+| [`f64-range-width-overflow`](f64-range-width-overflow) | #41 | generator-spread | Doğaç Eldenk | Bruno Volpato (#69) |
 | [`dependent-shrink-ignores-discard`](dependent-shrink-ignores-discard) | #44 | shrink-support | Doğaç Eldenk | |
 | [`f32-bits-infinity-shrinks-to-itself`](f32-bits-infinity-shrinks-to-itself) | #47 | shrink-progress | Doğaç Eldenk | |
 | [`any-float-shrink-cycle`](any-float-shrink-cycle) | | shrink-termination | ephyra-agent | ephyra-agent |
 
 The property [`every_builtin_generator_keeps_its_contract`](../crates/ephyra/tests/gen_contract.rs)
-catches all four.
+catches all five.
 
 ## An entry
 
@@ -51,7 +52,7 @@ catches all four.
 |---|---|
 | `id` | the directory's name: what went wrong, in a few words |
 | `title` | one line, as an issue title |
-| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `shrink-support`, `shrink-progress`, `shrink-termination`, ... |
+| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `generator-spread`, `shrink-support`, `shrink-progress`, `shrink-termination`, ... |
 | `symptom` | `wrong-result`, `soundness-false-pass`, `false-failure`, `crash`, `non-termination`, `data-loss`, ... |
 | `issue` | the GitHub issue, if there is one |
 | `cause` | the root cause, in a sentence |
