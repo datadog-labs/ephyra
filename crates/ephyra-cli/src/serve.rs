@@ -29,8 +29,11 @@
 //! `--list`, into `tests.json`.
 //!
 //! The server binds to `127.0.0.1` only and speaks plain HTTP/1.1 from
-//! the standard library. The only thing it ever starts is `cargo`, on
-//! request, one run at a time; cross-site requests are refused by origin.
+//! the standard library. It answers only requests for `127.0.0.1:PORT` or
+//! `localhost:PORT`: the `Host` of every request must be one of them, so
+//! must the `Origin` of a POST that has one, and no site can frame a page.
+//!
+//! The only thing it ever starts is `cargo`, on request, one run at a time.
 //! A request names a package of the workspace and an example or a test. It
 //! cannot add flags to the command: those come from [`Options::cargo_args`].
 
@@ -396,6 +399,7 @@ pub fn start(options: Options) -> io::Result<Server> {
 struct Request {
     method: String,
     path: String,
+    host: Option<String>,
     origin: Option<String>,
     body: Vec<u8>,
 }
@@ -410,6 +414,7 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> io::Result<Option<Request>
     let target = parts.next().unwrap_or("/");
     let path = target.split('?').next().unwrap_or("/").to_string();
     let mut content_length = 0usize;
+    let mut host = None;
     let mut origin = None;
     loop {
         line.clear();
@@ -419,6 +424,8 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> io::Result<Option<Request>
         let lower = line.to_ascii_lowercase();
         if let Some(value) = lower.strip_prefix("content-length:") {
             content_length = value.trim().parse().unwrap_or(0);
+        } else if let Some(value) = lower.strip_prefix("host:") {
+            host = Some(value.trim().to_string());
         } else if let Some(value) = lower.strip_prefix("origin:") {
             origin = Some(value.trim().to_string());
         }
@@ -428,7 +435,7 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> io::Result<Option<Request>
     }
     let mut body = vec![0; content_length];
     reader.read_exact(&mut body)?;
-    Ok(Some(Request { method, path, origin, body }))
+    Ok(Some(Request { method, path, host, origin, body }))
 }
 
 fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) -> io::Result<()> {
@@ -444,7 +451,7 @@ fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8])
     };
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
         body.len()
     )?;
     stream.write_all(body)?;
@@ -455,24 +462,35 @@ fn respond_json(stream: &mut TcpStream, status: u16, value: Value) -> io::Result
     respond(stream, status, "application/json", value.to_string().as_bytes())
 }
 
+/// Whether `authority`, from a `Host` or an `Origin`, is this server. Any
+/// other name is another site, even if it resolves to 127.0.0.1.
+fn is_this_server(authority: &str, port: u16) -> bool {
+    // Browsers leave out the default port.
+    let (host, given) = authority.rsplit_once(':').unwrap_or((authority, "80"));
+    matches!(host, "127.0.0.1" | "localhost") && given == port.to_string()
+}
+
 /// A browser sends `Origin` on every cross-site POST; only the page itself
 /// (same origin) and non-browser clients (no header) may change state.
-fn same_origin(request: &Request) -> bool {
-    match &request.origin {
-        None => true,
-        Some(origin) => {
-            origin.starts_with("http://127.0.0.1:") || origin.starts_with("http://localhost:")
-        },
-    }
+fn same_origin(request: &Request, port: u16) -> bool {
+    request.origin.as_ref().is_none_or(|origin| {
+        origin.strip_prefix("http://").is_some_and(|authority| is_this_server(authority, port))
+    })
 }
 
 fn handle(stream: TcpStream, state: &Arc<State>) -> io::Result<()> {
+    let port = stream.local_addr()?.port();
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut stream = stream;
     let Some(request) = read_request(&mut reader)? else {
         return Ok(());
     };
-    if request.method == "POST" && !same_origin(&request) {
+    if !request.host.as_ref().is_some_and(|host| is_this_server(host, port)) {
+        let refusal =
+            format!("only http://127.0.0.1:{port}/ and http://localhost:{port}/ are served");
+        return respond(&mut stream, 403, "text/plain", refusal.as_bytes());
+    }
+    if request.method == "POST" && !same_origin(&request, port) {
         return respond(&mut stream, 403, "text/plain", b"cross-site requests are refused");
     }
     match (request.method.as_str(), request.path.as_str()) {
@@ -1094,12 +1112,24 @@ const INDEX: &str = include_str!("serve.html");
 mod tests {
     use super::*;
 
-    fn request(addr: SocketAddr, raw: &str) -> (u16, String) {
+    /// The reply to `raw`, an HTTP/1.1 request that names the server unless
+    /// it brings its own `Host`.
+    fn reply(addr: SocketAddr, raw: &str) -> String {
+        let raw = if raw.contains("\r\nHost: ") {
+            raw.to_string()
+        } else {
+            raw.replacen(" HTTP/1.1\r\n", &format!(" HTTP/1.1\r\nHost: {addr}\r\n"), 1)
+        };
         let mut stream = TcpStream::connect(addr).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         stream.write_all(raw.as_bytes()).unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
+        response
+    }
+
+    fn request(addr: SocketAddr, raw: &str) -> (u16, String) {
+        let response = reply(addr, raw);
         let status = response.split_whitespace().nth(1).unwrap().parse().unwrap();
         let body = response.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
         (status, body)
@@ -1160,7 +1190,7 @@ mod tests {
         let server = start(Options { dir: dir.clone(), port: 0, ..Options::default() }).unwrap();
         let addr = server.addr();
 
-        let (status, body) = request(addr, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        let (status, body) = request(addr, "GET / HTTP/1.1\r\n\r\n");
         assert_eq!(status, 200);
         assert!(body.contains("/api/state"), "{body}");
 
@@ -1206,7 +1236,7 @@ mod tests {
         // Events: connect, change a page, expect a `pages` event.
         let mut stream = TcpStream::connect(addr).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        stream.write_all(b"GET /api/events HTTP/1.1\r\n\r\n").unwrap();
+        write!(stream, "GET /api/events HTTP/1.1\r\nHost: {addr}\r\n\r\n").unwrap();
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
@@ -1226,6 +1256,61 @@ mod tests {
         }
         assert_eq!(saw, "data: pages");
         drop(reader);
+        server.stop();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_requests_for_its_own_address_are_answered() {
+        let dir = temp_dir("host");
+        fs::write(dir.join("coverage/demo.html"), "<html>demo page</html>").unwrap();
+        let server = start(Options { dir: dir.clone(), port: 0, ..Options::default() }).unwrap();
+        let addr = server.addr();
+        let (port, other_port) = (addr.port(), addr.port() ^ 1);
+        let status = |method: &str, path: &str, headers: &str| {
+            request(addr, &format!("{method} {path} HTTP/1.1\r\n{headers}\r\n")).0
+        };
+
+        for host in [format!("127.0.0.1:{port}"), format!("LocalHost:{port}")] {
+            assert_eq!(status("GET", "/", &format!("Host: {host}\r\n")), 200, "{host}");
+        }
+        for host in [
+            format!("other.example:{port}"),
+            format!("127.0.0.1.other.example:{port}"),
+            format!("127.0.0.1:{other_port}"),
+            "localhost".to_string(),
+            String::new(),
+        ] {
+            for (method, path) in [
+                ("GET", "/"),
+                ("GET", "/api/state"),
+                ("GET", "/api/run"),
+                ("GET", "/api/events"),
+                ("GET", "/grid/demo.html"),
+                ("GET", "/nowhere"),
+                ("POST", "/api/targets/clear"),
+                ("DELETE", "/"),
+            ] {
+                let status = status(method, path, &format!("Host: {host}\r\n"));
+                assert_eq!(status, 403, "{method} {path} for `{host}`");
+            }
+        }
+        assert_eq!(request(addr, "GET / HTTP/1.0\r\n\r\n").0, 403, "no host");
+
+        for (origin, expected) in [
+            (format!("http://127.0.0.1:{port}"), 200),
+            (format!("http://localhost:{port}"), 200),
+            (format!("http://localhost:{other_port}"), 403),
+            (format!("http://localhost:{port}.other.example"), 403),
+            (format!("https://localhost:{port}"), 403),
+            ("http://localhost".to_string(), 403),
+            ("null".to_string(), 403),
+        ] {
+            let status = status("POST", "/api/targets/clear", &format!("Origin: {origin}\r\n"));
+            assert_eq!(status, expected, "{origin}");
+        }
+        let page = reply(addr, "GET / HTTP/1.1\r\n\r\n");
+        assert!(page.contains("\r\nX-Frame-Options: DENY\r\n"), "{page}");
         server.stop();
         let _ = fs::remove_dir_all(&dir);
     }

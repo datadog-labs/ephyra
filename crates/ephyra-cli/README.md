@@ -22,7 +22,9 @@ harness arguments.
 latest reports, targets, discovered tests) that discovers and runs any
 property or test on request with `cargo` on an instrumented build, streams the
 output, and refreshes the pages as they are written; served grid pages gain
-"Run" and "Add to targets.jsonl" buttons.
+"Run" and "Add to targets.jsonl" buttons. The server answers only requests for
+`127.0.0.1` or `localhost` with its own port, so a forwarded port must keep
+its number.
 
 ## Generators and strategies
 
