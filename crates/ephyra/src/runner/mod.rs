@@ -227,6 +227,9 @@ pub struct Run<G: Gen, P> {
     /// Also the run's seed and property name.
     report: Report,
     started: Instant,
+    /// Whether the time budget ran out before the first input and the run
+    /// was let on, once, to try one.
+    overtime: bool,
     seen: HashSet<u64>,
     generated: u64,
     pool: Pool<G::Value>,
@@ -300,6 +303,7 @@ where
             exec: Exec { property, coverage: CoverageState::default(), sinks, naming },
             report,
             started: Instant::now(),
+            overtime: false,
             seen: HashSet::new(),
             generated: 0,
             covers: BTreeMap::new(),
@@ -349,6 +353,13 @@ where
             self.finish_failures();
         } else if self.pending.is_some() {
             self.fail();
+        }
+        // Whatever ended the search, discards alone are not a pass.
+        if self.report.status == Status::Passed
+            && self.report.tests == 0
+            && self.report.discarded > 0
+        {
+            self.report.status = Status::GaveUp;
         }
         if self.report.target.is_none() && self.mutations > 0 {
             self.report.target = self.target_summary(self.mutations);
