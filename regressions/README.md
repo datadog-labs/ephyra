@@ -36,9 +36,17 @@ touched and uncommitted changes are tested as they are. It builds in
 | [`dependent-shrink-ignores-discard`](dependent-shrink-ignores-discard) | #44 | shrink-support | Doğaç Eldenk | |
 | [`f32-bits-infinity-shrinks-to-itself`](f32-bits-infinity-shrinks-to-itself) | #47 | shrink-progress | Doğaç Eldenk | |
 | [`any-float-shrink-cycle`](any-float-shrink-cycle) | | shrink-termination | ephyra-agent | ephyra-agent |
+| [`names-sharing-a-file-replay-each-other`](names-sharing-a-file-replay-each-other) | #48 | replay-isolation | Doğaç Eldenk | Yusuf Eren Bozkurt (#136) |
+| [`hash-collection-replays-stale`](hash-collection-replays-stale) | #46 | replay-fidelity | Doğaç Eldenk | Bruno Volpato (#73) |
+| [`save-glues-onto-a-line-without-newline`](save-glues-onto-a-line-without-newline) | #59 | replay-durability | Doğaç Eldenk | |
+| [`a-bad-line-drops-the-file`](a-bad-line-drops-the-file) | #59 | replay-durability | Doğaç Eldenk | |
 
-The property [`every_builtin_generator_keeps_its_contract`](../crates/ephyra/tests/gen_contract.rs)
-catches all five.
+Two properties catch them all:
+
+- [`every_builtin_generator_keeps_its_contract`](../crates/ephyra/tests/gen_contract.rs) catches
+  the generator bugs (the first five rows).
+- [`a_saved_failure_is_replayed_for_its_own_property_only`](../crates/ephyra/tests/replay_contract.rs)
+  catches the replay bugs (the last four).
 
 ## An entry
 
@@ -52,7 +60,7 @@ catches all five.
 |---|---|
 | `id` | the directory's name: what went wrong, in a few words |
 | `title` | one line, as an issue title |
-| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `generator-spread`, `shrink-support`, `shrink-progress`, `shrink-termination`, ... |
+| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `generator-spread`, `shrink-support`, `shrink-progress`, `shrink-termination`, `replay-isolation`, `replay-fidelity`, `replay-durability`, ... |
 | `symptom` | `wrong-result`, `soundness-false-pass`, `false-failure`, `crash`, `non-termination`, `data-loss`, ... |
 | `issue` | the GitHub issue, if there is one |
 | `cause` | the root cause, in a sentence |

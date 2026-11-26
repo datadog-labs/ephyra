@@ -12,6 +12,14 @@ All notable changes to `ephyra` are documented here. The format follows
 - `gens::f64_range` returned `hi` on every draw when `hi - lo` overflows
   (`f64_range(f64::MIN..=f64::MAX)`), and its mutation step went to a bound
   (#41). Fix by Bruno Volpato (#69).
+- Properties whose names differ only in punctuation or non-ASCII letters
+  shared a regressions file and replayed each other's saved failures (#48).
+  Fix by Yusuf Eren Bozkurt (#136).
+- Saved failures over `HashSet` and `HashMap` inputs were skipped as stale,
+  so the next run could pass (#46). Fix by Bruno Volpato (#73).
+- A regressions file lost entries when its last line had no newline (the
+  next entry was glued onto it), and loaded as empty when one line was not
+  UTF-8 (#59, two of its three causes).
 - `gens::dependent` could shrink to a pair outside its joint support when the
   inner generator filters: a regenerated second value whose filter ran out of
   attempts is no longer a candidate (#44).
@@ -25,7 +33,12 @@ All notable changes to `ephyra` are documented here. The format follows
 
 - `tests/gen_contract.rs`: one property, every built-in generator keeps its
   contract (replay, support under generate, mutate and shrink, shrinking that
-  settles, generation that spreads over the support), over generated arguments. It catches each of the bugs above.
+  settles, generation that spreads over the support), over generated
+  arguments. It catches each of the generator bugs above.
+- `tests/replay_contract.rs`: one property, a saved failure is replayed for
+  its own property only: the regressions store against a model under
+  generated names, saves and file edits, and a save-then-replay round trip
+  for every kind of input. It catches each of the replay bugs above.
 - `regressions/`: every fixed bug as a reversed patch, with the properties
   that must catch it; CI checks fix and bug soundness on every pull request.
   CONTRIBUTING.md describes the method.

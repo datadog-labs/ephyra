@@ -1,0 +1,19 @@
+diff --git a/crates/ephyra/src/regressions.rs b/crates/ephyra/src/regressions.rs
+--- a/crates/ephyra/src/regressions.rs
++++ b/crates/ephyra/src/regressions.rs
+@@ -77,12 +77,11 @@
+ /// [`file_name`]), so entries stored under another name are skipped too.
+ pub fn load(dir: &Path, name: &str) -> Vec<Entry> {
+     // Bytes, not a string: one line that is not UTF-8 costs that line, not the file (#59).
+-    let Ok(bytes) = fs::read(path_for(dir, name)) else {
++    let Ok(text) = fs::read_to_string(path_for(dir, name)) else {
+         return Vec::new();
+     };
+-    bytes
+-        .split(|b| *b == b'\n')
+-        .filter_map(|line| serde_json::from_slice::<Entry>(line).ok())
++    text.lines()
++        .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
+         .filter(|e| e.name == name)
+         .collect()
+ }

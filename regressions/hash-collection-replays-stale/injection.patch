@@ -1,0 +1,150 @@
+diff --git a/crates/ephyra/src/runner/remember.rs b/crates/ephyra/src/runner/remember.rs
+index 5fd82ef..136dc88 100644
+--- a/crates/ephyra/src/runner/remember.rs
++++ b/crates/ephyra/src/runner/remember.rs
+@@ -28,61 +28,6 @@ use {
+     },
+ };
+ 
+-/// How often an input that does not render as stored is regenerated. A hash
+-/// collection of two items then shows only one of its two orders once in
+-/// 65,536 times.
+-#[cfg(feature = "json")]
+-const REGENERATIONS: usize = 16;
+-
+-/// The value that renders as `stored`, a rendering cut at `limit` characters:
+-/// `first`, or one of those that `again` generates from the same point. Hash
+-/// collections render in another order every time, so when no rendering is
+-/// the stored one but they differ among themselves, `first` will do if it has
+-/// the same words in another order. The flag is whether it renders as stored.
+-#[cfg(feature = "json")]
+-fn as_stored<T: Debug>(
+-    stored: &str,
+-    limit: usize,
+-    first: T,
+-    mut again: impl FnMut() -> Option<T>,
+-) -> Option<(T, bool)> {
+-    let debug = format!("{first:?}");
+-    if cap(debug.clone(), limit) == stored {
+-        return Some((first, true));
+-    }
+-    let mut unordered = false;
+-    for _ in 0..REGENERATIONS {
+-        let value = again()?;
+-        let text = format!("{value:?}");
+-        unordered |= text != debug;
+-        if cap(text, limit) == stored {
+-            return Some((value, true));
+-        }
+-    }
+-    (unordered && reordered(stored, &debug)).then_some((first, false))
+-}
+-
+-/// Whether the words of `stored`, and the marks between them, are those of
+-/// `debug` in another order. A cut rendering shows only some of them: it is
+-/// better to replay an input that may have changed than to skip one that did
+-/// not.
+-#[cfg(feature = "json")]
+-fn reordered(stored: &str, debug: &str) -> bool {
+-    let mark = |c: char| !c.is_alphanumeric();
+-    let words = |text| str::split(text, mark).chain(str::matches(text, mark)).collect::<Vec<_>>();
+-    let (shown, cut) = match stored.strip_suffix('…') {
+-        Some(shown) => (shown, true),
+-        None => (stored, false),
+-    };
+-    // A cut word may go on behind the cut.
+-    let shown = if cut { shown.trim_end_matches(char::is_alphanumeric) } else { shown };
+-    let (mut some, mut all) = (words(shown), words(debug));
+-    some.sort_unstable();
+-    all.sort_unstable();
+-    let mut rest = all.iter();
+-    (cut || some.len() == all.len()) && some.iter().all(|word| rest.any(|other| other == word))
+-}
+-
+ impl<G, R, P> Run<G, P>
+ where
+     G: Gen,
+@@ -132,15 +77,13 @@ where
+             for entry in entries {
+                 let point = ReplayPoint { seed: entry.seed, iteration: entry.iteration };
+                 self.report.regressions.replayed += 1;
+-                let Ok(mut input) = self.generate(point, crate::report::Origin::Replay) else {
++                let Ok(input) = self.generate(point, crate::report::Origin::Replay) else {
+                     self.report.regressions.stale += 1;
+                     self.report.warn("regressions", format!("stored input {point} could not be regenerated (discarded or the generator panicked)"));
+                     continue;
+                 };
+                 let debug = cap(format!("{:?}", input.value), limit);
+-                let again = || self.regenerate(point);
+-                let found = as_stored(&entry.debug, limit, input.value, again);
+-                let Some((value, same_order)) = found else {
++                if debug != entry.debug {
+                     self.report.regressions.stale += 1;
+                     self.report.warn(
+                         "regressions",
+@@ -151,8 +94,7 @@ where
+                         ),
+                     );
+                     continue;
+-                };
+-                input.value = value;
++                }
+                 let at = input.at("regression", self.report.seed);
+                 let ran = self.run_property(input.value.clone(), at);
+                 if let Some(signature) = ran.signature {
+@@ -160,14 +102,6 @@ where
+                     if !self.carry_on() {
+                         return true;
+                     }
+-                } else if !same_order {
+-                    self.report.warn(
+-                        "regressions",
+-                        format!(
+-                            "stored input {point} did not fail, but its items were not in the \
+-                             stored order, which may be part of the failure"
+-                        ),
+-                    );
+                 }
+             }
+         }
+@@ -204,40 +138,3 @@ where
+         }
+     }
+ }
+-
+-#[cfg(all(test, feature = "json"))]
+-mod tests {
+-    use super::*;
+-
+-    /// Renders as its text.
+-    struct Text(&'static str);
+-
+-    impl Debug for Text {
+-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-            f.write_str(self.0)
+-        }
+-    }
+-
+-    #[test]
+-    fn an_input_is_the_stored_one_when_a_rendering_or_its_words_match() {
+-        let found = |stored: &str, renderings: &'static [&'static str]| {
+-            let mut texts = renderings.iter().cycle().map(|text| Text(text));
+-            let first = texts.next().unwrap();
+-            as_stored(stored, 8, first, || texts.next()).map(|(text, same)| (text.0, same))
+-        };
+-        assert_eq!(found("[1]", &["[1]"]), Some(("[1]", true)));
+-        assert_eq!(found("[1]", &["[2]"]), None, "a stable rendering must match");
+-        assert_eq!(found("[1, 2]", &["[2, 1]"]), None, "the order of a stable one counts");
+-        assert_eq!(found("{1, 2}", &["{2, 1}", "{1, 2}"]), Some(("{1, 2}", true)), "the match");
+-        let three = &["{3, 2, 1}", "{3, 1, 2}"];
+-        assert_eq!(found("{1, 2, 3}", three), Some(("{3, 2, 1}", false)), "the same items");
+-        assert_eq!(found("{1, 2, 4}", three), None, "another item");
+-        assert_eq!(found("{1, 2}", three), None, "an item more");
+-        assert_eq!(found("{12, 34}", &["{21, 43}", "{43, 21}"]), None, "the same digits");
+-        assert_eq!(found("{'+', '-'}", &["{'<', '>'}", "{'>', '<'}"]), None, "other marks");
+-        let four = &["{4, 3, 2, 1}", "{4, 2, 3, 1}"];
+-        assert_eq!(found("{1, 2, 3…", four), Some(("{4, 3, 2, 1}", false)), "cut");
+-        assert_eq!(found("{1, 5, 3…", four), None, "another item, cut");
+-        assert!(as_stored("{1}", 8, Text("{2}"), || None).is_none(), "no longer generated");
+-    }
+-}
