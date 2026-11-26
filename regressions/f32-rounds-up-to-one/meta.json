@@ -1,0 +1,22 @@
+{
+ "id": "f32-rounds-up-to-one",
+ "title": "gens::f32() generates and mutates to 1.0, outside its documented [0, 1)",
+ "class": "generator-domain",
+ "symptom": "wrong-result",
+ "issue": 40,
+ "cause": "the f64 draw was narrowed with `as f32`, which rounds to nearest: every value above 1 - 2^-25 becomes 1.0, and so does the f64 mutator's clamp 0.999_999_999",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "Yusuf Eren Bozkurt (@YusuffEren), #137",
+ "oracles": [
+  {
+   "target": "test:gen_contract",
+   "name": "every_builtin_generator_keeps_its_contract"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "gens::primitives::tests::f32_stays_below_one"
+  }
+ ]
+}

@@ -1,0 +1,22 @@
+{
+ "id": "dependent-shrink-ignores-discard",
+ "title": "dependent shrinking yields pairs outside the joint support when the inner generator filters",
+ "class": "shrink-support",
+ "symptom": "wrong-result",
+ "issue": 44,
+ "cause": "Dependent::shrink regenerates the second value with a fresh Source and never checks whether a filter in it ran out of attempts and discarded",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:gen_contract",
+   "name": "every_builtin_generator_keeps_its_contract"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "gens::tests::dependent_drops_a_shrink_candidate_whose_regeneration_discarded"
+  }
+ ]
+}

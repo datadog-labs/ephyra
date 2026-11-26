@@ -1,0 +1,77 @@
+# Regressions: fixed bugs, re-injected
+
+Every bug fixed in Ephyra comes with a property that catches its **class**, not only the
+case that was reported. Each bug also gets an entry here that proves the property catches
+it: the fix, reversed, as a patch. The layout follows
+[etna-workloads](https://github.com/datadog-labs/etna-workloads), adapted to a code base
+that changes every day instead of a pinned release. The method is described in
+[CONTRIBUTING.md](../CONTRIBUTING.md#bugs-a-property-for-the-class-and-a-regression-entry).
+
+```
+python3 regressions/run.py               # fix soundness, then bug soundness, for every entry
+python3 regressions/run.py ID ...        # only some entries
+python3 regressions/run.py --matrix      # every oracle against every injection
+python3 regressions/run.py --check       # only check that every injection applies and reverses
+```
+
+The runner copies the library to a scratch directory, so your working tree is never
+touched and uncommitted changes are tested as they are. It builds in
+`target/regressions`. CI runs it on every pull request, and nightly with `--matrix`
+([`.github/workflows/regressions.yml`](../.github/workflows/regressions.yml)).
+
+## What it checks
+
+- **The injection is exact.** `injection.patch` applies to the current tree and reverses
+  back to it byte for byte. It touches implementation files only.
+- **Fix soundness.** On the clean tree every oracle and regression test passes.
+- **Bug soundness.** With the injection applied, every oracle fails under its fixed seed.
+  An oracle that passes on its injection is too weak for its class.
+
+## The entries
+
+| entry | bug | class | reported by | fixed by |
+|---|---|---|---|---|
+| [`f32-rounds-up-to-one`](f32-rounds-up-to-one) | #40 | generator-domain | Doğaç Eldenk | Yusuf Eren Bozkurt (#137) |
+| [`dependent-shrink-ignores-discard`](dependent-shrink-ignores-discard) | #44 | shrink-support | Doğaç Eldenk | |
+| [`f32-bits-infinity-shrinks-to-itself`](f32-bits-infinity-shrinks-to-itself) | #47 | shrink-progress | Doğaç Eldenk | |
+| [`any-float-shrink-cycle`](any-float-shrink-cycle) | | shrink-termination | ephyra-agent | ephyra-agent |
+
+The property [`every_builtin_generator_keeps_its_contract`](../crates/ephyra/tests/gen_contract.rs)
+catches all four.
+
+## An entry
+
+`regressions/<id>/` holds:
+
+- `injection.patch`: the fix, reversed. Applying it puts the bug back. It is a unified diff
+  from the repository root and touches implementation code only, not the regression test.
+- `meta.json`, with these fields:
+
+| field | meaning |
+|---|---|
+| `id` | the directory's name: what went wrong, in a few words |
+| `title` | one line, as an issue title |
+| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `shrink-support`, `shrink-progress`, `shrink-termination`, ... |
+| `symptom` | `wrong-result`, `soundness-false-pass`, `false-failure`, `crash`, `non-termination`, `data-loss`, ... |
+| `issue` | the GitHub issue, if there is one |
+| `cause` | the root cause, in a sentence |
+| `reported_by`, `fixed_by` | credit |
+| `oracles` | the class properties that must fail with the injection: `{"target": "test:gen_contract", "name": "..."}` (`target` is `lib` or `test:<integration test>`; `package` defaults to `ephyra`; `features` is optional) |
+| `regression` | the narrow test pinning the reported case; it must pass on the clean tree |
+
+## Adding a bug
+
+1. Find the property for the bug's class, or write it, against the buggy code. See it fail.
+2. Fix the bug. The property passes.
+3. Write the narrow regression test for the reported case.
+4. Make the entry. `injection.patch` is the fix reversed, restricted to implementation
+   code. For a fix commit `F`: `git diff F F^ -- crates/ephyra/src`, without the hunks that
+   add tests. Then write `meta.json`.
+5. Run `python3 regressions/run.py <id> --matrix`.
+
+## When a patch stops applying
+
+The library changes and the patches don't. `run.py --check` lists the ones that no longer
+apply. Re-derive such an entry on the current tree: write the change that puts the bug
+back, by hand if the code moved. Then check it again. Don't delete an entry because its
+patch went stale, because the bug it records can come back.

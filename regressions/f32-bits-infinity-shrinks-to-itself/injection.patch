@@ -1,0 +1,24 @@
+diff --git a/crates/ephyra/src/gens/primitives.rs b/crates/ephyra/src/gens/primitives.rs
+--- a/crates/ephyra/src/gens/primitives.rs
++++ b/crates/ephyra/src/gens/primitives.rs
+@@ -271,19 +271,7 @@
+     }
+ 
+     fn shrink(&self, value: &f32, visitor: &mut ShrinkVisitor<'_, f32>) -> ShrinkFlow {
+-        // The f64 shrinker's candidates, narrowed. A finite candidate beyond
+-        // f32's range (f64::MAX, for an infinity) narrows to f32::MAX rather
+-        // than back to infinity, and one that narrows to the input itself is
+-        // dropped: a shrinker never offers its input (#47).
+-        let bits = value.to_bits();
+-        shrink_f64(f64::from(*value), &mut |candidate| {
+-            let narrowed = if candidate.is_finite() && candidate.abs() > f64::from(f32::MAX) {
+-                f32::MAX.copysign(candidate as f32)
+-            } else {
+-                candidate as f32
+-            };
+-            if narrowed.to_bits() == bits { ControlFlow::Continue(()) } else { visitor(narrowed) }
+-        })
++        shrink_f64(f64::from(*value), &mut |candidate| visitor(candidate as f32))
+     }
+ 
+     fn mutate(&self, value: &f32, g: &mut Source) -> f32 {
