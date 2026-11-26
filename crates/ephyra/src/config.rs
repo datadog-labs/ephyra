@@ -23,6 +23,10 @@
 //! variables. Problems (unknown `EPHYRA_*` names, unparsable values) are
 //! reported as `config_env` health warnings, never silently ignored.
 //!
+//! The file changes only the fields it mentions, in nested objects too:
+//! `{ "shrink": { "max_steps": 5 } }` keeps `shrink.enabled`. `null` clears
+//! an optional field. A file with a problem changes nothing.
+//!
 //! | Variable | Field |
 //! |---|---|
 //! | `EPHYRA_CONFIG` | path of a JSON file with any subset of fields (needs the `json` feature) |
@@ -619,6 +623,16 @@ impl Config {
         serde_json::from_str(json)
     }
 
+    /// This configuration with the fields that `json` mentions taken from it.
+    #[cfg(feature = "json")]
+    fn with_json(&self, json: &str) -> Result<Self, serde_json::Error> {
+        let mut parsed = Self::from_json(json)?;
+        // Not read from JSON, so it stays even if `json` mentions it.
+        parsed.signature = self.signature.clone();
+        let mut config = self.clone();
+        config.overlay(parsed, &serde_json::from_str(json)?)?;
+        Ok(config)
+    }
 
     /// Apply `EPHYRA_*` overrides from `vars`, returning the new
     /// configuration and a description of every problem encountered.
@@ -636,7 +650,7 @@ impl Config {
             #[cfg(feature = "json")]
             match std::fs::read_to_string(path) {
                 Ok(text) => {
-                    match Self::from_json(&text) {
+                    match self.with_json(&text) {
                         Ok(from_file) => self = from_file,
                         Err(e) => problems.push(format!("EPHYRA_CONFIG={path}: invalid JSON: {e}")),
                     }
@@ -728,6 +742,53 @@ impl Config {
     }
 }
 
+/// Defines `overlay`, which takes from `parsed` the fields that `json`, the
+/// value it was parsed from, mentions. The groups after the `;` are taken
+/// field by field. The other values never go through JSON, which cannot hold
+/// all of them (an infinite ratio, a path that is not UTF-8). The pattern has
+/// no `..`, so a new field does not compile until it is listed.
+#[cfg(feature = "json")]
+macro_rules! overlay {
+    ($($t:ident { $($field:ident),* $(; $($group:ident),*)? })*) => {$(
+        impl $t {
+            fn overlay(
+                &mut self,
+                parsed: Self,
+                json: &serde_json::Value,
+            ) -> Result<(), serde_json::Error> {
+                // serde also reads a struct from an array of its fields.
+                let Some(json) = json.as_object() else {
+                    let expected = concat!("struct ", stringify!($t));
+                    let found = serde::de::Unexpected::Seq;
+                    return Err(serde::de::Error::invalid_type(found, &expected));
+                };
+                let $t { $($field,)* $($($group,)*)? } = parsed;
+                $(if json.contains_key(stringify!($field)) {
+                    self.$field = $field;
+                })*
+                $($(if let Some(json) = json.get(stringify!($group)) {
+                    self.$group.overlay($group, json)?;
+                })*)?
+                Ok(())
+            }
+        }
+    )*};
+}
+#[cfg(feature = "json")]
+overlay! {
+    Config {
+        tests, budget_ms, seed, max_size, max_discard_ratio, timeout_ms, filter_max_attempts,
+        name, replay, failures, signature;
+        shrink, target, coverage, locate, regressions, report
+    }
+    ShrinkConfig { enabled, max_steps, timeout_ms }
+    TargetConfig { tests, pool_size, energy, explore }
+    CoverageConfig { enabled, filter, guided, profraw_dir, min_cover, targets, targets_file, html }
+    LocateConfig { enabled, neighbourhood, top }
+    RegressionsConfig { dir, save, replay }
+    ReportConfig { truncate_debug_at, json_path, samples, observations }
+}
+
 fn parse_bool(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
@@ -792,14 +853,63 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ephyra-config-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cfg.json");
-        std::fs::write(&path, r#"{ "tests": 7, "max_size": 3 }"#).unwrap();
-        let (config, problems) = Config::default().apply_env_vars(vars(&[
-            ("EPHYRA_CONFIG", path.to_str().unwrap()),
-            ("EPHYRA_TESTS", "9"),
-        ]));
+        std::fs::write(
+            &path,
+            r#"{
+                "tests": 7, "max_size": 3, "timeout_ms": null, "signature": "ignored",
+                "shrink": { "max_steps": 5, "timeout_ms": null }, "target": { "tests": 5 },
+                "coverage": { "guided": true }, "locate": { "top": 4 },
+                "regressions": { "replay": true }, "report": { "samples": 1 }
+            }"#,
+        )
+        .unwrap();
+        let mut code = Config::default()
+            .tests(50)
+            .seed(8)
+            .max_discard_ratio(f64::INFINITY)
+            .timeout(Duration::from_secs(1))
+            .failures(3)
+            .signature(|_| "one".to_string())
+            .no_shrink()
+            .no_regressions();
+        code.target.pool_size = 2;
+        code.coverage.filter = "my_lib".to_string();
+        code.locate.enabled = false;
+        code.report.truncate_debug_at = 80;
+        let mut expected = code.clone();
+        expected.max_size = 3;
+        expected.timeout_ms = None;
+        expected.shrink.max_steps = 5;
+        expected.shrink.timeout_ms = None;
+        expected.target.tests = 5;
+        expected.coverage.guided = true;
+        expected.locate.top = 4;
+        expected.regressions.replay = true;
+        expected.report.samples = 1;
+        let file = ("EPHYRA_CONFIG", path.to_str().unwrap());
+        let (config, problems) = code.clone().apply_env_vars(vars(&[file, ("EPHYRA_TESTS", "9")]));
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(config.tests, 9, "variables beat the file");
-        assert_eq!(config.max_size, 3, "the file beats the defaults");
+        expected.tests = 9;
+        assert_eq!(config, expected, "the file changes what it mentions");
+
+        for text in [
+            "",
+            "5",
+            "null",
+            "[7]",
+            r#"{ "tests": 7, "max_size": null }"#,
+            r#"{ "tests": 7, "shrink": null }"#,
+            r#"{ "tests": 7, "shrink": [true] }"#,
+            r#"{ "tests": 7, "shrink": { "enabled": true, "max_steps": "5" } }"#,
+            r#"{ "tests": 7, "replay": { "seed": 1 } }"#,
+        ] {
+            std::fs::write(&path, text).unwrap();
+            let (config, problems) = code.clone().apply_env_vars(vars(&[file]));
+            assert_eq!(problems.len(), 1, "{text}: {problems:?}");
+            assert!(problems[0].contains("EPHYRA_CONFIG"), "{problems:?}");
+            assert_eq!(config, code, "{text}");
+        }
         let (_, problems) =
             Config::default().apply_env_vars(vars(&[("EPHYRA_CONFIG", "/nonexistent/cfg.json")]));
         assert_eq!(problems.len(), 1);
