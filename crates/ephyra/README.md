@@ -212,7 +212,8 @@ fn parser_never_panics(input: String) {
 ```
 
 The macro calls `finish` afterward, so shrinking, regressions and reports
-work as with the default search.
+work as with the default search. A search that returns `Err` fails the test,
+also when no input failed.
 
 ## Finding many bugs in one run
 
