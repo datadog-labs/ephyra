@@ -170,8 +170,8 @@ fn run_group(
     std::fs::create_dir_all(&options.run.dir)?;
     let mut build = vec!["test".to_string(), "-p".to_string(), first.package.clone()];
     build.extend(target_selector(&first.target));
-    build.extend(cargo_args);
     build.extend(["--no-run", "--message-format=json"].map(String::from));
+    build.extend(cargo_args);
     println!("\n== building: {}", serve::command_line(&options.run.cargo, &build));
     let output = Command::new(&options.run.cargo)
         .args(&build)

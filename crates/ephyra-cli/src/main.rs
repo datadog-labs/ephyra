@@ -30,7 +30,7 @@ fn main() {
 fn usage(code: i32) -> ! {
     eprintln!(
         "usage:\n\
-           ephyra test [--dir DIR] [--no-instrument] [--target-dir DIR] [--cargo PATH] [--] [CARGO TEST ARGS...]\n\
+           ephyra test [--dir DIR] [--no-instrument] [--target-dir DIR] [--cargo PATH] [CARGO TEST ARGS...] [-- TEST HARNESS ARGS...]\n\
            ephyra check [NAME...] [--list] [--tests N] [--dir DIR] [--no-instrument] [--target-dir DIR] [--cargo PATH] [-- CARGO ARGS...]\n\
            ephyra guide\n\
            ephyra visualize [--dir DIR] [--port PORT] [--cargo-args ARGS] [--no-instrument] [--target-dir DIR] [--cargo PATH]\n\n\
