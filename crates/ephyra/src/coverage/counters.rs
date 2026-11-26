@@ -216,6 +216,14 @@ pub fn profraw_image() -> Option<Vec<u8>> {
     runtime::profraw()
 }
 
+/// Where the counters start, given where the profile runtime says their
+/// section does. On Windows that is the byte after a one-byte marker, and the
+/// linker puts the first counter at the next multiple of 8.
+#[cfg(any(test, ephyra_instrumented))]
+fn first_counter(begin: *const u8) -> *const u8 {
+    begin.wrapping_add(begin.align_offset(8))
+}
+
 /// The only unsafe code in the crate: FFI into the LLVM profile runtime and
 /// reads of its static sections, whose layout is fixed by compiler-rt.
 #[cfg(ephyra_instrumented)]
@@ -231,7 +239,10 @@ mod runtime {
         Ordering,
     };
 
-    use super::Function;
+    use super::{
+        Function,
+        first_counter,
+    };
 
     unsafe extern "C" {
         fn __llvm_profile_set_dumped();
@@ -286,7 +297,7 @@ mod runtime {
             if __llvm_profile_counter_entry_size() != 8 {
                 return None;
             }
-            let begin = __llvm_profile_begin_counters();
+            let begin = first_counter(__llvm_profile_begin_counters());
             let end = __llvm_profile_end_counters();
             let count = end.offset_from(begin).max(0) as usize / 8;
             let slice = std::slice::from_raw_parts(begin as *const AtomicU64, count);
@@ -318,7 +329,7 @@ mod runtime {
             let nb = __llvm_profile_begin_names();
             let ne = __llvm_profile_end_names();
             let names = std::slice::from_raw_parts(nb, ne.offset_from(nb).max(0) as usize);
-            (records, names, __llvm_profile_begin_counters() as usize)
+            (records, names, first_counter(__llvm_profile_begin_counters()) as usize)
         };
         let names = super::super::names::parse(names);
         let by_ref = super::super::names::by_ref(&names);
@@ -400,6 +411,37 @@ mod tests {
         let mut values = vec![9];
         assert!(!delta.fill(&(3..5), &mut values) && values == [9]);
         assert!(delta.fill(&(0..3), &mut values) && values == [0, 4, 3]);
+    }
+
+    #[test]
+    fn the_first_counter_is_the_next_multiple_of_8() {
+        let section = [0u64; 2];
+        let start = section.as_ptr().cast::<u8>();
+        assert_eq!(first_counter(start), start);
+        for skew in 1..=8 {
+            assert_eq!(first_counter(start.wrapping_add(skew)), start.wrapping_add(8));
+        }
+    }
+
+    /// A counter reads as the number of times its code ran, also when that
+    /// does not fit in its low byte.
+    #[cfg(ephyra_instrumented)]
+    #[test]
+    fn counts_are_exact() {
+        #[inline(never)]
+        fn counted(x: u32) -> u32 {
+            x.wrapping_add(1)
+        }
+        let all = Functions::get().all();
+        let function = all.iter().find(|f| f.name.ends_with("counts_are_exact::counted")).unwrap();
+        for n in [5, 256] {
+            let before = snapshot_range(&function.counters).unwrap();
+            for x in 0..n {
+                std::hint::black_box(counted(std::hint::black_box(x)));
+            }
+            let delta = before.delta(&snapshot_range(&function.counters).unwrap());
+            assert_eq!(delta.hits(), &[(function.counters.start, u64::from(n))]);
+        }
     }
 
     #[test]

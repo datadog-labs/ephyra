@@ -245,7 +245,8 @@ fn decode_filenames(blob: &[u8], version: u32) -> Result<Vec<String>, String> {
     for _ in 0..count {
         let (len, next) = uleb(&raw, at)?;
         let bytes = raw.get(next..next + len as usize).ok_or("truncated file name")?;
-        names.push(String::from_utf8_lossy(bytes).into_owned());
+        // Forward slashes on every platform, as in panic sites.
+        names.push(String::from_utf8_lossy(bytes).replace('\\', "/"));
         at = next + len as usize;
     }
     // Version 6 and later put the compilation directory first and store
@@ -253,11 +254,9 @@ fn decode_filenames(blob: &[u8], version: u32) -> Result<Vec<String>, String> {
     if version >= 5 && !names.is_empty() {
         let dir = names[0].clone();
         for name in names.iter_mut().skip(1) {
-            let absolute = name.starts_with('/')
-                || name.starts_with('\\')
-                || name.as_bytes().get(1) == Some(&b':');
+            let absolute = name.starts_with('/') || name.as_bytes().get(1) == Some(&b':');
             if !absolute && !dir.is_empty() {
-                *name = format!("{}/{}", dir.trim_end_matches(['/', '\\']), name);
+                *name = format!("{}/{}", dir.trim_end_matches('/'), name);
             }
         }
     }
@@ -515,6 +514,13 @@ mod tests {
         assert_eq!(f.eval(f.regions[2].counter, &values), 2);
         assert_eq!(f.eval(Counter::Add(0), &values), 7);
         assert_eq!(f.eval(Counter::Sub(0), &[1, 4]), 0, "differences saturate");
+    }
+
+    #[test]
+    fn windows_file_names_get_forward_slashes() {
+        let blob = filenames_blob(&[r"D:\work\", r"src\lib.rs", r"C:\dep\src\lib.rs"]);
+        let names = decode_filenames(&blob, 6).unwrap();
+        assert_eq!(names, ["D:/work/", "D:/work/src/lib.rs", "C:/dep/src/lib.rs"]);
     }
 
     #[test]
