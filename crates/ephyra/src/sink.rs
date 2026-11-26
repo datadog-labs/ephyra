@@ -227,6 +227,11 @@ impl RunSink for ObservationFile {
             .iter()
             .map(|(name, value)| (name.clone(), feature_json(value)))
             .collect();
+        // Wall-clock time the case finished, in Unix milliseconds: when it
+        // ran within the run, which `run_start` and `timing` alone don't say.
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
         let record = json!({
             "type": "test_case",
             "run_start": self.run_start,
@@ -248,6 +253,7 @@ impl RunSink for ObservationFile {
                 "size": case.size,
                 "origin": case.origin,
                 "shrink_accepted": case.shrink_accepted,
+                "timestamp": timestamp,
             },
         });
         self.lines.push(record.to_string());

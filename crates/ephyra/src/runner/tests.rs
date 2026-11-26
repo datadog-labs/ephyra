@@ -572,6 +572,17 @@ fn observation_files_follow_openpbtstats() {
     assert!(
         cases.iter().all(|c| c["run_start"] == info["run_start"] && c["property"] == "observed")
     );
+    let start_ms = (info["run_start"].as_f64().unwrap() * 1000.0) as u64;
+    let now_ms = u64::try_from(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
+    )
+    .unwrap();
+    assert!(
+        cases.iter().all(|c| {
+            c["metadata"]["timestamp"].as_u64().is_some_and(|t| (start_ms..=now_ms).contains(&t))
+        }),
+        "every test case carries a Unix-millisecond timestamp within the run"
+    );
     let count = |status: &str, origin: &str| {
         cases.iter().filter(|c| c["status"] == status && c["how_generated"] == origin).count()
             as u64
