@@ -299,6 +299,18 @@ mod tests {
     }
 
     #[test]
+    fn a_panicking_shrinker_fails() {
+        let panics = gens::int(0u32..=1000)
+            .with_shrink(|v, visit| visit(v.checked_sub(10).expect("ten or more")))
+            .boxed();
+        let report = __check_generator(&cfg(), panics.clone(), |_| true, no_metrics);
+        assert!(problem(&report).contains("the shrinker panicked at "), "{report}");
+        assert!(problem(&report).contains("ten or more"), "{report}");
+        let report = __check_strategy(&cfg(), panics, |_| true, no_metrics);
+        assert!(problem(&report).contains("the shrinker panicked at "), "{report}");
+    }
+
+    #[test]
     fn non_finite_metrics_fail() {
         let report = __check_generator(
             &cfg(),

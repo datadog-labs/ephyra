@@ -70,6 +70,8 @@ pub(super) struct Naming {
     pub(super) name: Option<crate::config::SignatureFn>,
     /// `Config::report.truncate_debug_at`, for the value it is shown.
     pub(super) limit: usize,
+    /// The first panic of `name`.
+    pub(super) panicked: Option<PanicInfo>,
 }
 
 /// One run of the property.
@@ -138,15 +140,15 @@ impl<P> Exec<P> {
     /// How `result` failed, if it did: its kind and panic site, or, when
     /// the run looks for several failures, its name: `named` (from
     /// [`signature`](crate::signature)), else what `Config::signature`
-    /// makes of it and `value`, else [`default_name`].
+    /// makes of it and `value`, else (or when that panics) [`default_name`].
     pub(super) fn signature<T: Debug>(
-        &self,
+        &mut self,
         result: &Result<Outcome, PanicInfo>,
         named: Option<String>,
         value: Option<&T>,
     ) -> Option<Signature> {
         let failed = Signature::of(result)?;
-        let Some(naming) = &self.naming else {
+        let Some(naming) = &mut self.naming else {
             return Some(failed);
         };
         let name = named
@@ -154,7 +156,14 @@ impl<P> Exec<P> {
                 let (name, value) = (naming.name.as_ref()?, value?);
                 let (kind, message, location) = super::shrinking::details(result.clone());
                 let value = cap(format!("{value:?}"), naming.limit);
-                Some(name.call(&crate::report::FailureInfo { kind, message, location, value }))
+                let failure = crate::report::FailureInfo { kind, message, location, value };
+                match panic::catch(|| name.call(&failure)) {
+                    Ok(name) => Some(name),
+                    Err(info) => {
+                        naming.panicked.get_or_insert(info);
+                        None
+                    },
+                }
             })
             .unwrap_or_else(|| default_name(result));
         Some(Signature::Named(name))
@@ -177,15 +186,7 @@ pub(super) fn case_status(
         Ok(Outcome::Discard(reason)) => (CaseStatus::GaveUp, reason.clone()),
         Ok(Outcome::False) => (CaseStatus::Failed, "the property returned false".to_string()),
         Ok(Outcome::Fail(message)) => (CaseStatus::Failed, message.clone()),
-        Err(info) => {
-            (
-                CaseStatus::Failed,
-                match &info.location {
-                    Some(at) => format!("panicked at {at}: {}", info.message),
-                    None => format!("panicked: {}", info.message),
-                },
-            )
-        },
+        Err(info) => (CaseStatus::Failed, info.to_string()),
     }
 }
 
