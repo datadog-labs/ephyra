@@ -103,8 +103,11 @@ pub fn run(options: &Options) -> io::Result<Outcome> {
                 groups.entry(key).or_default().push(entry);
             }
         }
-        for entries in groups.values() {
-            run_group(options, &members, entries, &mut passed, &mut failed)?;
+        if !groups.is_empty() {
+            let env = serve::run_env(&options.run, &|line| println!("{line}"));
+            for entries in groups.values() {
+                run_group(options, &members, &env, entries, &mut passed, &mut failed)?;
+            }
         }
     }
 
@@ -156,6 +159,7 @@ fn list(index: &Index) {
 fn run_group(
     options: &Options,
     members: &[Member],
+    env: &[(String, String)],
     entries: &[&Entry],
     passed: &mut Vec<String>,
     failed: &mut Vec<String>,
@@ -166,7 +170,6 @@ fn run_group(
     for note in notes {
         println!("{note}");
     }
-    let env = serve::run_env(&options.run);
     std::fs::create_dir_all(&options.run.dir)?;
     let mut build = vec!["test".to_string(), "-p".to_string(), first.package.clone()];
     build.extend(target_selector(&first.target));

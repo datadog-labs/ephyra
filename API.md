@@ -293,8 +293,9 @@ loops::fuzz(&mut run, &mut pool, 200_000);
 
    An exported `RUSTFLAGS` overrides `[build] rustflags` and coverage turns
    off silently: check `echo "$RUSTFLAGS"`, and if it is set, add the flag
-   there. Point `LLVM_PROFILE_FILE` away from the code under test, or build
-   scripts leave `default_*.profraw` files in its source directories.
+   there. The `ephyra` command adds the flag itself, to whichever of the two
+   cargo uses. Point `LLVM_PROFILE_FILE` away from the code under test, or
+   build scripts leave `default_*.profraw` files in its source directories.
 3. Say which crate to track when the code under test is another crate
    (a separate test crate): `config.coverage.filter = "mycrate".into();` or
    `EPHYRA_COVERAGE_FILTER=mycrate`. Use the crate name with underscores, or
