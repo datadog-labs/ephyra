@@ -120,10 +120,14 @@ pub struct Failure {
     /// The shrunk input, when shrinking ran and made progress.
     pub shrunk: Option<Counterexample>,
     /// Where the original input can be regenerated from
-    /// (`EPHYRA_REPLAY=seed:iteration`). `None` when the input came from
-    /// the targeted phase; then the whole run must be repeated with
-    /// [`Report::seed`].
+    /// (`EPHYRA_REPLAY=seed:iteration`). `None` when the input was found by
+    /// mutation; then the whole run must be repeated with
+    /// [`seed`](Self::seed).
     pub replay: Option<ReplayPoint>,
+    /// The seed of the run that found the original input, which is not
+    /// [`Report::seed`] for a replay point or an input from the regressions
+    /// file.
+    pub seed: u64,
     /// Whether the property failed differently when re-run on the same
     /// input. A flaky property cannot be shrunk reliably.
     pub flaky: bool,

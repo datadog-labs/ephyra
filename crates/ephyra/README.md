@@ -55,7 +55,8 @@ minute, and their correctness is a property the library checks for you.
   itself. They run through `check`, so they shrink and replay like any
   other property.
 - **Everything is reproducible.** A failure is `seed:iteration`;
-  `EPHYRA_REPLAY` regenerates it without searching. Failures are
+  `EPHYRA_REPLAY` regenerates it without searching. One found by mutation
+  is the `seed` of its run; `EPHYRA_SEED` repeats the search. Failures are
   remembered in a regressions file that is replayed first next time and
   flags entries whose generator has changed.
 - **Everything is configurable and machine-readable.** Every setting is a
@@ -247,11 +248,12 @@ report.assert_passed();
 Each new signature is shrunk while keeping its signature (a candidate that
 fails some other way is rejected), localized when it is the first and
 coverage is on, and remembered in the regressions file, so every one of
-them replays next time. Later failures with a signature already seen are
+them replays next time (the report warns about a mutant that cannot be made
+again and is not saved). Later failures with a signature already seen are
 only counted. The report keeps `failure` as the first one and lists all of
 them in `failures` (the JSON field of the same name); the text report adds
 a short block per further failure with its signature, counterexample,
-count and `EPHYRA_REPLAY` point.
+count and `EPHYRA_REPLAY` point (`EPHYRA_SEED` when found by mutation).
 
 A loop written by hand collects failures the same way:
 `test` keeps the first failure of each new signature and the next

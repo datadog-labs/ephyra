@@ -204,6 +204,7 @@ fn stale_regression_entry_is_reported() {
         name: "stale".to_string(),
         seed: 1,
         iteration: 0,
+        mutations: Vec::new(),
         debug: "[999]".to_string(),
         shrunk: None,
         created: 0,

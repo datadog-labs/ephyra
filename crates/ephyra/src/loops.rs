@@ -536,7 +536,10 @@ where
         .filter(|feedback| feedback.valid || pool.wants_invalid())
         .filter(|feedback| useful(pool, feedback));
     match invest {
-        Some(feedback) => pool.invest(input.value, feedback),
+        Some(feedback) => {
+            run.note_seed(&input.value);
+            pool.invest(input.value, feedback);
+        },
         None if mutated => pool.revise(),
         None => {},
     }

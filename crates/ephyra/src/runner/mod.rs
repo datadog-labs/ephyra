@@ -17,6 +17,7 @@ pub mod testable;
 use std::{
     collections::{
         BTreeMap,
+        HashMap,
         HashSet,
     },
     fmt::Debug,
@@ -65,6 +66,7 @@ use self::{
         Naming,
         Skipped,
     },
+    remember::Made,
     shrinking::{
         Found,
         Shrinking,
@@ -91,7 +93,8 @@ pub(crate) use self::{
 /// `EPHYRA_REPLAY`) and any stored regressions for this property are
 /// regenerated and tested. A failing input is shrunk with the generator's
 /// shrinker (see [`Config::shrink`]), remembered in the regressions file,
-/// and reported with the seed and iteration that regenerate it.
+/// and reported with the seed and iteration that regenerate it (the seed of
+/// the search, for a mutant).
 /// Environment overrides (`EPHYRA_*`, see [`config`](crate::config)) are
 /// applied on top of `config`.
 ///
@@ -219,7 +222,11 @@ fn property_name(config: &Config) -> String {
 /// A loop is reproducible by seed: all randomness comes from the run, so
 /// the same seed replays the same run. Inputs from `draw` also carry a
 /// [replay point](Input::replay) that regenerates them alone; mutants do
-/// not, so a failure found by mutation is remembered by its rendering.
+/// not. A failing mutant is remembered as the drawn input it descends from
+/// and the mutations on the way, when each parent was
+/// [kept](Self::keep) before another input was tested or is a seed of one of
+/// the shipped [`loops`](crate::loops). A failing mutant of another value,
+/// such as a fixture, is not remembered, and the report warns.
 pub struct Run<G: Gen, P> {
     config: Config,
     generator: G,
@@ -230,6 +237,11 @@ pub struct Run<G: Gen, P> {
     seen: HashSet<u64>,
     generated: u64,
     pool: Pool<G::Value>,
+    /// How the values kept as seeds were made, by the hash of their
+    /// rendering.
+    seeds: HashMap<u64, Made<u64>>,
+    /// The same for the last input tested.
+    tested: Option<(u64, Made<G::Value>)>,
     /// `cover` labels: (times met, times seen) over passing tests.
     covers: BTreeMap<String, (u64, u64)>,
     stats: Stats,
@@ -298,6 +310,8 @@ where
         #[cfg_attr(not(feature = "coverage"), allow(unused_mut))]
         let mut run = Run {
             pool: Pool::new(config.target.pool_size, config.target.energy),
+            seeds: HashMap::new(),
+            tested: None,
             stats: Stats::new(config.report.samples),
             config,
             generator,

@@ -170,9 +170,10 @@ Environment variables (no recompilation):
 | `EPHYRA_COVERAGE_HTML=dir` | Write the coverage grid page (instrumented builds) |
 
 A failing input is saved to `.ephyra/regressions/<name>.jsonl` under the
-working directory and replayed first next time; a failure at "iteration 0"
-on a rerun may be that replay. Delete the file, or set
-`EPHYRA_REGRESSIONS=0`, after fixing the bug.
+working directory and replayed first next time; a failure "after 0 passing
+tests" on a rerun may be that replay. Delete the file, or set
+`EPHYRA_REGRESSIONS=0`, after fixing the bug. A mutant that the run cannot
+make again, such as a mutant of a fixture, is not saved; the report warns.
 
 ## Many failures in one run
 
@@ -219,7 +220,7 @@ ephyra: FAILED, property panicked: assertion `left == right` failed: step 4: Get
 
 In code: `report.status` (`Passed`, `Failed`, `GaveUp`, `TimedOut`,
 `Aborted`), `report.passed()`, `report.counterexample()`, `report.failure`
-(`kind`, `message`, `location`, `original`, `shrunk`, `replay`, `flaky`),
+(`kind`, `message`, `location`, `original`, `shrunk`, `replay`, `seed`, `flaky`),
 `report.tests`, `report.iterations`, `report.discarded`, `report.labels`,
 `report.health`, `report.to_json()`.
 
