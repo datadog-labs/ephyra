@@ -222,7 +222,9 @@ impl Gen for F64Gen {
 
 /// An `f32` uniform in `[0, 1)`: [`f64()`] narrowed, with its hooks.
 pub fn f32() -> impl Gen<Value = f32> {
-    f64().iso(|x| x as f32, |x: &f32| f64::from(*x))
+    // `as f32` rounds draws above `1 - 2^-25` up to `1.0`; keep them below it.
+    const BELOW_ONE: f32 = 1.0 - f32::EPSILON / 2.0;
+    f64().iso(|x| (x as f32).min(BELOW_ONE), |x: &f32| f64::from(*x))
 }
 
 /// An `f64` with a uniformly random bit pattern (any value including NaN,
@@ -731,6 +733,18 @@ pub fn sized<G: Gen>(f: impl Fn(usize) -> G + Send + Sync) -> impl Gen<Value = G
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f32_stays_below_one() {
+        let g = f32();
+        // Seed found in #40: the f64 draw rounds up to 1.0 as f32.
+        assert!(g.generate(&mut Source::new(6_166_858, 0)) < 1.0);
+        let mut src = Source::new(0, 0);
+        for _ in 0..1000 {
+            let m = g.mutate(&0.99999, &mut src);
+            assert!((0.0..1.0).contains(&m), "mutated to {m}");
+        }
+    }
 
     #[test]
     fn vec_lengths_follow_size_and_len() {
