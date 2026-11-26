@@ -15,6 +15,8 @@ use std::{
 
 use {
     super::{
+        Case,
+        Cases,
         ShrinkRules,
         Suspect,
         mutant,
@@ -111,10 +113,6 @@ enum Generated {
 /// What the check property learns from the loop that drives it.
 #[derive(Default)]
 struct Progress {
-    /// The run's seed, for mutation randomness.
-    seed: Cell<u64>,
-    /// The size the current input was drawn at.
-    size: Cell<usize>,
     /// Inputs come from the generator (not from shrinking a failure).
     drawing: Cell<bool>,
     /// The failure being shrunk is a generated value outside the domain, so
@@ -141,9 +139,8 @@ where
     let progress = Rc::new(Progress { drawing: Cell::new(true), ..Progress::default() });
     let seen = progress.clone();
     let filter_max_attempts = config.filter_max_attempts;
-    let mut mutations = 0u64;
-    let mut run = Run::new(config, shared, move |value: G::Value| {
-        if let Some(reason) = domain(&value) {
+    let mut run = Run::new(config, Cases(shared), move |case: Case<G::Value>| {
+        if let Some(reason) = domain(&case.value) {
             return match generated {
                 Generated::MustSatisfy if seen.drawing.get() || seen.outside.get() => {
                     seen.outside.set(true);
@@ -152,24 +149,20 @@ where
                 _ => TestResult::discard(reason),
             };
         }
-        let size = seen.size.get();
-        let sources = (mutations..mutations + MUTANTS).map(|index| {
-            Source::new(mix(seen.seed.get(), index), size)
+        let sources = (0..MUTANTS).map(|index| {
+            Source::new(mix(case.seed, index), case.size)
                 .with_filter_max_attempts(filter_max_attempts)
         });
-        mutations += MUTANTS;
-        let checked = hooks_keep_the_domain(&value, &hooks, &mut domain, sources)
-            .and_then(|()| record_metrics(metrics(&value, size)));
+        let checked = hooks_keep_the_domain(&case.value, &hooks, &mut domain, sources)
+            .and_then(|()| record_metrics(metrics(&case.value, case.size)));
         match checked {
             Ok(()) => TestResult::Pass,
             Err(problem) => TestResult::fail(problem),
         }
     });
-    progress.seed.set(run.report().seed);
     if !run.remembered() {
         while run.wants_more() {
             let Some(input) = run.draw() else { continue };
-            progress.size.set(input.size());
             run.test(&input);
         }
     }

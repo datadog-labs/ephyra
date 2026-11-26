@@ -22,9 +22,11 @@
 mod check;
 
 use std::{
-    cell::Cell,
     collections::HashSet,
-    fmt::Debug,
+    fmt::{
+        self,
+        Debug,
+    },
     ops::ControlFlow,
 };
 
@@ -121,10 +123,11 @@ where
     })
 }
 
-/// Every mutant of every generated value satisfies `support`. Mutation
-/// randomness derives from [`Config::seed`] so the run is reproducible. A
-/// health warning notes a mutator that returns an identical value
-/// for most inputs.
+/// Every mutant of every generated value satisfies `support`. The mutation
+/// seed is drawn after each value, so the run is reproducible from its seed,
+/// and a failing value shrinks and replays with the same mutation
+/// randomness. The mutator gets the size [`Config::max_size`]. A health
+/// warning notes a mutator that returns an identical value for most inputs.
 pub fn check_mutator<G>(
     config: &Config,
     generator: G,
@@ -136,19 +139,16 @@ where
 {
     let shared = BoxGen::new(generator);
     let hooks = shared.clone();
-    let base = config.seed.unwrap_or(0);
-    let max_size = config.max_size;
-    let counter = Cell::new(0u64);
+    // The run's own, with the `EPHYRA_*` overrides applied.
+    let max_size = config.clone().apply_env_vars(std::env::vars()).0.max_size;
     let config = authored_by(config, &support);
-    let mut report = check(&config, shared, move |value| {
-        let index = counter.get();
-        counter.set(index + 1);
-        let source = Source::new(mix(base, index), max_size);
-        let mutant = match mutant(&value, &hooks, &mut |v| outside(&support, v), source) {
+    let mut report = check(&config, Cases(shared), move |case| {
+        let source = Source::new(mix(case.seed, 0), max_size);
+        let mutant = match mutant(&case.value, &hooks, &mut |v| outside(&support, v), source) {
             Ok(mutant) => mutant,
             Err(problem) => return TestResult::fail(problem),
         };
-        classify(format!("{mutant:?}") == format!("{value:?}"), "mutant identical to parent");
+        classify(format!("{mutant:?}") == format!("{case:?}"), "mutant identical to parent");
         TestResult::Pass
     });
     let inert = report.labels.get("mutant identical to parent").copied().unwrap_or(0);
@@ -159,6 +159,48 @@ where
         );
     }
     report
+}
+
+/// A value under check with the seed of its mutants and the size it was
+/// drawn at, so that rerunning, replaying and shrinking the value draw from
+/// the same randomness. It renders as the value alone.
+#[derive(Clone)]
+struct Case<T> {
+    value: T,
+    seed: u64,
+    size: usize,
+}
+
+impl<T> Case<T> {
+    fn new(value: T, g: &mut Source) -> Self {
+        Case { value, seed: g.int(..), size: g.size() }
+    }
+}
+
+impl<T: Debug> Debug for Case<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+/// The generator of [`Case`]s. The mutation seed is drawn after the value,
+/// so a seed generates the values it generates without one.
+struct Cases<T>(BoxGen<T>);
+
+impl<T> Gen for Cases<T> {
+    type Value = Case<T>;
+
+    fn generate(&self, g: &mut Source) -> Case<T> {
+        Case::new(self.0.generate(g), g)
+    }
+
+    fn shrink(&self, case: &Case<T>, visitor: &mut ShrinkVisitor<'_, Case<T>>) -> ShrinkFlow {
+        self.0.shrink(&case.value, &mut |value| visitor(Case { value, ..*case }))
+    }
+
+    fn mutate(&self, case: &Case<T>, g: &mut Source) -> Case<T> {
+        Case::new(self.0.mutate(&case.value, g), g)
+    }
 }
 
 /// `None` for a value inside `support`, the reason otherwise.
