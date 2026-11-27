@@ -1,0 +1,22 @@
+{
+ "id": "two-panics-on-a-line-are-one-failure",
+ "title": "With two panic sites on one line, shrinking replaces the failure that was found with the other one",
+ "class": "report-failure-kept",
+ "symptom": "misleading-report",
+ "issue": 100,
+ "cause": "a failure's signature held the panic's file and line but not its column",
+ "reported_by": "David R. MacIver (@DRMacIver), found by an LLM writing tests",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:report_contract",
+   "name": "what_a_failing_report_says_is_true"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:shrinking",
+   "name": "shrinking_keeps_the_panic_site_of_a_line_with_two"
+  }
+ ]
+}

@@ -1,0 +1,343 @@
+diff --git a/crates/ephyra/src/config.rs b/crates/ephyra/src/config.rs
+index 469dd4a..a690eff 100644
+--- a/crates/ephyra/src/config.rs
++++ b/crates/ephyra/src/config.rs
+@@ -560,8 +560,7 @@ impl Config {
+     /// Set [`signature`](Self::signature): name each failure with `f`
+     /// when the property did not call [`signature`](crate::signature).
+     /// Failures with the same name count as one; only matters with
+-    /// [`failures`](Self::failures) above 1. A failure on which `f` panics
+-    /// is named by default, with a warning in the report.
++    /// [`failures`](Self::failures) above 1.
+     ///
+     /// ```
+     /// use ephyra::{check, gens, Config, TestResult};
+diff --git a/crates/ephyra/src/runner/coverage.rs b/crates/ephyra/src/runner/coverage.rs
+index a1d2469..1c84a33 100644
+--- a/crates/ephyra/src/runner/coverage.rs
++++ b/crates/ephyra/src/runner/coverage.rs
+@@ -337,21 +337,9 @@ where
+         let neighbourhood = mix(self.report.seed, u64::MAX - 3);
+         for i in 0..self.config.locate.neighbourhood as u64 {
+             let mut source = Source::new(mix(neighbourhood, i), size);
+-            let mutant = super::panic::catch(|| self.generator.mutate(minimal, &mut source));
+-            if source.discarded().is_some() {
+-                continue; // With any panic of the code that ran on after it.
+-            }
+-            match mutant {
+-                Ok(mutant) => {
+-                    self.run_property(mutant, At { origin: "neighbourhood", ..at });
+-                },
+-                Err(info) => {
+-                    self.report.warn(
+-                        "mutator_panicked",
+-                        format!("the mutator {info}; the suspects are ranked without more mutants"),
+-                    );
+-                    break;
+-                },
++            let mutant = self.generator.mutate(minimal, &mut source);
++            if source.discarded().is_none() {
++                self.run_property(mutant, At { origin: "neighbourhood", ..at });
+             }
+         }
+         let panic = location.map(|l| (l.file.as_str(), l.line));
+diff --git a/crates/ephyra/src/runner/exec.rs b/crates/ephyra/src/runner/exec.rs
+index f5985cc..929e052 100644
+--- a/crates/ephyra/src/runner/exec.rs
++++ b/crates/ephyra/src/runner/exec.rs
+@@ -70,8 +70,6 @@ pub(super) struct Naming {
+     pub(super) name: Option<crate::config::SignatureFn>,
+     /// `Config::report.truncate_debug_at`, for the value it is shown.
+     pub(super) limit: usize,
+-    /// The first panic of `name`.
+-    pub(super) panicked: Option<PanicInfo>,
+ }
+ 
+ /// One run of the property.
+@@ -140,15 +138,15 @@ impl<P> Exec<P> {
+     /// How `result` failed, if it did: its kind and panic site, or, when
+     /// the run looks for several failures, its name: `named` (from
+     /// [`signature`](crate::signature)), else what `Config::signature`
+-    /// makes of it and `value`, else (or when that panics) [`default_name`].
++    /// makes of it and `value`, else [`default_name`].
+     pub(super) fn signature<T: Debug>(
+-        &mut self,
++        &self,
+         result: &Result<Outcome, PanicInfo>,
+         named: Option<String>,
+         value: Option<&T>,
+     ) -> Option<Signature> {
+         let failed = Signature::of(result)?;
+-        let Some(naming) = &mut self.naming else {
++        let Some(naming) = &self.naming else {
+             return Some(failed);
+         };
+         let name = named
+@@ -156,14 +154,7 @@ impl<P> Exec<P> {
+                 let (name, value) = (naming.name.as_ref()?, value?);
+                 let (kind, message, location) = super::shrinking::details(result.clone());
+                 let value = cap(format!("{value:?}"), naming.limit);
+-                let failure = crate::report::FailureInfo { kind, message, location, value };
+-                match panic::catch(|| name.call(&failure)) {
+-                    Ok(name) => Some(name),
+-                    Err(info) => {
+-                        naming.panicked.get_or_insert(info);
+-                        None
+-                    },
+-                }
++                Some(name.call(&crate::report::FailureInfo { kind, message, location, value }))
+             })
+             .unwrap_or_else(|| default_name(result));
+         Some(Signature::Named(name))
+@@ -186,7 +177,15 @@ pub(super) fn case_status(
+         Ok(Outcome::Discard(reason)) => (CaseStatus::GaveUp, reason.clone()),
+         Ok(Outcome::False) => (CaseStatus::Failed, "the property returned false".to_string()),
+         Ok(Outcome::Fail(message)) => (CaseStatus::Failed, message.clone()),
+-        Err(info) => (CaseStatus::Failed, info.to_string()),
++        Err(info) => {
++            (
++                CaseStatus::Failed,
++                match &info.location {
++                    Some(at) => format!("panicked at {at}: {}", info.message),
++                    None => format!("panicked: {}", info.message),
++                },
++            )
++        },
+     }
+ }
+ 
+diff --git a/crates/ephyra/src/runner/failures.rs b/crates/ephyra/src/runner/failures.rs
+index 3ac1adb..0c25044 100644
+--- a/crates/ephyra/src/runner/failures.rs
++++ b/crates/ephyra/src/runner/failures.rs
+@@ -95,14 +95,6 @@ where
+         for (found, (_, count)) in self.report.failures.iter_mut().zip(&self.distinct) {
+             found.count = *count;
+         }
+-        if let Some(info) = self.exec.naming.as_mut().and_then(|naming| naming.panicked.take()) {
+-            self.report.warn(
+-                "signature_panicked",
+-                format!(
+-                    "Config::signature {info}; the failures it panicked on are named by default"
+-                ),
+-            );
+-        }
+         if self.report.failures.is_empty() {
+             return;
+         }
+diff --git a/crates/ephyra/src/runner/mod.rs b/crates/ephyra/src/runner/mod.rs
+index 9047e4a..ab9cb5c 100644
+--- a/crates/ephyra/src/runner/mod.rs
++++ b/crates/ephyra/src/runner/mod.rs
+@@ -295,11 +295,7 @@ where
+         }
+         sinks.extend(crate::sink::open(&crate::sink::RunInfo { property: &report.name, seed }));
+         let naming = (config.failures > 1).then(|| {
+-            Naming {
+-                name: config.signature.clone(),
+-                limit: config.report.truncate_debug_at,
+-                panicked: None,
+-            }
++            Naming { name: config.signature.clone(), limit: config.report.truncate_debug_at }
+         });
+         #[cfg_attr(not(feature = "coverage"), allow(unused_mut))]
+         let mut run = Run {
+diff --git a/crates/ephyra/src/runner/panic.rs b/crates/ephyra/src/runner/panic.rs
+index 8a37148..c664a6b 100644
+--- a/crates/ephyra/src/runner/panic.rs
++++ b/crates/ephyra/src/runner/panic.rs
+@@ -16,7 +16,6 @@ use std::{
+         Cell,
+         RefCell,
+     },
+-    fmt,
+     panic::{
+         self,
+         AssertUnwindSafe,
+@@ -33,15 +32,6 @@ pub(crate) struct PanicInfo {
+     pub location: Option<Location>,
+ }
+ 
+-impl fmt::Display for PanicInfo {
+-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        match &self.location {
+-            Some(at) => write!(f, "panicked at {at}: {}", self.message),
+-            None => write!(f, "panicked: {}", self.message),
+-        }
+-    }
+-}
+-
+ thread_local! {
+     static SLOT: RefCell<Option<PanicInfo>> = const { RefCell::new(None) };
+     static DEPTH: Cell<u32> = const { Cell::new(0) };
+diff --git a/crates/ephyra/src/runner/shrinking.rs b/crates/ephyra/src/runner/shrinking.rs
+index d58216b..b24a73e 100644
+--- a/crates/ephyra/src/runner/shrinking.rs
++++ b/crates/ephyra/src/runner/shrinking.rs
+@@ -6,7 +6,6 @@
+ 
+ use std::{
+     fmt::Debug,
+-    ops::ControlFlow,
+     time::Instant,
+ };
+ 
+@@ -22,10 +21,7 @@ use {
+             Signature,
+             evaluate,
+         },
+-        panic::{
+-            self,
+-            PanicInfo,
+-        },
++        panic::PanicInfo,
+         stats::{
+             cap,
+             micros,
+@@ -218,23 +214,16 @@ where
+     }
+ 
+     /// The built-in shrinking driver over `shrinking.minimal`; candidates are
+-    /// observed `at` the failure. A shrinker that panics has no more
+-    /// candidates for that value.
++    /// observed `at` the failure.
+     pub(super) fn drive_shrink(&mut self, shrinking: &mut Shrinking<G::Value>, at: At) {
+         let generator = &self.generator;
+         let exec = &mut self.exec;
+         let signature = &shrinking.signature;
+-        let mut panicked = None;
+         let started = Instant::now();
+         let result = shrink::shrink(
+             &self.config.shrink,
+             shrinking.minimal.clone(),
+-            |value, visitor| {
+-                panic::catch(|| generator.shrink(value, visitor)).unwrap_or_else(|info| {
+-                    panicked.get_or_insert(info);
+-                    ControlFlow::Break(())
+-                })
+-            },
++            |value, visitor| generator.shrink(value, visitor),
+             |candidate| same_failure(exec.run(candidate, at, Some(signature)), signature),
+         );
+         self.report.prop_time += started.elapsed();
+@@ -242,12 +231,6 @@ where
+         shrinking.failure = result.failure;
+         shrinking.stats = result.stats;
+         shrinking.done = true;
+-        if let Some(info) = panicked {
+-            self.report.warn(
+-                "shrinker_panicked",
+-                format!("the shrinker {info}; a smaller counterexample may exist"),
+-            );
+-        }
+         if shrinking.stats.budget_exhausted {
+             self.report.warn(
+                 "shrink_budget",
+diff --git a/crates/ephyra/src/verify/check.rs b/crates/ephyra/src/verify/check.rs
+index 7bd1126..423cf3c 100644
+--- a/crates/ephyra/src/verify/check.rs
++++ b/crates/ephyra/src/verify/check.rs
+@@ -298,18 +298,6 @@ mod tests {
+         assert_eq!(report.counterexample().unwrap().debug, "\"\"");
+     }
+ 
+-    #[test]
+-    fn a_panicking_shrinker_fails() {
+-        let panics = gens::int(0u32..=1000)
+-            .with_shrink(|v, visit| visit(v.checked_sub(10).expect("ten or more")))
+-            .boxed();
+-        let report = __check_generator(&cfg(), panics.clone(), |_| true, no_metrics);
+-        assert!(problem(&report).contains("the shrinker panicked at "), "{report}");
+-        assert!(problem(&report).contains("ten or more"), "{report}");
+-        let report = __check_strategy(&cfg(), panics, |_| true, no_metrics);
+-        assert!(problem(&report).contains("the shrinker panicked at "), "{report}");
+-    }
+-
+     #[test]
+     fn non_finite_metrics_fail() {
+         let report = __check_generator(
+diff --git a/crates/ephyra/src/verify/mod.rs b/crates/ephyra/src/verify/mod.rs
+index 34e16c1..f4ffafa 100644
+--- a/crates/ephyra/src/verify/mod.rs
++++ b/crates/ephyra/src/verify/mod.rs
+@@ -49,7 +49,6 @@ use crate::{
+     runner::{
+         SAMPLE_CHARS,
+         cap,
+-        panic,
+     },
+     shrink::first_candidate,
+     source::mix,
+@@ -181,8 +180,7 @@ pub(crate) struct ShrinkRules<'a, T> {
+ /// The shrink candidates of `value` differ from it, stay in the domain
+ /// (`domain` says why a value is outside it) and follow `rules`, and the
+ /// first-candidate chain from it never revisits a value and settles within
+-/// `CHAIN` steps, all without a panic. Returns how many candidates were
+-/// checked.
++/// `CHAIN` steps. Returns how many candidates were checked.
+ pub(crate) fn shrinks<T: Debug>(
+     value: &T,
+     hooks: &BoxGen<T>,
+@@ -191,19 +189,14 @@ pub(crate) fn shrinks<T: Debug>(
+ ) -> Result<usize, String> {
+     let parent = format!("{value:?}");
+     let mut candidates = Vec::new();
+-    let visited = panic::catch(|| {
+-        hooks.shrink(value, &mut |candidate| {
+-            candidates.push(candidate);
+-            if rules.candidates.is_none_or(|limit| candidates.len() < limit) {
+-                ControlFlow::Continue(())
+-            } else {
+-                ControlFlow::Break(())
+-            }
+-        })
++    let _ = hooks.shrink(value, &mut |candidate| {
++        candidates.push(candidate);
++        if rules.candidates.is_none_or(|limit| candidates.len() < limit) {
++            ControlFlow::Continue(())
++        } else {
++            ControlFlow::Break(())
++        }
+     });
+-    if let Err(info) = visited {
+-        return Err(format!("the shrinker {info}"));
+-    }
+     let value_size = rules.size.map(|size| size(value));
+     for candidate in &candidates {
+         let rendered = format!("{candidate:?}");
+@@ -234,15 +227,8 @@ pub(crate) fn shrinks<T: Debug>(
+                 cap(rendered, SAMPLE_CHARS)
+             ));
+         }
+-        let next = match panic::catch(|| first_candidate(|visit| hooks.shrink(&current, visit))) {
+-            Ok(Some(next)) => next,
+-            Ok(None) => return Ok(checked),
+-            Err(info) => {
+-                return Err(format!(
+-                    "first-candidate shrink chain at {}: the shrinker {info}",
+-                    cap(rendered, SAMPLE_CHARS)
+-                ));
+-            },
++        let Some(next) = first_candidate(|visit| hooks.shrink(&current, visit)) else {
++            return Ok(checked);
+         };
+         if rules.chain_in_domain
+             && let Some(reason) = domain(&next)
+@@ -359,17 +345,6 @@ mod tests {
+         );
+     }
+ 
+-    #[test]
+-    fn a_panicking_shrinker_fails_the_shrinker_check() {
+-        let generator = gens::int(0u32..=1000)
+-            .with_shrink(|v, visitor| visitor(v.checked_sub(10).expect("ten or more")));
+-        let report = check_shrinker(&cfg(), generator, |_| true, |v| u64::from(*v));
+-        let message = report.failure.as_ref().unwrap().message.as_deref().unwrap();
+-        assert!(message.contains("the shrinker panicked at ") && message.contains("ten or more"));
+-        let smallest: u32 = report.counterexample().unwrap().debug.parse().unwrap();
+-        assert!(smallest < 10, "{report}");
+-    }
+-
+     #[test]
+     fn mutator_checker() {
+         assert!(check_mutator(&cfg(), gens::int(1u8..=6), |d| (1..=6).contains(d)).passed());

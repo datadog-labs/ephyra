@@ -1,0 +1,22 @@
+{
+ "id": "replay-of-a-generator-panic-passes",
+ "title": "Config::replay at a point where the generator panicked reports \"replay point passed\"",
+ "class": "report-replay",
+ "symptom": "non-reproducible",
+ "issue": 97,
+ "cause": "the replay treated a generator panic at the point as no failure, and the search went on",
+ "reported_by": "David R. MacIver (@DRMacIver), found by an LLM writing tests",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:report_contract",
+   "name": "what_a_failing_report_says_is_true"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "runner::tests::replaying_where_the_generator_panicked_aborts"
+  }
+ ]
+}

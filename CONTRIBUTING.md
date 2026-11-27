@@ -51,7 +51,10 @@ A bug fix comes with two tests and a record:
    (#46, #48 and two causes of #59); and
    [`crates/ephyra/tests/verdict_contract.rs`](crates/ephyra/tests/verdict_contract.rs),
    "a run's verdict matches what its inputs did", catches five runner bugs (#42, #102
-   and three false passes or aborts). Extend an existing
+   and three false passes or aborts); and
+   [`crates/ephyra/tests/report_contract.rs`](crates/ephyra/tests/report_contract.rs),
+   "what a failing report says is true", catches seven (#58, #97, #98, #100, #101, #113
+   and a panic that escaped shrinking). Extend an existing
    property when the bug is in its class, rather than adding a new one.
 2. **A narrow regression test** for the reported case, next to the code. It is fast and
    pins the exact input.

@@ -1,7 +1,7 @@
 diff --git a/crates/ephyra/src/gens/mod.rs b/crates/ephyra/src/gens/mod.rs
 --- a/crates/ephyra/src/gens/mod.rs
 +++ b/crates/ephyra/src/gens/mod.rs
-@@ -342,11 +342,6 @@
+@@ -345,11 +345,6 @@
              let mut source = Source::new(crate::source::mix(REGENERATE_SEED, index), 0);
              index += 1;
              let b2 = (self.f)(&a2).generate(&mut source);

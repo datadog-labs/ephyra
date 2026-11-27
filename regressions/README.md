@@ -45,15 +45,25 @@ touched and uncommitted changes are tested as they are. It builds in
 | [`panic-after-discard-aborts`](panic-after-discard-aborts) | | verdict-discard | (described in #76) | Bruno Volpato (#76) |
 | [`failures-n-never-ends`](failures-n-never-ends) | #42 | verdict-termination | Doğaç Eldenk | Bruno Volpato (#66) |
 | [`targeted-phase-ignores-discard-limit`](targeted-phase-ignores-discard-limit) | #102 | verdict-evidence | David R. MacIver | |
+| [`a-choice-runs-other-alternatives-hooks`](a-choice-runs-other-alternatives-hooks) | | shrink-support | (described in #70) | |
+| [`handled-panic-becomes-the-message`](handled-panic-becomes-the-message) | #58 | report-message | Doğaç Eldenk | |
+| [`resumed-payload-message-lost`](resumed-payload-message-lost) | #101 | report-message | David R. MacIver | |
+| [`two-panics-on-a-line-are-one-failure`](two-panics-on-a-line-are-one-failure) | #100 | report-failure-kept | David R. MacIver | |
+| [`replay-of-a-generator-panic-passes`](replay-of-a-generator-panic-passes) | #97 | report-replay | David R. MacIver | |
+| [`replay-reports-a-random-seed`](replay-reports-a-random-seed) | #98 | report-replay | David R. MacIver | |
+| [`checker-counterexample-outside-support`](checker-counterexample-outside-support) | #113 | report-counterexample | David R. MacIver | |
+| [`shrink-panic-escapes-check`](shrink-panic-escapes-check) | | report-survives | (described in #72) | Bruno Volpato (#72) |
 
-Three properties catch them all:
+Four properties catch them all:
 
 - [`every_builtin_generator_keeps_its_contract`](../crates/ephyra/tests/gen_contract.rs) catches
-  the generator bugs (the first five rows).
+  the generator bugs (the first five rows, and `a-choice-runs-other-alternatives-hooks`).
 - [`a_saved_failure_is_replayed_for_its_own_property_only`](../crates/ephyra/tests/replay_contract.rs)
   catches the replay bugs (the next four).
 - [`a_runs_verdict_matches_what_its_inputs_did`](../crates/ephyra/tests/verdict_contract.rs)
-  catches the verdict bugs (the last five).
+  catches the verdict bugs (the next five).
+- [`what_a_failing_report_says_is_true`](../crates/ephyra/tests/report_contract.rs) catches the
+  report bugs (the last seven).
 
 ## An entry
 
@@ -67,7 +77,7 @@ Three properties catch them all:
 |---|---|
 | `id` | the directory's name: what went wrong, in a few words |
 | `title` | one line, as an issue title |
-| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `generator-spread`, `shrink-support`, `shrink-progress`, `shrink-termination`, `replay-isolation`, `replay-fidelity`, `replay-durability`, `verdict-return-value`, `verdict-evidence`, `verdict-discard`, `verdict-termination`, ... |
+| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `generator-spread`, `shrink-support`, `shrink-progress`, `shrink-termination`, `replay-isolation`, `replay-fidelity`, `replay-durability`, `verdict-return-value`, `verdict-evidence`, `verdict-discard`, `verdict-termination`, `report-message`, `report-failure-kept`, `report-replay`, `report-counterexample`, `report-survives`, ... |
 | `symptom` | `wrong-result`, `soundness-false-pass`, `false-failure`, `crash`, `non-termination`, `data-loss`, ... |
 | `issue` | the GitHub issue, if there is one |
 | `cause` | the root cause, in a sentence |
