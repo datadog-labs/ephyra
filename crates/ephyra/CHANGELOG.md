@@ -23,6 +23,13 @@ All notable changes to `ephyra` are documented here. The format follows
   (floats), which hold for every value of the type.
 - `gens::dependent` mutates by mutating the first value and generating the
   second afresh from it; it no longer mutates the second value in place.
+- `ShrinkStats::rejected_not_smaller` and its field in the JSON report are
+  gone, with the rule they counted.
+- A checker's counterexample is shrunk only when that cannot run away with a
+  broken shrinker: `check_shrinker` shrinks under the caller's `size` (a
+  failing value larger than one already found is discarded), and the checks
+  behind `ephyra check` report the generated value that exposed the problem,
+  unshrunk.
 - A property that returns `Result<T, E>` now requires `T: Testable` and takes
   the verdict of the `Ok` value: `Ok(false)`, `Ok(TestResult::Fail(..))` and
   `Ok(Err(..))` fail, `Ok(TestResult::Discard(..))` discards. It used to pass on
@@ -57,8 +64,10 @@ All notable changes to `ephyra` are documented here. The format follows
   discards (#102).
 - The shrink driver skipped every candidate that printed longer than the
   failing input, so a bool never shrank; float shrinking stops at one. By
-  Bruno Volpato (#71). Together with the reordered specials, `any::<f64>()`
-  no longer offers 1.0 for 0.5 (#92).
+  Bruno Volpato (#71). The generator alone now decides what is simpler: the
+  driver has no rule on a candidate's rendering at all, and the step and time
+  budgets end every descent. Together with the reordered specials,
+  `any::<f64>()` no longer offers 1.0 for 0.5 (#92).
 - A panic in user code while a failure was shrunk escaped `check` and lost
   the failure. By Bruno Volpato (#72).
 - A failure raised with `resume_unwind` was reported with an earlier handled

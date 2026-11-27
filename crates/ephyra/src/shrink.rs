@@ -29,13 +29,6 @@ use crate::{
     },
 };
 
-/// A candidate may render this many bytes longer than the failing input, or
-/// eight times as long if that is more. The simpler value can be the longer
-/// one (`false` after `true`), also in every item of a vector. A broken
-/// shrinker, such as one that doubles a vector, grows past this, and it would
-/// fill the memory before the step budget ends.
-const GROWTH: usize = 1024;
-
 /// What the oracle returns for a candidate that fails the same way: the
 /// failure's message and location.
 pub(crate) type SameFailure = Option<(Option<String>, Option<Location>)>;
@@ -73,9 +66,11 @@ pub(crate) fn collect_candidates<T>(
 }
 
 /// Shrink `initial`. `candidates` proposes simpler values; `fails` runs the
-/// property and reports whether the candidate fails the same way. Values are
-/// compared by their full `Debug` rendering: seen before, or grown past
-/// [`GROWTH`], and a candidate is skipped.
+/// property and reports whether the candidate fails the same way. A candidate
+/// whose full `Debug` rendering was seen before is skipped. The generator
+/// alone decides what is simpler: its shrinker's candidates must be strictly
+/// smaller, which `check_shrinker` checks; the step and time budgets end every
+/// descent.
 pub(crate) fn shrink<T: Clone + Debug>(
     config: &ShrinkConfig,
     initial: T,
@@ -89,7 +84,6 @@ pub(crate) fn shrink<T: Clone + Debug>(
 
     let mut current = initial;
     let current_debug = format!("{current:?}");
-    let max_len = (current_debug.len() * 8).max(current_debug.len() + GROWTH);
     let mut seen: HashSet<u64> = HashSet::new();
     seen.insert(hasher.hash_one(&current_debug));
     let mut failure: SameFailure = None;
@@ -108,10 +102,6 @@ pub(crate) fn shrink<T: Clone + Debug>(
             let debug = format!("{candidate:?}");
             if !seen.insert(hasher.hash_one(&debug)) {
                 stats.rejected_seen += 1;
-                return ControlFlow::Continue(());
-            }
-            if debug.len() > max_len {
-                stats.rejected_not_smaller += 1;
                 return ControlFlow::Continue(());
             }
             stats.steps += 1;
@@ -170,28 +160,6 @@ mod tests {
         );
         assert_eq!(shrunk.value, 10_005, "every step of the budget is taken");
         assert!(shrunk.stats.budget_exhausted);
-
-        // Doubling runs into the bound on the rendering long before that.
-        let shrunk = shrink(
-            &ShrinkConfig::default(),
-            vec![1u8],
-            |v, visitor| visitor(v.repeat(2)),
-            |_| Some((None, None)),
-        );
-        // 256 elements render in 768 bytes, 512 in 1536, past 3 + 1024.
-        assert_eq!(shrunk.value.len(), 256);
-        assert_eq!(shrunk.stats.rejected_not_smaller, 1);
-        assert!(!shrunk.stats.budget_exhausted);
-
-        // A long failing input may become eight times as long.
-        let shrunk = shrink(
-            &ShrinkConfig::default(),
-            vec![1u8; 2000],
-            |v, visitor| visitor(v.repeat(2)),
-            |_| Some((None, None)),
-        );
-        assert_eq!(shrunk.value.len(), 16_000);
-        assert_eq!(shrunk.stats.rejected_not_smaller, 1);
     }
 
     #[test]

@@ -1,9 +1,9 @@
 diff --git a/crates/ephyra/src/verify/mod.rs b/crates/ephyra/src/verify/mod.rs
 --- a/crates/ephyra/src/verify/mod.rs
 +++ b/crates/ephyra/src/verify/mod.rs
-@@ -110,12 +110,6 @@
-     let shared = Suspect(hooks.clone());
-     let config = authored_by(config, &support);
+@@ -111,12 +111,6 @@
+     // would otherwise take the counterexample along.
+     let smallest = Cell::new(u64::MAX);
      check(&config, shared, move |value| {
 -        // Not a test of the shrinker, and so never the counterexample: a value outside
 -        // the support. Shrinking the failure with the shrinker under test would otherwise
@@ -11,10 +11,10 @@ diff --git a/crates/ephyra/src/verify/mod.rs b/crates/ephyra/src/verify/mod.rs
 -        if !support(&value) {
 -            return TestResult::discard("outside the support");
 -        }
-         let rules = ShrinkRules { candidates: None, size: Some(&size), chain_in_domain: false };
-         match shrinks(&value, &hooks, &mut |v| outside(&support, v), &rules) {
-             Ok(checked) => {
-@@ -147,10 +141,6 @@
+         if size(&value) > smallest.get() {
+             return TestResult::discard("larger than a failure already found");
+         }
+@@ -154,10 +148,6 @@
      let counter = Cell::new(0u64);
      let config = authored_by(config, &support);
      let mut report = check(&config, shared, move |value| {

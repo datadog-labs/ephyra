@@ -42,10 +42,6 @@ use crate::{
     check,
     classify,
     gens::BoxGen,
-    hooks::{
-        ShrinkFlow,
-        ShrinkVisitor,
-    },
     runner::{
         SAMPLE_CHARS,
         cap,
@@ -107,8 +103,13 @@ where
     G::Value: Clone + Debug + 'static,
 {
     let hooks = BoxGen::new(generator);
-    let shared = Suspect(hooks.clone());
+    let shared = hooks.clone();
     let config = authored_by(config, &support);
+    // The counterexample is shrunk with the shrinker under test, so it may only
+    // get smaller under the caller's `size`: a failing value larger than the
+    // smallest failure so far is discarded. A shrinker that grows the value
+    // would otherwise take the counterexample along.
+    let smallest = Cell::new(u64::MAX);
     check(&config, shared, move |value| {
         // Not a test of the shrinker, and so never the counterexample: a value outside
         // the support. Shrinking the failure with the shrinker under test would otherwise
@@ -116,13 +117,19 @@ where
         if !support(&value) {
             return TestResult::discard("outside the support");
         }
+        if size(&value) > smallest.get() {
+            return TestResult::discard("larger than a failure already found");
+        }
         let rules = ShrinkRules { candidates: None, size: Some(&size), chain_in_domain: false };
         match shrinks(&value, &hooks, &mut |v| outside(&support, v), &rules) {
             Ok(checked) => {
                 classify(checked == 0, "no shrink candidates");
                 TestResult::Pass
             },
-            Err(problem) => TestResult::fail(problem),
+            Err(problem) => {
+                smallest.set(smallest.get().min(size(&value)));
+                TestResult::fail(problem)
+            },
         }
     })
 }
@@ -270,33 +277,6 @@ pub(crate) fn shrinks<T: Debug>(
     ))
 }
 
-/// A generator whose shrinker is under test, for the run that tests it. The
-/// same shrinker proposes the smaller counterexamples, so a candidate that
-/// renders longer is left out: a shrinker that grows the value would take the
-/// counterexample along.
-struct Suspect<T>(BoxGen<T>);
-
-impl<T: Debug> Gen for Suspect<T> {
-    type Value = T;
-
-    fn generate(&self, g: &mut Source) -> T {
-        self.0.generate(g)
-    }
-
-    fn shrink(&self, value: &T, visitor: &mut ShrinkVisitor<'_, T>) -> ShrinkFlow {
-        let longest = format!("{value:?}").len();
-        self.0.shrink(value, &mut |candidate| {
-            if format!("{candidate:?}").len() > longest {
-                return ControlFlow::Continue(());
-            }
-            visitor(candidate)
-        })
-    }
-
-    fn mutate(&self, value: &T, g: &mut Source) -> T {
-        self.0.mutate(value, g)
-    }
-}
 
 /// A mutant of `value` drawn from `source` without a discard and inside the
 /// domain (`domain` says why a value is outside it).
