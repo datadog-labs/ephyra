@@ -1,0 +1,22 @@
+{
+ "id": "resumed-payload-message-lost",
+ "title": "Panic messages read from the payload are reported as <non-string panic payload>",
+ "class": "report-message",
+ "symptom": "misleading-report",
+ "issue": 101,
+ "cause": "payload_message(&payload) downcast the Box itself, not its contents",
+ "reported_by": "David R. MacIver (@DRMacIver), found by an LLM writing tests",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:report_contract",
+   "name": "what_a_failing_report_says_is_true"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "runner::panic::tests::a_resumed_payload_gives_its_own_message"
+  }
+ ]
+}

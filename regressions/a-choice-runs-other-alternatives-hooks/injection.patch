@@ -1,0 +1,25 @@
+diff --git a/crates/ephyra/src/gens/primitives.rs b/crates/ephyra/src/gens/primitives.rs
+--- a/crates/ephyra/src/gens/primitives.rs
++++ b/crates/ephyra/src/gens/primitives.rs
+@@ -649,10 +649,17 @@
+         chosen.generate(g)
+     }
+ 
+-    // No shrinker, and the default mutation (a fresh value): an alternative's
+-    // hooks hold only for the values that alternative produces, and a value
+-    // does not say which one did. Running them on another's value gave values
+-    // no alternative can produce (EPH-012).
++    fn shrink(&self, value: &T, visitor: &mut ShrinkVisitor<'_, T>) -> ShrinkFlow {
++        for (_, alternative) in self.alternatives.iter().filter(|(weight, _)| *weight > 0) {
++            alternative.shrink(value, visitor)?;
++        }
++        ControlFlow::Continue(())
++    }
++
++    fn mutate(&self, value: &T, g: &mut Source) -> T {
++        let alt = g.weighted(&self.alternatives).clone();
++        alt.mutate(value, g)
++    }
+ }
+ 
+ impl<T> Clone for Frequency<T> {

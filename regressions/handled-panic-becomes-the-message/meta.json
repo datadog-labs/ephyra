@@ -1,0 +1,22 @@
+{
+ "id": "handled-panic-becomes-the-message",
+ "title": "A failure raised with resume_unwind is reported with an earlier handled panic's message, marked FLAKY and not remembered",
+ "class": "report-message",
+ "symptom": "misleading-report",
+ "issue": 58,
+ "cause": "the panic hook's slot kept the last panic on the thread, including one the code had caught, and catch took it for a failure raised with resume_unwind, which skips the hook",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:report_contract",
+   "name": "what_a_failing_report_says_is_true"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "runner::panic::tests::a_handled_panic_does_not_become_a_later_failures_message"
+  }
+ ]
+}

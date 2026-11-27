@@ -1,7 +1,7 @@
 diff --git a/crates/ephyra/src/arbitrary.rs b/crates/ephyra/src/arbitrary.rs
 --- a/crates/ephyra/src/arbitrary.rs
 +++ b/crates/ephyra/src/arbitrary.rs
-@@ -69,25 +69,21 @@
+@@ -73,25 +73,21 @@
      ($($t:ident: $unit:ident, $bits:ident);*) => {$(
          impl Arbitrary for $t {
              fn arbitrary() -> BoxGen<Self> {
@@ -34,4 +34,15 @@ diff --git a/crates/ephyra/src/arbitrary.rs b/crates/ephyra/src/arbitrary.rs
 +                    $t::from_bits(1), // the smallest subnormal
                  ];
                  const FRACTIONS: [$t; 4] = [0.0, 0.5, 0.25, 0.1];
-                 gens::frequency(vec![
+                 // Special values shrink to the plain ones at the start of the
+diff --git a/crates/ephyra/src/hooks.rs b/crates/ephyra/src/hooks.rs
+--- a/crates/ephyra/src/hooks.rs
++++ b/crates/ephyra/src/hooks.rs
+@@ -123,6 +123,7 @@
+             emit(value / 2f64.powi(step))?;
+             step /= 2;
+         }
++        emit(value / 2.0)?;
+     }
+     ControlFlow::Continue(())
+ }

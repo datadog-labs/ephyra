@@ -91,8 +91,6 @@ pub struct ShrinkStats {
     pub steps: u64,
     /// Candidates accepted.
     pub accepted: u64,
-    /// Candidates skipped because they rendered longer than the current best.
-    pub rejected_not_smaller: u64,
     /// Candidates skipped because they had been seen before.
     pub rejected_seen: u64,
     /// Whether the step or time budget stopped shrinking early.

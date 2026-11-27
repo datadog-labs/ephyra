@@ -122,6 +122,21 @@ struct Progress {
     outside: Cell<bool>,
 }
 
+/// The generator under test, without its shrinker: see [`run_check`].
+struct Unshrunk<T>(BoxGen<T>);
+
+impl<T> Gen for Unshrunk<T> {
+    type Value = T;
+
+    fn generate(&self, g: &mut Source) -> T {
+        self.0.generate(g)
+    }
+
+    fn mutate(&self, value: &T, g: &mut Source) -> T {
+        self.0.mutate(value, g)
+    }
+}
+
 fn run_check<G, D, M>(
     config: &Config,
     generator: G,
@@ -135,8 +150,12 @@ where
     D: FnMut(&G::Value) -> Option<String>,
     M: Fn(&G::Value, usize) -> Vec<(&'static str, f64)>,
 {
-    let shared = BoxGen::new(generator);
-    let hooks = shared.clone();
+    let hooks = BoxGen::new(generator);
+    // Not shrunk: the only shrinker at hand is the one under test, and with no
+    // measure of size here, a broken one (one that grows the value) would take
+    // the counterexample along. The report shows the generated value that
+    // exposed the problem.
+    let shared = Unshrunk(hooks.clone());
     let progress = Rc::new(Progress { drawing: Cell::new(true), ..Progress::default() });
     let seen = progress.clone();
     let filter_max_attempts = config.filter_max_attempts;
@@ -246,22 +265,23 @@ mod tests {
     }
 
     #[test]
-    fn generated_values_outside_the_predicate_fail_and_shrink_among_themselves() {
+    fn generated_values_outside_the_predicate_fail_unshrunk() {
         let report = __check_generator(&cfg(), gens::int(5u8..=9), |v| *v < 5, no_metrics);
         assert!(problem(&report).contains("generated value: the predicate returned false"));
-        assert_eq!(report.counterexample().unwrap().debug, "5");
+        // the generated value that exposed it: the hooks under test do not shrink it
+        let shown: u8 = report.counterexample().unwrap().debug.parse().unwrap();
+        assert!((5..=9).contains(&shown));
     }
 
     #[test]
-    fn hooks_that_leave_the_predicate_fail_and_shrink_inside_it() {
+    fn hooks_that_leave_the_predicate_fail() {
         let at_least_one = |v: &u8| *v >= 1;
         let candidate = gens::constant(2u8).with_shrink(|_, visit| visit(0));
         let report = __check_generator(&cfg(), candidate, at_least_one, no_metrics);
         assert!(problem(&report).contains("shrink candidate 0"), "{report}");
         assert_eq!(report.counterexample().unwrap().debug, "2");
 
-        // 3's own candidate is fine; its chain reaches 0 through 2. Shrinking
-        // then finds 2, whose candidate is 0 itself.
+        // 3's own candidate is fine; its chain reaches 0 through 2.
         let chain = gens::constant(3u8)
             .with_shrink(|v, visit| {
                 match v {
@@ -271,13 +291,9 @@ mod tests {
                 }
             })
             .boxed();
-        let mut unshrunk = cfg();
-        unshrunk.shrink.enabled = false;
-        let report = __check_generator(&unshrunk, chain.clone(), |v| *v >= 2, no_metrics);
-        assert!(problem(&report).contains("shrink chain step 0"), "{report}");
         let report = __check_generator(&cfg(), chain, |v| *v >= 2, no_metrics);
-        assert!(problem(&report).contains("shrink candidate 0"), "{report}");
-        assert_eq!(report.counterexample().unwrap().debug, "2");
+        assert!(problem(&report).contains("shrink chain step 0"), "{report}");
+        assert_eq!(report.counterexample().unwrap().debug, "3");
 
         let mutant = gens::constant(2u8).with_mutate(|_, _| 0);
         let report = __check_generator(&cfg(), mutant, at_least_one, no_metrics);
@@ -289,6 +305,24 @@ mod tests {
         let cycle = gens::constant(1u8).with_shrink(|v, visit| visit(if *v == 1 { 2 } else { 1 }));
         let report = __check_generator(&cfg(), cycle, |_| true, no_metrics);
         assert!(problem(&report).contains("revisits"), "{report}");
+
+        // A shrinker that grows the value does not move the counterexample.
+        let grows = gens::constant(String::new()).with_shrink(|s, visit| visit(format!("{s}a")));
+        let report = __check_generator(&cfg(), grows, |_| true, no_metrics);
+        assert!(problem(&report).contains("did not settle"), "{report}");
+        assert_eq!(report.counterexample().unwrap().debug, "\"\"");
+    }
+
+    #[test]
+    fn a_panicking_shrinker_fails() {
+        let panics = gens::int(0u32..=1000)
+            .with_shrink(|v, visit| visit(v.checked_sub(10).expect("ten or more")))
+            .boxed();
+        let report = __check_generator(&cfg(), panics.clone(), |_| true, no_metrics);
+        assert!(problem(&report).contains("the shrinker panicked at "), "{report}");
+        assert!(problem(&report).contains("ten or more"), "{report}");
+        let report = __check_strategy(&cfg(), panics, |_| true, no_metrics);
+        assert!(problem(&report).contains("the shrinker panicked at "), "{report}");
     }
 
     #[test]

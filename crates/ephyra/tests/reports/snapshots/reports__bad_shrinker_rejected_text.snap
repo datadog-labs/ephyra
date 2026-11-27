@@ -2,10 +2,10 @@
 source: crates/ephyra/tests/reports/main.rs
 expression: report.to_string()
 ---
-ephyra: FAILED, property failed: shrink candidate 10: not smaller (size 10 >= 9)
-  counterexample: 9
+ephyra: FAILED, property failed: shrink candidate 1: not smaller (size 1 >= 0)
+  counterexample: 0
   original:       10 (size 0, iteration 0)
-  shrinking: 99 of 99 candidates accepted in [time]
+  shrinking: 1 of 3 candidates accepted in [time]
   after 0 passing tests (0 distinct, 0 discarded) in [time]
   reproduce: EPHYRA_REPLAY=24301:0
   or rerun the whole search: Config::default().seed(24301)

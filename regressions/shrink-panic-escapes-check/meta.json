@@ -1,0 +1,22 @@
+{
+ "id": "shrink-panic-escapes-check",
+ "title": "A panic in user code while a failure is shrunk escapes check and loses the failure",
+ "class": "report-survives",
+ "symptom": "crash",
+ "issue": null,
+ "cause": "the shrink driver called the generator's shrinker (and iso, filter and support code on candidates) without a catch",
+ "reported_by": "described in #72 by Bruno Volpato (@bvolpato-dd)",
+ "fixed_by": "Bruno Volpato (@bvolpato-dd), #72",
+ "oracles": [
+  {
+   "target": "test:report_contract",
+   "name": "what_a_failing_report_says_is_true"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:shrinking",
+   "name": "panics_in_combinators_during_shrinking_are_survived"
+  }
+ ]
+}

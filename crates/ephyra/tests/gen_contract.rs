@@ -308,6 +308,18 @@ const CATALOGUE: &[Entry] = &[
             s,
         )
     }),
+    ("one_of, structured alternatives", |g, s| {
+        // a tag and a length that go together: a hook that mixes the parts of two
+        // alternatives gives a value that neither can make
+        let (a, b) = (g.int(1usize..=4), g.int(5usize..=8));
+        let alternative = |tag: u8, n: usize| {
+            (gens::constant(tag), gens::vec(gens::int(0u8..=9)).len(n..=n)).boxed()
+        };
+        let choice = gens::one_of(vec![alternative(4, a), alternative(6, b)]);
+        let support =
+            |(t, v): &(u8, Vec<u8>)| (*t == 4 && v.len() == a) || (*t == 6 && v.len() == b);
+        keeps_contract(&choice, support, &[(4, vec![0; a]), (6, vec![9; b])], s)
+    }),
     ("dependent, inner filter", |g, s| {
         // a vector of at least `n` elements: the filter can run out of attempts at a small size
         let top = g.int(1usize..=6);

@@ -16,6 +16,7 @@ use std::{
         Cell,
         RefCell,
     },
+    fmt,
     panic::{
         self,
         AssertUnwindSafe,
@@ -30,6 +31,15 @@ use crate::report::Location;
 pub(crate) struct PanicInfo {
     pub message: String,
     pub location: Option<Location>,
+}
+
+impl fmt::Display for PanicInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.location {
+            Some(at) => write!(f, "panicked at {at}: {}", self.message),
+            None => write!(f, "panicked: {}", self.message),
+        }
+    }
 }
 
 thread_local! {
@@ -62,16 +72,29 @@ fn install() {
 /// location. Nested calls are fine.
 pub(crate) fn catch<R>(f: impl FnOnce() -> R) -> Result<R, PanicInfo> {
     install();
+    // A panic recorded before this call belongs to someone else (#58).
+    SLOT.with(|slot| slot.borrow_mut().take());
     DEPTH.with(|d| d.set(d.get() + 1));
     let result = panic::catch_unwind(AssertUnwindSafe(f));
     DEPTH.with(|d| d.set(d.get() - 1));
     match result {
-        Ok(value) => Ok(value),
+        Ok(value) => {
+            SLOT.with(|slot| slot.borrow_mut().take());
+            Ok(value)
+        },
         Err(payload) => {
+            // The box's contents, not the box: `&payload` would downcast the `Box`
+            // itself and never match a string (#101).
+            let message = payload_message(&*payload);
             let captured = SLOT.with(|slot| slot.borrow_mut().take());
-            Err(captured.unwrap_or_else(|| {
-                PanicInfo { message: payload_message(&payload), location: None }
-            }))
+            // The hook saw the last panic on this thread, but not one raised with
+            // `resume_unwind` (which skips it), for example a worker's panic passed on
+            // after a panic the code caught itself: that recorded panic is not this one
+            // (#58). Its location, then, is unknown: it was on another thread.
+            Err(match captured {
+                Some(info) if info.message == message => info,
+                _ => PanicInfo { message, location: None },
+            })
         },
     }
 }
@@ -98,6 +121,32 @@ mod tests {
         assert!(location.file.ends_with("panic.rs"), "{}", location.file);
         assert!(location.line > 0);
         assert_eq!(catch(|| 7), Ok(7));
+    }
+
+    #[test]
+    fn a_resumed_payload_gives_its_own_message() {
+        // #101: the box was downcast instead of its contents.
+        let err = catch(|| -> () { panic::resume_unwind(Box::new("a str payload")) }).unwrap_err();
+        assert_eq!(err.message, "a str payload");
+        let err = catch(|| -> () { panic::resume_unwind(Box::new(String::from("a String"))) });
+        assert_eq!(err.unwrap_err().message, "a String");
+    }
+
+    #[test]
+    fn a_handled_panic_does_not_become_a_later_failures_message() {
+        // #58: the slot kept a panic the code had caught, and a failure through
+        // `resume_unwind` (which skips the hook) was reported with it.
+        let err = catch(|| -> () {
+            assert!(panic::catch_unwind(|| panic!("handled")).is_err());
+            panic::resume_unwind(Box::new("the worker failed"))
+        })
+        .unwrap_err();
+        assert_eq!(err.message, "the worker failed");
+        assert_eq!(err.location, None);
+        // nor across calls
+        let _ = catch(|| assert!(panic::catch_unwind(|| panic!("earlier")).is_err()));
+        let err = catch(|| -> () { panic::resume_unwind(Box::new("later")) }).unwrap_err();
+        assert_eq!(err.message, "later");
     }
 
     #[test]

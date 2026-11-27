@@ -1,0 +1,12 @@
+diff --git a/crates/ephyra/src/runner/exec.rs b/crates/ephyra/src/runner/exec.rs
+--- a/crates/ephyra/src/runner/exec.rs
++++ b/crates/ephyra/src/runner/exec.rs
+@@ -587,7 +587,7 @@
+             Err(info) => {
+                 (
+                     FailureKind::Panic,
+-                    info.location.as_ref().map(|l| (l.file.clone(), l.line, l.column)),
++                    info.location.as_ref().map(|l| (l.file.clone(), l.line, 0)),
+                 )
+             },
+         };

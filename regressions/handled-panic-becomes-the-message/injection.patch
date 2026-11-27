@@ -1,0 +1,33 @@
+diff --git a/crates/ephyra/src/runner/panic.rs b/crates/ephyra/src/runner/panic.rs
+--- a/crates/ephyra/src/runner/panic.rs
++++ b/crates/ephyra/src/runner/panic.rs
+@@ -72,16 +72,11 @@
+ /// location. Nested calls are fine.
+ pub(crate) fn catch<R>(f: impl FnOnce() -> R) -> Result<R, PanicInfo> {
+     install();
+-    // A panic recorded before this call belongs to someone else (#58).
+-    SLOT.with(|slot| slot.borrow_mut().take());
+     DEPTH.with(|d| d.set(d.get() + 1));
+     let result = panic::catch_unwind(AssertUnwindSafe(f));
+     DEPTH.with(|d| d.set(d.get() - 1));
+     match result {
+-        Ok(value) => {
+-            SLOT.with(|slot| slot.borrow_mut().take());
+-            Ok(value)
+-        },
++        Ok(value) => Ok(value),
+         Err(payload) => {
+             // The box's contents, not the box: `&payload` would downcast the `Box`
+             // itself and never match a string (#101).
+@@ -91,10 +86,7 @@
+             // `resume_unwind` (which skips it), for example a worker's panic passed on
+             // after a panic the code caught itself: that recorded panic is not this one
+             // (#58). Its location, then, is unknown: it was on another thread.
+-            Err(match captured {
+-                Some(info) if info.message == message => info,
+-                _ => PanicInfo { message, location: None },
+-            })
++            Err(captured.unwrap_or(PanicInfo { message, location: None }))
+         },
+     }
+ }

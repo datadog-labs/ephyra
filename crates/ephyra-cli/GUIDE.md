@@ -134,7 +134,7 @@ with coverage, reports and a counterexample when one fails. Per input:
 - The first 64 shrink candidates differ from the value and stay valid
   (satisfy the predicate, or are not discarded by the property).
 - Following first candidates from the value stays valid, never revisits a
-  value, and settles within 1000 steps.
+  value, and settles within 1000 steps. The shrinker never panics.
 - Four mutants are drawn without a discard and stay valid.
 - Every metric is finite; each is reported with its distribution.
 
@@ -259,7 +259,7 @@ let _string = gens::string_len(gens::char(), 0..=32);
 let _by_size = gens::sized(|size| gens::vec(gens::int(0u8..=255)).len(0..=size));
 let _choice: BoxGen<u8> = gens::one_of(vec![
     gens::constant(0u8).boxed(), gens::int(1u8..=255).boxed(),
-]).boxed(); // one_of returns Frequency, not BoxGen
+]).boxed(); // one_of returns Frequency, not BoxGen; a choice has no shrinker (use an enum)
 let _weighted = gens::frequency(vec![
     (1, gens::constant(0u8).boxed()), (3, gens::int(1u8..=255).boxed()),
 ]);

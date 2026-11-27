@@ -4,10 +4,11 @@
 //! The shrink driver: greedy descent over a generator's candidates.
 //!
 //! Starting from the failing input, ask the generator for candidates, take
-//! the first one that still fails with the same signature and is not
-//! rendered longer than the current best, and repeat until no candidate is
-//! accepted or the budget runs out. A seen-set of `Debug` renderings stops
-//! cycles; the step and time budget bound the wall clock.
+//! the first one that still fails with the same signature, and repeat until
+//! no candidate is accepted or the budget runs out. The generator alone
+//! decides what is simpler. A seen-set of `Debug` renderings stops cycles,
+//! the step and time budget bound the wall clock, and candidates that render
+//! far longer than the failing input are skipped.
 
 use std::{
     collections::HashSet,
@@ -65,9 +66,11 @@ pub(crate) fn collect_candidates<T>(
 }
 
 /// Shrink `initial`. `candidates` proposes simpler values; `fails` runs the
-/// property and reports whether the candidate fails the same way. Values are
-/// compared by their full `Debug` rendering: seen before, or longer than the
-/// current best, and a candidate is skipped.
+/// property and reports whether the candidate fails the same way. A candidate
+/// whose full `Debug` rendering was seen before is skipped. The generator
+/// alone decides what is simpler: its shrinker's candidates must be strictly
+/// smaller, which `check_shrinker` checks; the step and time budgets end every
+/// descent.
 pub(crate) fn shrink<T: Clone + Debug>(
     config: &ShrinkConfig,
     initial: T,
@@ -81,7 +84,6 @@ pub(crate) fn shrink<T: Clone + Debug>(
 
     let mut current = initial;
     let current_debug = format!("{current:?}");
-    let mut current_len = current_debug.len();
     let mut seen: HashSet<u64> = HashSet::new();
     seen.insert(hasher.hash_one(&current_debug));
     let mut failure: SameFailure = None;
@@ -98,27 +100,21 @@ pub(crate) fn shrink<T: Clone + Debug>(
                 return ControlFlow::Break(());
             }
             let debug = format!("{candidate:?}");
-            let len = debug.len();
             if !seen.insert(hasher.hash_one(&debug)) {
                 stats.rejected_seen += 1;
-                return ControlFlow::Continue(());
-            }
-            if len > current_len {
-                stats.rejected_not_smaller += 1;
                 return ControlFlow::Continue(());
             }
             stats.steps += 1;
             if let Some(details) = fails(candidate.clone()) {
                 stats.accepted += 1;
-                accepted = Some((candidate, details, len));
+                accepted = Some((candidate, details));
                 return ControlFlow::Break(());
             }
             ControlFlow::Continue(())
         });
-        if let Some((candidate, details, len)) = accepted {
+        if let Some((candidate, details)) = accepted {
             failure = Some(details);
             current = candidate;
-            current_len = len;
             continue 'outer;
         }
         break;
@@ -162,9 +158,8 @@ mod tests {
             |v, visitor| visitor(v + 1),
             |_| Some((None, None)),
         );
-        // 6..9 are accepted (same length); 10 is longer and rejected.
-        assert_eq!(shrunk.value, 9);
-        assert_eq!(shrunk.stats.rejected_not_smaller, 1);
+        assert_eq!(shrunk.value, 10_005, "every step of the budget is taken");
+        assert!(shrunk.stats.budget_exhausted);
     }
 
     #[test]

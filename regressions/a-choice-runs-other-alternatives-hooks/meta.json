@@ -1,0 +1,22 @@
+{
+ "id": "a-choice-runs-other-alternatives-hooks",
+ "title": "one_of and frequency run an alternative's hooks on another alternative's values, giving values neither can produce",
+ "class": "shrink-support",
+ "symptom": "false-failure",
+ "issue": null,
+ "cause": "a choice's value does not say which alternative produced it, so the choice ran every alternative's shrinker, and a random alternative's mutator, on every value; a hook that changes one part of a tuple, vec or option mixes two alternatives",
+ "reported_by": "described in #70 by Bruno Volpato (@bvolpato-dd)",
+ "fixed_by": "this pull request: a choice is a combinator, with no shrinker and mutation by fresh generation",
+ "oracles": [
+  {
+   "target": "test:gen_contract",
+   "name": "every_builtin_generator_keeps_its_contract"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:shrinking",
+   "name": "a_choice_keeps_its_values_inside_its_alternatives"
+  }
+ ]
+}

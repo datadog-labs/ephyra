@@ -1,0 +1,27 @@
+diff --git a/crates/ephyra/src/verify/mod.rs b/crates/ephyra/src/verify/mod.rs
+--- a/crates/ephyra/src/verify/mod.rs
++++ b/crates/ephyra/src/verify/mod.rs
+@@ -111,12 +111,6 @@
+     // would otherwise take the counterexample along.
+     let smallest = Cell::new(u64::MAX);
+     check(&config, shared, move |value| {
+-        // Not a test of the shrinker, and so never the counterexample: a value outside
+-        // the support. Shrinking the failure with the shrinker under test would otherwise
+-        // report one (#113).
+-        if !support(&value) {
+-            return TestResult::discard("outside the support");
+-        }
+         if size(&value) > smallest.get() {
+             return TestResult::discard("larger than a failure already found");
+         }
+@@ -154,10 +148,6 @@
+     let counter = Cell::new(0u64);
+     let config = authored_by(config, &support);
+     let mut report = check(&config, shared, move |value| {
+-        // As in check_shrinker: a value outside the support is no test of the mutator (#113).
+-        if !support(&value) {
+-            return TestResult::discard("outside the support");
+-        }
+         let index = counter.get();
+         counter.set(index + 1);
+         let source = Source::new(mix(base, index), max_size);

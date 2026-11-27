@@ -355,23 +355,22 @@ where
         (self.f)(a).shrink(b, &mut |b2| visitor((a.clone(), b2)))
     }
 
-    /// Mutate the second value under its generator, or the first value with
-    /// the second regenerated from the new generator, chosen by a coin flip.
-    fn mutate(&self, (a, b): &Self::Value, g: &mut Source) -> Self::Value {
-        if g.bool() {
-            (a.clone(), (self.f)(a).mutate(b, g))
-        } else {
-            let a2 = self.outer.mutate(a, g);
-            let b2 = (self.f)(&a2).generate(g);
-            (a2, b2)
-        }
+    /// Mutate the first value and generate the second afresh from the new
+    /// first value's generator. The second value is never mutated in place:
+    /// that is valid only if it came from `f(a)` for this very `a` and `f` is
+    /// pure, and a fresh one always is.
+    fn mutate(&self, (a, _): &Self::Value, g: &mut Source) -> Self::Value {
+        let a2 = self.outer.mutate(a, g);
+        let b2 = (self.f)(&a2).generate(g);
+        (a2, b2)
     }
 }
 
 /// A pair whose second value is drawn from a generator chosen by the first:
 /// `f(&a)` returns the generator for `b`. Both values are kept, so the pair
-/// shrinks and mutates within the joint support: `b` under `f(&a)`, and `a`
-/// under `outer` with `b` regenerated from `f(&a')`. This is how generation
+/// stays within the joint support: it shrinks `b` under `f(&a)`, and `a` under
+/// `outer` with `b` regenerated from `f(&a')`; it mutates `a` and regenerates
+/// `b`. This is how generation
 /// depends on computation without losing the hooks that
 /// [`and_then`](GenExt::and_then) drops.
 ///

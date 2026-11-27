@@ -641,7 +641,6 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
     "shrink": {
       "steps": 3,
       "accepted": 0,
-      "rejected_not_smaller": 0,
       "rejected_seen": 0,
       "budget_exhausted": false,
       "duration": "[duration]"
@@ -674,7 +673,6 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
         "shrink": {
           "steps": 3,
           "accepted": 0,
-          "rejected_not_smaller": 0,
           "rejected_seen": 0,
           "budget_exhausted": false,
           "duration": "[duration]"
@@ -703,7 +701,6 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
         "shrink": {
           "steps": 4,
           "accepted": 0,
-          "rejected_not_smaller": 0,
           "rejected_seen": 0,
           "budget_exhausted": false,
           "duration": "[duration]"
@@ -735,7 +732,6 @@ expression: "serde_json::to_string_pretty(&report).expect(\"report serializes\")
         "shrink": {
           "steps": 42,
           "accepted": 5,
-          "rejected_not_smaller": 0,
           "rejected_seen": 47,
           "budget_exhausted": false,
           "duration": "[duration]"

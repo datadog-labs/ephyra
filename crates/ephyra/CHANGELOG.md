@@ -7,6 +7,29 @@ All notable changes to `ephyra` are documented here. The format follows
 
 ### Changed
 
+- `gens::one_of` and `gens::frequency` are combinators, like `map`: a value
+  does not say which alternative produced it, so a choice has no shrinker,
+  and mutation generates a fresh value from a fresh choice. They used to run
+  every alternative's shrinker, and a random alternative's mutator, on every
+  value, which gave values no alternative can produce (`(6, [4 bytes])` from
+  a v4/v6 address choice), false failures under `target`, and aborted runs
+  (described in #70). For alternatives that should shrink, give the value its
+  alternative: an enum with `#[derive(Arbitrary)]`, or `dependent` over an
+  index. A `recursive` generator whose top level is a choice has no shrinker
+  either.
+- `any::<integer>()`, `any::<f32>()` and `any::<f64>()` keep their mix of
+  values but no longer get their hooks through a choice: they shrink and
+  mutate with the hooks of the full range (integers) and of the bit patterns
+  (floats), which hold for every value of the type.
+- `gens::dependent` mutates by mutating the first value and generating the
+  second afresh from it; it no longer mutates the second value in place.
+- `ShrinkStats::rejected_not_smaller` and its field in the JSON report are
+  gone, with the rule they counted.
+- A checker's counterexample is shrunk only when that cannot run away with a
+  broken shrinker: `check_shrinker` shrinks under the caller's `size` (a
+  failing value larger than one already found is discarded), and the checks
+  behind `ephyra check` report the generated value that exposed the problem,
+  unshrunk.
 - A property that returns `Result<T, E>` now requires `T: Testable` and takes
   the verdict of the `Ok` value: `Ok(false)`, `Ok(TestResult::Fail(..))` and
   `Ok(Err(..))` fail, `Ok(TestResult::Discard(..))` discards. It used to pass on
@@ -39,6 +62,24 @@ All notable changes to `ephyra` are documented here. The format follows
 - The targeted phase ignored the run's discard limit, so a property that
   called `target` could pass with many times `max_discard_ratio * tests`
   discards (#102).
+- The shrink driver skipped every candidate that printed longer than the
+  failing input, so a bool never shrank; float shrinking stops at one. By
+  Bruno Volpato (#71). The generator alone now decides what is simpler: the
+  driver has no rule on a candidate's rendering at all, and the step and time
+  budgets end every descent. Together with the reordered specials,
+  `any::<f64>()` no longer offers 1.0 for 0.5 (#92).
+- A panic in user code while a failure was shrunk escaped `check` and lost
+  the failure. By Bruno Volpato (#72).
+- A failure raised with `resume_unwind` was reported with an earlier handled
+  panic's message and marked FLAKY (#58), or as `<non-string panic payload>`
+  (#101).
+- Two panics on one line were one failure to the shrinker, which could trade
+  the failure found for the other one; the signature now has the column
+  (#100).
+- Replaying a point where the generator panicked passed (#97), and a replay
+  with no seed reported a random seed instead of the point's (#98).
+- `check_shrinker` and `check_mutator` could report a counterexample outside
+  the support they were given (#113).
 - `gens::dependent` could shrink to a pair outside its joint support when the
   inner generator filters: a regenerated second value whose filter ran out of
   attempts is no longer a candidate (#44).
@@ -64,6 +105,12 @@ All notable changes to `ephyra` are documented here. The format follows
   gives up), must end, fail if and only if an input failed, pass only on
   evidence, and never abort on a discard. It catches each of the runner bugs
   above.
+- `tests/report_contract.rs`: one property, what a failing report says is
+  true: its message is what the property does on the counterexample, which
+  fails the way the found input did; its replay point and seed reproduce it;
+  the checkers' counterexamples lie in their support. It catches each of the
+  report bugs above.
+- `tests/gen_contract.rs` covers `one_of` over structured alternatives.
 - `regressions/`: every fixed bug as a reversed patch, with the properties
   that must catch it; CI checks fix and bug soundness on every pull request.
   CONTRIBUTING.md describes the method.

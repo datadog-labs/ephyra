@@ -1,0 +1,22 @@
+{
+ "id": "replay-reports-a-random-seed",
+ "title": "Under Config::replay with no seed, the report's \"rerun the whole search\" seed is a fresh random one",
+ "class": "report-replay",
+ "symptom": "non-reproducible",
+ "issue": 98,
+ "cause": "the run's seed was config.seed or a random one, not the replay point's",
+ "reported_by": "David R. MacIver (@DRMacIver), found by an LLM writing tests",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:report_contract",
+   "name": "what_a_failing_report_says_is_true"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "runner::tests::a_replay_with_no_seed_reports_the_points_seed"
+  }
+ ]
+}

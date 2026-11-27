@@ -1,0 +1,16 @@
+diff --git a/crates/ephyra/src/runner/remember.rs b/crates/ephyra/src/runner/remember.rs
+--- a/crates/ephyra/src/runner/remember.rs
++++ b/crates/ephyra/src/runner/remember.rs
+@@ -113,11 +113,7 @@
+                 // The generator panicked at the point: that is what the point reproduces,
+                 // as a run that reached it would have aborted. It used to count as a pass,
+                 // and the search went on (#97).
+-                Err(Skipped::Panicked(info)) => {
+-                    self.abort(info, point.iteration);
+-                    self.report.replay = Some(ReplayOutcome { point, reproduced: true });
+-                    return true;
+-                },
++                Err(Skipped::Panicked(_)) => None,
+             };
+             self.report.replay = Some(ReplayOutcome { point, reproduced: failed.is_some() });
+             if let Some(found) = failed {

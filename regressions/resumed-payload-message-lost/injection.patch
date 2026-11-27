@@ -1,0 +1,12 @@
+diff --git a/crates/ephyra/src/runner/panic.rs b/crates/ephyra/src/runner/panic.rs
+--- a/crates/ephyra/src/runner/panic.rs
++++ b/crates/ephyra/src/runner/panic.rs
+@@ -85,7 +85,7 @@
+         Err(payload) => {
+             // The box's contents, not the box: `&payload` would downcast the `Box`
+             // itself and never match a string (#101).
+-            let message = payload_message(&*payload);
++            let message = payload_message(&payload);
+             let captured = SLOT.with(|slot| slot.borrow_mut().take());
+             // The hook saw the last panic on this thread, but not one raised with
+             // `resume_unwind` (which skips it), for example a worker's panic passed on

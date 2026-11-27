@@ -45,6 +45,7 @@ use crate::{
     runner::{
         SAMPLE_CHARS,
         cap,
+        panic,
     },
     shrink::first_candidate,
     source::mix,
@@ -101,17 +102,34 @@ where
     G: Gen + 'static,
     G::Value: Clone + Debug + 'static,
 {
-    let shared = BoxGen::new(generator);
-    let hooks = shared.clone();
+    let hooks = BoxGen::new(generator);
+    let shared = hooks.clone();
     let config = authored_by(config, &support);
+    // The counterexample is shrunk with the shrinker under test, so it may only
+    // get smaller under the caller's `size`: a failing value larger than the
+    // smallest failure so far is discarded. A shrinker that grows the value
+    // would otherwise take the counterexample along.
+    let smallest = Cell::new(u64::MAX);
     check(&config, shared, move |value| {
+        // Not a test of the shrinker, and so never the counterexample: a value outside
+        // the support. Shrinking the failure with the shrinker under test would otherwise
+        // report one (#113).
+        if !support(&value) {
+            return TestResult::discard("outside the support");
+        }
+        if size(&value) > smallest.get() {
+            return TestResult::discard("larger than a failure already found");
+        }
         let rules = ShrinkRules { candidates: None, size: Some(&size), chain_in_domain: false };
         match shrinks(&value, &hooks, &mut |v| outside(&support, v), &rules) {
             Ok(checked) => {
                 classify(checked == 0, "no shrink candidates");
                 TestResult::Pass
             },
-            Err(problem) => TestResult::fail(problem),
+            Err(problem) => {
+                smallest.set(smallest.get().min(size(&value)));
+                TestResult::fail(problem)
+            },
         }
     })
 }
@@ -136,6 +154,10 @@ where
     let counter = Cell::new(0u64);
     let config = authored_by(config, &support);
     let mut report = check(&config, shared, move |value| {
+        // As in check_shrinker: a value outside the support is no test of the mutator (#113).
+        if !support(&value) {
+            return TestResult::discard("outside the support");
+        }
         let index = counter.get();
         counter.set(index + 1);
         let source = Source::new(mix(base, index), max_size);
@@ -176,7 +198,8 @@ pub(crate) struct ShrinkRules<'a, T> {
 /// The shrink candidates of `value` differ from it, stay in the domain
 /// (`domain` says why a value is outside it) and follow `rules`, and the
 /// first-candidate chain from it never revisits a value and settles within
-/// `CHAIN` steps. Returns how many candidates were checked.
+/// `CHAIN` steps, all without a panic. Returns how many candidates were
+/// checked.
 pub(crate) fn shrinks<T: Debug>(
     value: &T,
     hooks: &BoxGen<T>,
@@ -185,14 +208,19 @@ pub(crate) fn shrinks<T: Debug>(
 ) -> Result<usize, String> {
     let parent = format!("{value:?}");
     let mut candidates = Vec::new();
-    let _ = hooks.shrink(value, &mut |candidate| {
-        candidates.push(candidate);
-        if rules.candidates.is_none_or(|limit| candidates.len() < limit) {
-            ControlFlow::Continue(())
-        } else {
-            ControlFlow::Break(())
-        }
+    let visited = panic::catch(|| {
+        hooks.shrink(value, &mut |candidate| {
+            candidates.push(candidate);
+            if rules.candidates.is_none_or(|limit| candidates.len() < limit) {
+                ControlFlow::Continue(())
+            } else {
+                ControlFlow::Break(())
+            }
+        })
     });
+    if let Err(info) = visited {
+        return Err(format!("the shrinker {info}"));
+    }
     let value_size = rules.size.map(|size| size(value));
     for candidate in &candidates {
         let rendered = format!("{candidate:?}");
@@ -223,8 +251,15 @@ pub(crate) fn shrinks<T: Debug>(
                 cap(rendered, SAMPLE_CHARS)
             ));
         }
-        let Some(next) = first_candidate(|visit| hooks.shrink(&current, visit)) else {
-            return Ok(checked);
+        let next = match panic::catch(|| first_candidate(|visit| hooks.shrink(&current, visit))) {
+            Ok(Some(next)) => next,
+            Ok(None) => return Ok(checked),
+            Err(info) => {
+                return Err(format!(
+                    "first-candidate shrink chain at {}: the shrinker {info}",
+                    cap(rendered, SAMPLE_CHARS)
+                ));
+            },
         };
         if rules.chain_in_domain
             && let Some(reason) = domain(&next)
@@ -241,6 +276,7 @@ pub(crate) fn shrinks<T: Debug>(
         cap(format!("{current:?}"), SAMPLE_CHARS)
     ))
 }
+
 
 /// A mutant of `value` drawn from `source` without a discard and inside the
 /// domain (`domain` says why a value is outside it).
@@ -272,6 +308,21 @@ mod tests {
 
     fn cfg() -> Config {
         Config::default().seed(1).tests(200).no_regressions()
+    }
+
+    #[test]
+    fn a_checkers_counterexample_is_inside_the_support() {
+        // #113: the failure was shrunk with the shrinker under test, out of the range.
+        let support = |x: &i32| (10..=60).contains(x);
+        let shrinker = gens::int(10i32..=60).with_shrink(|_, visit| visit(0));
+        let report = check_shrinker(&cfg(), shrinker, support, |x| x.unsigned_abs() as u64);
+        let failure = report.failure.as_ref().expect("the shrinker leaves the support");
+        let x: i32 = failure.counterexample().debug.parse().unwrap();
+        assert!(support(&x), "reported {x}");
+        let mutator = gens::int(10i32..=60).with_mutate(|_, _| 0);
+        let report = check_mutator(&cfg(), mutator, support);
+        let x: i32 = report.failure.as_ref().unwrap().counterexample().debug.parse().unwrap();
+        assert!(support(&x), "reported {x}");
     }
 
     #[test]
@@ -311,6 +362,17 @@ mod tests {
         assert!(
             report.failure.as_ref().unwrap().message.as_deref().unwrap().contains("not smaller")
         );
+    }
+
+    #[test]
+    fn a_panicking_shrinker_fails_the_shrinker_check() {
+        let generator = gens::int(0u32..=1000)
+            .with_shrink(|v, visitor| visitor(v.checked_sub(10).expect("ten or more")));
+        let report = check_shrinker(&cfg(), generator, |_| true, |v| u64::from(*v));
+        let message = report.failure.as_ref().unwrap().message.as_deref().unwrap();
+        assert!(message.contains("the shrinker panicked at ") && message.contains("ten or more"));
+        let smallest: u32 = report.counterexample().unwrap().debug.parse().unwrap();
+        assert!(smallest < 10, "{report}");
     }
 
     #[test]

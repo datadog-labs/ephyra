@@ -106,6 +106,31 @@ fn replay_point_reproduces_without_random_search() {
     assert_eq!(fixed.tests, 64);
 }
 
+#[test]
+fn replaying_where_the_generator_panicked_aborts() {
+    // #97: the point counted as a pass, and a run under another seed ended `ok`.
+    let generator =
+        || gens::int(0u32..=100).map(|x| if x > 40 { panic!("cannot make {x}") } else { x });
+    let first = check(&cfg(), generator(), |_| true);
+    assert_eq!(first.status, Status::Aborted);
+    let point =
+        crate::ReplayPoint { seed: first.seed, iteration: first.abort.as_ref().unwrap().iteration };
+    let replayed = check(&cfg().seed(first.seed ^ 1).replay(point), generator(), |_| true);
+    assert_eq!(replayed.status, Status::Aborted, "{replayed}");
+    assert_eq!(replayed.abort.as_ref().unwrap().message, first.abort.as_ref().unwrap().message);
+}
+
+#[test]
+fn a_replay_with_no_seed_reports_the_points_seed() {
+    // #98: the report named a fresh random seed, which reruns another search.
+    let first = check(&cfg(), gens::int(0u32..=10_000), |x| x < 1000);
+    let point = first.failure.as_ref().unwrap().replay.unwrap();
+    let mut config = cfg();
+    config.seed = None;
+    let replayed = check(&config.replay(point), gens::int(0u32..=10_000), |x| x < 1000);
+    assert_eq!(replayed.seed, point.seed);
+}
+
 #[cfg(feature = "json")]
 #[test]
 fn regressions_are_saved_and_replayed() {
@@ -830,6 +855,29 @@ fn novelty_counts_what_an_input_reached_first() {
     let differs = run.test(&other);
     assert!(differs.novelty() > 0, "the other branch is new: {differs:?}");
     run.finish().assert_passed();
+}
+
+#[cfg(all(ephyra_instrumented, feature = "coverage"))]
+#[test]
+fn a_panicking_mutator_stops_localizing_only() {
+    let mut config = cfg();
+    config.coverage.enabled = true;
+    config.locate.enabled = true;
+    let generator = gens::int(0i32..=4000).with_mutate(|_, _| panic!("no neighbour"));
+    let report = check(&config, generator, |x| branchy(x) == 2);
+    assert_eq!(report.counterexample().expect("fails").debug, "1001", "{report}");
+    assert!(report.locate.is_some(), "{report}");
+    let warnings: Vec<_> = report.health.iter().filter(|w| w.kind == "mutator_panicked").collect();
+    assert!(warnings.len() == 1 && warnings[0].message.contains("no neighbour"), "{report}");
+
+    // After a discard, the panic is part of it.
+    let generator = gens::int(0i32..=4000).with_mutate(|_, g| {
+        g.discard("no neighbour");
+        panic!("after the discard")
+    });
+    let report = check(&config, generator, |x| branchy(x) == 2);
+    assert!(report.locate.is_some(), "{report}");
+    assert!(!report.health.iter().any(|w| w.kind == "mutator_panicked"), "{report}");
 }
 
 #[cfg(all(ephyra_instrumented, feature = "coverage"))]

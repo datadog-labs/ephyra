@@ -272,7 +272,9 @@ where
     /// report begun.
     pub fn new(config: &Config, generator: G, property: P) -> Self {
         let (config, problems) = config.clone().apply_env_vars(std::env::vars());
-        let seed = config.seed.unwrap_or_else(random_seed);
+        // With a replay point and no seed, the point's seed: it is the run the report's
+        // "rerun the whole search" line and `Report::seed` must name (#98).
+        let seed = config.seed.or(config.replay.map(|p| p.seed)).unwrap_or_else(random_seed);
         let mut report = Report {
             name: property_name(&config),
             run: crate::report::RunSpec::current(),
@@ -295,7 +297,11 @@ where
         }
         sinks.extend(crate::sink::open(&crate::sink::RunInfo { property: &report.name, seed }));
         let naming = (config.failures > 1).then(|| {
-            Naming { name: config.signature.clone(), limit: config.report.truncate_debug_at }
+            Naming {
+                name: config.signature.clone(),
+                limit: config.report.truncate_debug_at,
+                panicked: None,
+            }
         });
         #[cfg_attr(not(feature = "coverage"), allow(unused_mut))]
         let mut run = Run {
