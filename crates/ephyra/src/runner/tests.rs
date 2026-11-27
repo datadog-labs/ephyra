@@ -335,6 +335,23 @@ fn time_budget_stops_the_random_phase() {
     assert!(report.to_string().contains("stopped by the time budget"));
 }
 
+#[cfg(all(ephyra_instrumented, feature = "coverage"))]
+#[test]
+fn waiting_for_the_coverage_lock_does_not_use_up_the_time_limits() {
+    let limit = std::time::Duration::from_millis(500);
+    let other_run = crate::coverage::lock();
+    let budget = std::thread::spawn(move || check(&cfg().budget(limit), gens::bool(), |_| false));
+    let timeout =
+        std::thread::spawn(move || check(&cfg().tests(8).timeout(limit), gens::bool(), |_| true));
+    std::thread::sleep(limit * 2);
+    drop(other_run);
+    let report = budget.join().unwrap();
+    assert_eq!(report.status, Status::Failed, "{report}");
+    let report = timeout.join().unwrap();
+    assert_eq!(report.status, Status::Passed, "{report}");
+    assert!(report.duration < limit * 2, "{report}");
+}
+
 #[test]
 fn generator_panic_aborts() {
     let report = check(&cfg(), |_: &mut Source| -> i32 { panic!("generator bug") }, |_: i32| true);
