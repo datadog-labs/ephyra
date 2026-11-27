@@ -96,7 +96,8 @@ and Ephyra is the home of all such efforts.
 
 Each dot is a bug found with ephyra and reported upstream, placed at how long
 it had been in the project's code when it was found; the bar behind each row is
-the project's history since its first commit.
+the project's history since its first commit. [TROPHIES.md](TROPHIES.md) lists
+every bug we reported upstream, with a link to its report and its status.
 
 [`case-studies/`](case-studies) holds projects that test real systems with
 ephyra, one directory per target system: a crate per component, and `bugs/`
