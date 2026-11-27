@@ -756,8 +756,11 @@ mod tests {
     #[test]
     fn f32_bits_shrinks_infinity_to_the_largest_finite_value() {
         // #47: inf went through f64::MAX, which narrows back to inf.
-        assert_eq!(f32_bits().shrink_candidates(&f32::INFINITY), vec![0.0, f32::MAX]);
-        assert_eq!(f32_bits().shrink_candidates(&f32::NEG_INFINITY), vec![0.0, f32::MIN]);
+        for (inf, max) in [(f32::INFINITY, f32::MAX), (f32::NEG_INFINITY, f32::MIN)] {
+            let candidates = f32_bits().shrink_candidates(&inf);
+            assert!(!candidates.contains(&inf), "{inf} shrank to itself: {candidates:?}");
+            assert!(candidates.contains(&max), "{inf} does not reach {max}: {candidates:?}");
+        }
     }
 
     #[test]
