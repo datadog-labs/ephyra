@@ -110,6 +110,12 @@ where
     let shared = Suspect(hooks.clone());
     let config = authored_by(config, &support);
     check(&config, shared, move |value| {
+        // Not a test of the shrinker, and so never the counterexample: a value outside
+        // the support. Shrinking the failure with the shrinker under test would otherwise
+        // report one (#113).
+        if !support(&value) {
+            return TestResult::discard("outside the support");
+        }
         let rules = ShrinkRules { candidates: None, size: Some(&size), chain_in_domain: false };
         match shrinks(&value, &hooks, &mut |v| outside(&support, v), &rules) {
             Ok(checked) => {
@@ -141,6 +147,10 @@ where
     let counter = Cell::new(0u64);
     let config = authored_by(config, &support);
     let mut report = check(&config, shared, move |value| {
+        // As in check_shrinker: a value outside the support is no test of the mutator (#113).
+        if !support(&value) {
+            return TestResult::discard("outside the support");
+        }
         let index = counter.get();
         counter.set(index + 1);
         let source = Source::new(mix(base, index), max_size);
@@ -318,6 +328,21 @@ mod tests {
 
     fn cfg() -> Config {
         Config::default().seed(1).tests(200).no_regressions()
+    }
+
+    #[test]
+    fn a_checkers_counterexample_is_inside_the_support() {
+        // #113: the failure was shrunk with the shrinker under test, out of the range.
+        let support = |x: &i32| (10..=60).contains(x);
+        let shrinker = gens::int(10i32..=60).with_shrink(|_, visit| visit(0));
+        let report = check_shrinker(&cfg(), shrinker, support, |x| x.unsigned_abs() as u64);
+        let failure = report.failure.as_ref().expect("the shrinker leaves the support");
+        let x: i32 = failure.counterexample().debug.parse().unwrap();
+        assert!(support(&x), "reported {x}");
+        let mutator = gens::int(10i32..=60).with_mutate(|_, _| 0);
+        let report = check_mutator(&cfg(), mutator, support);
+        let x: i32 = report.failure.as_ref().unwrap().counterexample().debug.parse().unwrap();
+        assert!(support(&x), "reported {x}");
     }
 
     #[test]
