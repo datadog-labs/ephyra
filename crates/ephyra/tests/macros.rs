@@ -4,9 +4,12 @@
 //! Integration tests for `#[derive(Arbitrary)]` and `#[ephyra::test]`.
 #![cfg(feature = "derive")]
 
-use std::sync::atomic::{
-    AtomicUsize,
-    Ordering,
+use std::{
+    cell::RefCell,
+    sync::atomic::{
+        AtomicUsize,
+        Ordering,
+    },
 };
 
 use ephyra::{
@@ -191,6 +194,31 @@ fn config_expression_is_accepted(a: u8, b: u8) -> Result<(), String> {
     } else {
         Err("not commutative".into())
     }
+}
+
+thread_local! {
+    static INPUTS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+#[ephyra::test(tests = 5, seed = 8, config = Config::default().no_regressions())]
+fn settings_before_config_apply(x: u64) {
+    INPUTS.with_borrow_mut(|inputs| inputs.push(x));
+}
+
+#[ephyra::test(config = Config::default().no_regressions(), seed = 8, tests = 5)]
+fn settings_after_config_apply(x: u64) {
+    INPUTS.with_borrow_mut(|inputs| inputs.push(x));
+}
+
+#[test]
+fn settings_apply_on_top_of_config_in_any_order() {
+    let [before, after] = [settings_before_config_apply, settings_after_config_apply].map(|run| {
+        INPUTS.take();
+        run();
+        INPUTS.take()
+    });
+    assert_eq!(before.len(), 5);
+    assert_eq!(before, after, "the seed applies");
 }
 
 #[ephyra::test(
