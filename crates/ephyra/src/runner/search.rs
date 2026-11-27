@@ -148,10 +148,12 @@ where
         let target_tests = self.config.target.tests;
         let explore = self.config.target.explore;
         let mut iterations = 0u64;
-        let mut discarded = 0u64;
 
         while iterations < target_tests {
-            if self.timed_out_or_gave_up(discarded, target_tests) {
+            // The run's discard limit, `max_discard_ratio * tests`, on the run's discards:
+            // the phase used to count its own against its own budget, so a run could pass
+            // with many times the documented number of discards (#102).
+            if self.timed_out_or_gave_up(self.report.discarded, self.config.tests) {
                 break;
             }
             iterations += 1;
@@ -161,10 +163,7 @@ where
                 match self.draw_at(point, crate::report::Origin::Explore) {
                     Some(input) => input,
                     None if self.report.status != Status::Passed => break,
-                    None => {
-                        discarded += 1;
-                        continue;
-                    },
+                    None => continue,
                 }
             } else {
                 let Some(seed) = self.pool.pick(&mut self.rng) else { break };
@@ -182,7 +181,6 @@ where
                 break;
             }
             if tested.discarded() {
-                discarded += 1;
                 continue;
             }
             self.keep(input.value, &tested);

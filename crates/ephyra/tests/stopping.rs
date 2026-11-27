@@ -153,3 +153,20 @@ fn replayed_regressions_do_not_use_up_the_tests() {
     assert_eq!(second.iterations, 3, "the search still has its tests: {second}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #102: the targeted phase gave up only past its own budget, so a property that called
+/// `target` passed with 129 discards under a limit of 10.
+#[test]
+fn the_targeted_phase_keeps_the_runs_discard_limit() {
+    let config = Config::default().seed(2).tests(10).max_discard_ratio(1.0).no_regressions();
+    let report = check(&config, ephyra::gens::int(0u32..=1000), |x: u32| {
+        ephyra::target(f64::from(x));
+        if x % 2 == 1 { TestResult::discard("odd") } else { TestResult::Pass }
+    });
+    assert!(
+        report.status != Status::Passed || report.discarded <= 10,
+        "{:?} with {} discards",
+        report.status,
+        report.discarded
+    );
+}
