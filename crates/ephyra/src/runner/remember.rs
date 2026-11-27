@@ -110,7 +110,14 @@ where
                     self.observe_generation_discard(point, origin, &reason, generate);
                     None
                 },
-                Err(Skipped::Panicked(_)) => None,
+                // The generator panicked at the point: that is what the point reproduces,
+                // as a run that reached it would have aborted. It used to count as a pass,
+                // and the search went on (#97).
+                Err(Skipped::Panicked(info)) => {
+                    self.abort(info, point.iteration);
+                    self.report.replay = Some(ReplayOutcome { point, reproduced: true });
+                    return true;
+                },
             };
             self.report.replay = Some(ReplayOutcome { point, reproduced: failed.is_some() });
             if let Some(found) = failed {
