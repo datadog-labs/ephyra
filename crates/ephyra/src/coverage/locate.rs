@@ -459,9 +459,9 @@ pub(crate) fn lines_hit(delta: &Delta, selected: &[usize]) -> Option<BTreeMap<St
 /// it lies inside it.
 pub(crate) fn display_path(file: &str) -> String {
     if let Ok(cwd) = std::env::current_dir()
-        && let Some(rest) = file.strip_prefix(&*cwd.to_string_lossy())
+        && let Some(rest) = file.strip_prefix(&cwd.to_string_lossy().replace('\\', "/"))
     {
-        return rest.trim_start_matches(['/', '\\']).to_string();
+        return rest.trim_start_matches('/').to_string();
     }
     file.to_string()
 }

@@ -73,10 +73,11 @@ fn settings(paths: &[&Path]) -> insta::Settings {
     }
     settings.add_filter(r"\[dir\]\\\\", "[dir]/");
     settings.add_filter(r"\[dir\]\\", "[dir]/");
-    // Suspects carry absolute paths; the workspace root is this machine's.
+    // Suspects carry absolute paths, with forward slashes; the workspace root
+    // is this machine's.
     if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2) {
-        settings
-            .add_filter(&format!("{}/", regex_escape(&root.display().to_string())), "[workspace]/");
+        let root = root.display().to_string().replace('\\', "/");
+        settings.add_filter(&format!("{}/", regex_escape(&root)), "[workspace]/");
     }
     settings
 }
