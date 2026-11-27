@@ -49,9 +49,10 @@
 //! report.assert_passed();
 //! ```
 //!
-//! A property may return `bool`, `()`, `Result<_, E: Debug>` or
-//! [`TestResult`]; a panic counts as a failure and its message and location
-//! go in the report.
+//! A property may return `bool`, `()`, [`TestResult`] or a
+//! `Result<_, E: Debug>` of one of these, where `Ok` takes the verdict of its
+//! value; a panic counts as a failure and its message and location go in the
+//! report.
 //!
 //! # Writing a generator
 //!

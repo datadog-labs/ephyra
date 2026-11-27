@@ -48,7 +48,10 @@ A bug fix comes with two tests and a record:
    unrelated generator bugs (#40, #41, #44, #47 and a shrink cycle);
    [`crates/ephyra/tests/replay_contract.rs`](crates/ephyra/tests/replay_contract.rs),
    "a saved failure is replayed, for its own property only", catches four replay bugs
-   (#46, #48 and two causes of #59). Extend an existing
+   (#46, #48 and two causes of #59); and
+   [`crates/ephyra/tests/verdict_contract.rs`](crates/ephyra/tests/verdict_contract.rs),
+   "a run's verdict matches what its inputs did", catches five runner bugs (#42, #102
+   and three false passes or aborts). Extend an existing
    property when the bug is in its class, rather than adding a new one.
 2. **A narrow regression test** for the reported case, next to the code. It is fast and
    pins the exact input.

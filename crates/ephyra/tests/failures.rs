@@ -65,7 +65,9 @@ fn several_distinct_failures_are_found_in_one_run() {
     let report = check(&cfg().failures(10), digits(), three_bugs);
     assert_eq!(report.status, Status::Failed);
     assert_eq!(report.failures.len(), 3, "{report}");
-    assert_eq!(report.tests, 500, "the run went on to its budget");
+    assert_eq!(report.iterations, 500, "the run went on until its tests ran out");
+    let failed: u64 = report.failures.iter().map(|f| f.count).sum();
+    assert_eq!(report.tests + failed, 500, "failing inputs are tests too: {report}");
     let mut found = counterexamples(&report);
     found.sort();
     assert_eq!(found, ["[0, 0, 0, 0, 0, 0]", "[3]", "[7]"]);

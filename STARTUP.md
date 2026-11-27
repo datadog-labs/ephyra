@@ -71,10 +71,11 @@ all of them.
 
 To find many bugs in one long run instead of stopping at the first, set
 `Config::failures(n)` (or `EPHYRA_FAILURES=n`): the run goes on until it has
-`n` distinct failures, shrinks each one and reports each with its own replay
-line. Failures are told apart by where the property panicked; name them
-yourself with `ephyra::signature("display not reparsable: SHOW")` inside the
-property, or with `Config::signature`, when one assertion covers many causes.
+`n` distinct failures or its tests or time run out, shrinks each one and
+reports each with its own replay line. Failures are told apart by where the
+property panicked; name them yourself with
+`ephyra::signature("display not reparsable: SHOW")` inside the property, or
+with `Config::signature`, when one assertion covers many causes.
 
 Short runs find shallow bugs. Once the properties pass a quick run, run
 them longer and in the background, with several seeds (`EPHYRA_SEED`) and a

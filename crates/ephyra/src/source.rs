@@ -97,7 +97,8 @@ impl Source {
 
     /// Mark this input as discarded. The runner will not run the property
     /// on it; `reason` feeds the discard histogram. Only the first reason is
-    /// kept.
+    /// kept. The generator goes on after this call, and a panic in it then
+    /// counts as this discard.
     pub fn discard(&mut self, reason: impl Into<Cow<'static, str>>) {
         if self.discarded.is_none() {
             self.discarded = Some(reason.into());

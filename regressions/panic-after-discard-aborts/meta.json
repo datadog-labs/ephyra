@@ -1,0 +1,22 @@
+{
+ "id": "panic-after-discard-aborts",
+ "title": "A panic in code after a filter that gave up aborts the run instead of discarding the input",
+ "class": "verdict-discard",
+ "symptom": "false-failure",
+ "issue": null,
+ "cause": "the runner looked at the panic before the discard mark, so code after a filter running on its rejected value ended the run",
+ "reported_by": "described in #76 by Bruno Volpato (@bvolpato-dd)",
+ "fixed_by": "Bruno Volpato (@bvolpato-dd), #76",
+ "oracles": [
+  {
+   "target": "test:verdict_contract",
+   "name": "a_runs_verdict_matches_what_its_inputs_did"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:filter_discard",
+   "name": "partial_code_after_a_filter_is_discarded_with_the_filters_reason"
+  }
+ ]
+}

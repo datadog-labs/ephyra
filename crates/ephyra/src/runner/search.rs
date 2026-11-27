@@ -34,7 +34,8 @@ where
     /// Whether the run still wants inputs: none of the stopping rules has
     /// fired. The rules, in order: the number of tests reached
     /// [`Config::tests`](crate::Config::tests); the time budget
-    /// ([`Config::budget_ms`](crate::Config::budget_ms)) ran out; the timeout
+    /// ([`Config::budget_ms`](crate::Config::budget_ms)) ran out (a run
+    /// that has tried no input yet is let on once); the timeout
     /// ([`Config::timeout_ms`](crate::Config::timeout_ms)) elapsed; more
     /// inputs were discarded than
     /// [`Config::max_discard_ratio`](crate::Config::max_discard_ratio)
@@ -44,16 +45,18 @@ where
     /// With [`Config::failures`](crate::Config::failures) above 1, a
     /// failure kept by [`test`](Self::test) is first shrunk, remembered and
     /// recorded, and the run stops only once that many distinct failures
-    /// are found.
+    /// are found or another rule fires. Failing inputs then count as tests.
     pub fn wants_more(&mut self) -> bool {
         if !self.carry_on() || self.report.status != Status::Passed {
             return false;
         }
-        if self.report.tests >= self.config.tests {
+        if self.report.tests + self.failed >= self.config.tests {
             return false;
         }
+        // Even the shortest budget lets the loop try one input.
         if let Some(budget) = self.config.budget_ms.map(std::time::Duration::from_millis)
             && self.started.elapsed() > budget
+            && (self.report.iterations > 0 || std::mem::replace(&mut self.overtime, true))
         {
             self.report.stopped_by_budget = true;
             return false;
@@ -145,10 +148,12 @@ where
         let target_tests = self.config.target.tests;
         let explore = self.config.target.explore;
         let mut iterations = 0u64;
-        let mut discarded = 0u64;
 
         while iterations < target_tests {
-            if self.timed_out_or_gave_up(discarded, target_tests) {
+            // The run's discard limit, `max_discard_ratio * tests`, on the run's discards:
+            // the phase used to count its own against its own budget, so a run could pass
+            // with many times the documented number of discards (#102).
+            if self.timed_out_or_gave_up(self.report.discarded, self.config.tests) {
                 break;
             }
             iterations += 1;
@@ -158,10 +163,7 @@ where
                 match self.draw_at(point, crate::report::Origin::Explore) {
                     Some(input) => input,
                     None if self.report.status != Status::Passed => break,
-                    None => {
-                        discarded += 1;
-                        continue;
-                    },
+                    None => continue,
                 }
             } else {
                 let Some(seed) = self.pool.pick(&mut self.rng) else { break };
@@ -179,7 +181,6 @@ where
                 break;
             }
             if tested.discarded() {
-                discarded += 1;
                 continue;
             }
             self.keep(input.value, &tested);

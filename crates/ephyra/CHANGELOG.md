@@ -5,6 +5,14 @@ All notable changes to `ephyra` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A property that returns `Result<T, E>` now requires `T: Testable` and takes
+  the verdict of the `Ok` value: `Ok(false)`, `Ok(TestResult::Fail(..))` and
+  `Ok(Err(..))` fail, `Ok(TestResult::Discard(..))` discards. It used to pass on
+  every `Ok`. An `Ok` type that is no verdict no longer compiles. By Bruno
+  Volpato (#63).
+
 ### Fixed
 
 - `gens::f32()` could generate and mutate to `1.0`, outside its documented
@@ -20,6 +28,17 @@ All notable changes to `ephyra` are documented here. The format follows
 - A regressions file lost entries when its last line had no newline (the
   next entry was glued onto it), and loaded as empty when one line was not
   UTF-8 (#59, two of its three causes).
+- A run whose every input was discarded passed when a time budget, a zero
+  budget or a loop ended it before the discard limit; it now gives up. By
+  Bruno Volpato (#65).
+- A panic in code after a `filter` that gave up aborted the run; the input
+  now counts as discarded. By Bruno Volpato (#76).
+- `Config::failures(n)` never ended when every input failed with fewer than
+  `n` signatures; failing inputs now count toward `Config::tests` (#42). By
+  Bruno Volpato (#66).
+- The targeted phase ignored the run's discard limit, so a property that
+  called `target` could pass with many times `max_discard_ratio * tests`
+  discards (#102).
 - `gens::dependent` could shrink to a pair outside its joint support when the
   inner generator filters: a regenerated second value whose filter ran out of
   attempts is no longer a candidate (#44).
@@ -39,6 +58,12 @@ All notable changes to `ephyra` are documented here. The format follows
   its own property only: the regressions store against a model under
   generated names, saves and file edits, and a save-then-replay round trip
   for every kind of input. It catches each of the replay bugs above.
+- `tests/verdict_contract.rs`: one property, a run's verdict matches what its
+  inputs did: scripted properties in every return shape, under drawn settings
+  (tests, discard ratio, `failures`, a zero budget, `target`, a filter that
+  gives up), must end, fail if and only if an input failed, pass only on
+  evidence, and never abort on a discard. It catches each of the runner bugs
+  above.
 - `regressions/`: every fixed bug as a reversed patch, with the properties
   that must catch it; CI checks fix and bug soundness on every pull request.
   CONTRIBUTING.md describes the method.

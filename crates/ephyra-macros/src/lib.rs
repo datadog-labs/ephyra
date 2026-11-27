@@ -23,10 +23,12 @@ use {
         Expr,
         Fields,
         FnArg,
+        GenericArgument,
         Ident,
         ItemFn,
         Meta,
         Pat,
+        PathArguments,
         ReturnType,
         Token,
         Type,
@@ -532,15 +534,17 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// it can keep relations such as `lo < hi` that the property `assume!`s.
 ///
 /// A property that can discard inputs (it returns `TestResult`, as `assume!`
-/// needs) and has a strategy also gets an ignored `__ephyra_check_<name>`
-/// test that `ephyra check` runs over thousands of inputs: shrink
-/// candidates, first-candidate shrink chain steps and mutants of the
-/// strategy must not be discarded by the property, shrink chains must
+/// needs, or a `Result` of one) and has a strategy also gets an ignored
+/// `__ephyra_check_<name>` test that `ephyra check` runs over thousands of
+/// inputs: shrink candidates, first-candidate shrink chain steps and mutants
+/// of the strategy must not be discarded by the property, shrink chains must
 /// settle, and `metrics`, a function `fn(&T, usize) -> Vec<(&'static str,
 /// f64)>` of an input and its size, is reported. A property returning
-/// `bool`, `()` or `Result` never discards, so its strategy has nothing to
-/// check beyond its generators' own checks, and `metrics` belong on those
-/// generators.
+/// `bool`, `()` or a `Result` of these never discards, so its strategy has
+/// nothing to check beyond its generators' own checks, and `metrics` belong
+/// on those generators. A `Result` without type arguments (an alias such as
+/// `fmt::Result`) counts as one that never discards, so write
+/// `Result<TestResult, E>` out.
 #[proc_macro_attribute]
 pub fn test(args: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args with Punctuated::<Meta, Token![,]>::parse_terminated);
@@ -647,8 +651,8 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
         return Err(syn::Error::new(
             func.sig.span(),
             "`metrics` go with the check of a strategy the property can discard from \
-             (it returns `TestResult`); put them on the generator instead: \
-             #[ephyra::generator(metrics = <fn>)]",
+             (it returns `TestResult` or a `Result` of one); put them on the generator \
+             instead: #[ephyra::generator(metrics = <fn>)]",
         ));
     }
 
@@ -760,17 +764,31 @@ fn check_test_cfgs(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
 }
 
 /// Whether a property returning `output` can discard an input. Only
-/// `TestResult` can (`assume!` returns one), so `()`, `bool` and `Result`
-/// properties never do; a type it cannot tell is assumed to.
+/// `TestResult` can (`assume!` returns one), so `()` and `bool` properties
+/// never do; a type it cannot tell is assumed to. A `Result` can if its
+/// first type argument, the `Ok` value, can, and is assumed not to without
+/// type arguments (an alias such as `fmt::Result`).
 fn can_discard(output: &ReturnType) -> bool {
     let ReturnType::Type(_, ty) = output else { return false };
-    match &**ty {
+    type_can_discard(ty)
+}
+
+fn type_can_discard(ty: &Type) -> bool {
+    match ty {
         Type::Tuple(tuple) => !tuple.elems.is_empty(),
         Type::Path(path) if path.qself.is_none() => {
-            path.path
-                .segments
-                .last()
-                .is_none_or(|last| last.ident != "bool" && last.ident != "Result")
+            let Some(last) = path.path.segments.last() else { return true };
+            if last.ident != "Result" {
+                return last.ident != "bool";
+            }
+            let PathArguments::AngleBracketed(arguments) = &last.arguments else { return false };
+            let ok = arguments.args.iter().find_map(|argument| {
+                match argument {
+                    GenericArgument::Type(ty) => Some(ty),
+                    _ => None,
+                }
+            });
+            ok.is_some_and(type_can_discard)
         },
         _ => true,
     }
@@ -800,7 +818,20 @@ mod tests {
         let discarding =
             expand("gen = pairs()", "fn p(a: u8, b: u8) -> TestResult { todo!() }").unwrap();
         assert!(discarding.contains("__ephyra_check_p"));
-        for output in ["-> bool", "", "-> ()", "-> Result<(), String>"] {
+        for output in ["-> Result<TestResult, String>", "-> io::Result<Result<TestResult, String>>"]
+        {
+            let item = format!("fn p(a: u8, b: u8) {output} {{ todo!() }}");
+            let expanded = expand("gen = pairs(), metrics = m", &item).unwrap();
+            assert!(expanded.contains("__ephyra_check_p"), "{output}");
+        }
+        for output in [
+            "-> bool",
+            "",
+            "-> ()",
+            "-> Result<(), TestResult>",
+            "-> Result<Result<bool, String>, String>",
+            "-> fmt::Result",
+        ] {
             let item = format!("fn p(a: u8, b: u8) {output} {{ todo!() }}");
             let expanded = expand("gen = pairs()", &item).unwrap();
             assert!(!expanded.contains("__ephyra_check_p"), "{output}");

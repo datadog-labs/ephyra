@@ -56,7 +56,7 @@ Combinators (`GenExt`):
 | `.and_then(f)` | No | Rarely; prefer `dependent` |
 | `.iso(forward, back)` | Yes, through a bijection | Newtypes and wrappers |
 | `.dependent(\|a\| gen_b)` | Yes; returns `(A, B)` | A query over a schema, an index into a length |
-| `.filter("why", pred)` | Filters candidates and mutants too; discards after 100 misses | Rare exclusions; construct valid values instead |
+| `.filter("why", pred)` | Filters candidates and mutants too; discards after 100 misses (a panic in code that then gets the rejected value counts as the discard) | Rare exclusions; construct valid values instead |
 | `.with_shrink(f)` | Adds candidates, tried first | A shrinker on the final type |
 | `.with_mutate(f)` | Replaces the mutator | A custom mutator |
 | `.collect::<C>()` | Yes | `Vec<(K, V)>` into a map |
@@ -104,13 +104,16 @@ generator and its support predicate with `#[ephyra::generator(pred, metrics
 
 ## Properties
 
-A property takes the generated value and returns `()`, `bool`,
-`Result<_, E: Debug>` or `TestResult`. A panic anywhere in it, including in
-the code under test, is a failure, with its message and location.
+A property takes the generated value and returns `()`, `bool`, `TestResult`
+or a `Result<_, E: Debug>` of one of these: `Err` is a failure, and `Ok` takes
+the verdict of its value (`Ok(false)` fails). Map an `Ok` value that is no
+verdict to `()`. A panic anywhere in it, including in the code under test, is
+a failure, with its message and location.
 
 - Prefer `()` with `assert!` and `assert_eq!` (which prints both values).
 - Skip inputs that don't apply with `ephyra::assume!(cond)`; too many
-  discards end the run with `GaveUp`.
+  discards end the run with `GaveUp`, and a run that ends with discards and
+  no passing test is reported as `GaveUp` too.
 - Shrinking keeps "the same failure": the same kind and, for a panic, the
   same file and line. Give each check its own `assert!` line so shrinking
   never drifts from one bug to another. An `Err` or `TestResult::fail` from
@@ -171,11 +174,12 @@ let config = Config::default().failures(10);          // or EPHYRA_FAILURES=10
 #[ephyra::test(gen = cases(), failures = 10)]         // the attribute form
 ```
 
-The run goes on until it has `n` distinct failures (or the budget ends).
-Each new failure is shrunk while keeping its signature, remembered as a
-regression, and reported with its own `reproduce:` line; repeats are only
-counted. `report.failures` lists them all (`signature`, `count`, `failure`);
-`report.failure` is still the first.
+The run goes on until it has `n` distinct failures, or its tests or time run
+out; failing inputs count as tests, as passing ones do. Each new failure is
+shrunk while keeping its signature, remembered as a regression, and reported
+with its own `reproduce:` line; repeats are only counted. `report.failures`
+lists them all (`signature`, `count`, `failure`); `report.failure` is still
+the first.
 
 A failure's signature, first match wins:
 

@@ -1,0 +1,22 @@
+{
+ "id": "failures-n-never-ends",
+ "title": "Config::failures(n) never ends when every input fails with fewer than n signatures",
+ "class": "verdict-termination",
+ "symptom": "non-termination",
+ "issue": 42,
+ "cause": "failing inputs counted toward neither the test limit nor the discard limit, and the time limits default to none",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "Bruno Volpato (@bvolpato-dd), #66",
+ "oracles": [
+  {
+   "target": "test:verdict_contract",
+   "name": "a_runs_verdict_matches_what_its_inputs_did"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:stopping",
+   "name": "failing_inputs_use_up_the_tests_when_one_failure_does_not_end_the_run"
+  }
+ ]
+}

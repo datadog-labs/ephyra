@@ -107,7 +107,8 @@ pub struct Config {
     /// to hold. Discarded inputs do not count. Default 10 000.
     pub tests: u64,
     /// Stop the random phase after this many milliseconds even if fewer than
-    /// `tests` inputs have passed; the report says so. Default none.
+    /// `tests` inputs have passed; the report says so. The run can try at
+    /// least one input, however short the budget. Default none.
     pub budget_ms: Option<u64>,
     /// Seed for the run. `None` picks a fresh random seed; the seed actually
     /// used is always in the report.
@@ -117,7 +118,8 @@ pub struct Config {
     /// many generation attempts at each successive size. Default 100.
     pub max_size: usize,
     /// Give up once more than `max_discard_ratio * tests` inputs have been
-    /// discarded. Default 10.
+    /// discarded. A run that ends earlier, with discarded inputs and no
+    /// passing test, gives up too. Default 10.
     pub max_discard_ratio: f64,
     /// Stop with `TimedOut` after this many milliseconds. Default none.
     pub timeout_ms: Option<u64>,
@@ -133,7 +135,8 @@ pub struct Config {
     /// How many distinct failures to look for. At 1 (the default) the run
     /// stops at the first failure. Above 1 it goes on until it has found
     /// this many failures with distinct signatures (see
-    /// [`signature`](crate::signature)) or the tests or time run out; each
+    /// [`signature`](crate::signature)) or the tests or time run out
+    /// (failing inputs count toward `tests`, as passing ones do); each
     /// is shrunk while keeping its signature, remembered and listed in
     /// [`Report::failures`](crate::Report::failures).
     pub failures: usize,
