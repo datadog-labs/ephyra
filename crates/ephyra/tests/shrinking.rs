@@ -237,3 +237,18 @@ fn a_panicking_signature_function_falls_back_to_the_default_name() {
     names.sort();
     assert_eq!(names, [file!().replace('\\', "/"), "returned false".to_string()], "{report}");
 }
+
+/// #100: two panics on one line were one failure to the shrinker, which traded the
+/// `expect` that was found, on `(Some(93), None)`, for the `unwrap` beside it.
+#[rustfmt::skip]
+fn one_line((a, b): (Option<i32>, Option<i32>)) -> bool { let _ = a.unwrap() + b.expect("b"); true }
+
+#[test]
+fn shrinking_keeps_the_panic_site_of_a_line_with_two() {
+    let pair = (gens::option(gens::int(0i32..=100)), gens::option(gens::int(0i32..=100)));
+    let report = check(&Config::default().seed(2).no_regressions(), pair, one_line);
+    let failure = report.failure.as_ref().expect("fails");
+    assert!(failure.original.debug.starts_with("(Some("), "{report}");
+    assert_eq!(failure.message.as_deref(), Some("b"), "{report}");
+    assert!(failure.counterexample().debug.starts_with("(Some("), "{report}");
+}

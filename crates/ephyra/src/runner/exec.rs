@@ -568,9 +568,10 @@ where
 /// failures of a run that looks for several.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Signature {
-    /// The kind, and for panics the site. Messages are ignored because
-    /// they usually embed the input.
-    Failure { kind: FailureKind, panic_site: Option<(String, u32)> },
+    /// The kind, and for panics the site: file, line and column, as two panics on
+    /// one line (`a.unwrap() + b.expect("b")`) are two failures (#100). Messages are
+    /// ignored because they usually embed the input.
+    Failure { kind: FailureKind, panic_site: Option<(String, u32, u32)> },
     /// A failure's name, when the run looks for several (see
     /// [`Exec::signature`]).
     Named(String),
@@ -584,7 +585,10 @@ impl Signature {
             Ok(Outcome::False) => (FailureKind::False, None),
             Ok(Outcome::Fail(_)) => (FailureKind::Error, None),
             Err(info) => {
-                (FailureKind::Panic, info.location.as_ref().map(|l| (l.file.clone(), l.line)))
+                (
+                    FailureKind::Panic,
+                    info.location.as_ref().map(|l| (l.file.clone(), l.line, l.column)),
+                )
             },
         };
         Some(Signature::Failure { kind, panic_site })
@@ -596,7 +600,7 @@ impl Signature {
             Signature::Named(name) => name.clone(),
             Signature::Failure { kind, panic_site } => {
                 match panic_site {
-                    Some((file, line)) => format!("{file}:{line}"),
+                    Some((file, line, column)) => format!("{file}:{line}:{column}"),
                     None => format!("{kind:?}"),
                 }
             },
