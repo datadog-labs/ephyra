@@ -1,0 +1,22 @@
+{
+ "id": "hash-collection-replays-stale",
+ "title": "Saved failures over HashSet and HashMap inputs are skipped as stale, so the next run can pass",
+ "class": "replay-fidelity",
+ "symptom": "soundness-false-pass",
+ "issue": 46,
+ "cause": "a saved input is replayed only when its regeneration has the same Debug text, and a hash collection prints its items in another order for each instance",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "Bruno Volpato (@bvolpato-dd), #73",
+ "oracles": [
+  {
+   "target": "test:replay_contract",
+   "name": "a_saved_failure_is_replayed_for_its_own_property_only"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:regressions",
+   "name": "a_saved_hash_collection_is_replayed_and_not_saved_again"
+  }
+ ]
+}

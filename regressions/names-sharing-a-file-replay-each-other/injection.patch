@@ -1,0 +1,11 @@
+diff --git a/crates/ephyra/src/regressions.rs b/crates/ephyra/src/regressions.rs
+--- a/crates/ephyra/src/regressions.rs
++++ b/crates/ephyra/src/regressions.rs
+@@ -83,7 +83,6 @@
+     bytes
+         .split(|b| *b == b'\n')
+         .filter_map(|line| serde_json::from_slice::<Entry>(line).ok())
+-        .filter(|e| e.name == name)
+         .collect()
+ }
+ 

@@ -1,0 +1,13 @@
+diff --git a/crates/ephyra/src/regressions.rs b/crates/ephyra/src/regressions.rs
+--- a/crates/ephyra/src/regressions.rs
++++ b/crates/ephyra/src/regressions.rs
+@@ -98,8 +98,7 @@
+     fs::create_dir_all(dir)?;
+     // A file whose last line has no newline (its last entry deleted by hand) would glue
+     // the new entry onto it, and both would be lost (#59).
+-    let glued = fs::read(&path).is_ok_and(|b| b.last().is_some_and(|c| *c != b'\n'));
+-    let mut line = if glued { "\n".to_string() } else { String::new() };
++    let mut line = String::new();
+     line += &serde_json::to_string(entry).map_err(io::Error::other)?;
+     line.push('\n');
+     // One write for the line and its newline: appends from parallel tests interleave less.

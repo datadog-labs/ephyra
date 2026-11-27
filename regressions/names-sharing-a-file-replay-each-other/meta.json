@@ -1,0 +1,26 @@
+{
+ "id": "names-sharing-a-file-replay-each-other",
+ "title": "Properties whose names differ only in punctuation replay each other's saved failures",
+ "class": "replay-isolation",
+ "symptom": "soundness-false-pass",
+ "issue": 48,
+ "cause": "the file is named after the property with punctuation (and non-ASCII letters) replaced by `_`, and load returned every entry in the file without checking its stored name",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "Yusuf Eren Bozkurt (@YusuffEren), #136",
+ "oracles": [
+  {
+   "target": "test:replay_contract",
+   "name": "a_saved_failure_is_replayed_for_its_own_property_only"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "regressions::tests::names_sharing_a_file_keep_their_own_entries"
+  },
+  {
+   "target": "test:failures",
+   "name": "names_sharing_a_regressions_file_do_not_replay_each_other"
+  }
+ ]
+}

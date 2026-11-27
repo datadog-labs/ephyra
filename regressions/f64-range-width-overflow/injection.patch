@@ -1,0 +1,35 @@
+diff --git a/crates/ephyra/src/gens/primitives.rs b/crates/ephyra/src/gens/primitives.rs
+--- a/crates/ephyra/src/gens/primitives.rs
++++ b/crates/ephyra/src/gens/primitives.rs
+@@ -317,11 +317,7 @@
+ 
+     fn generate(&self, g: &mut Source) -> f64 {
+         let u = g.f64();
+-        let width = self.hi - self.lo;
+-        // A range wider than `f64::MAX` has no finite width to scale.
+-        let value =
+-            if width.is_finite() { self.lo + width * u } else { self.lo * (1.0 - u) + self.hi * u };
+-        value.clamp(self.lo, self.hi)
++        (self.lo + (self.hi - self.lo) * u).clamp(self.lo, self.hi)
+     }
+ 
+     fn shrink(&self, value: &f64, visitor: &mut ShrinkVisitor<'_, f64>) -> ShrinkFlow {
+@@ -340,14 +336,12 @@
+     }
+ 
+     fn mutate(&self, value: &f64, g: &mut Source) -> f64 {
++        let width = self.hi - self.lo;
+         if g.bool() {
+-            return self.generate(g);
++            self.generate(g)
++        } else {
++            (value + (g.f64() - 0.5) * width * 0.1).clamp(self.lo, self.hi)
+         }
+-        let u = g.f64() - 0.5;
+-        let width = self.hi - self.lo;
+-        let step =
+-            if width.is_finite() { u * width * 0.1 } else { u * (self.hi * 0.1 - self.lo * 0.1) };
+-        (value + step).clamp(self.lo, self.hi)
+     }
+ }
+ 

@@ -1,0 +1,22 @@
+{
+ "id": "a-bad-line-drops-the-file",
+ "title": "One line that is not UTF-8 makes a regressions file load as empty",
+ "class": "replay-durability",
+ "symptom": "data-loss",
+ "issue": 59,
+ "cause": "load read the file with read_to_string, which fails on the whole file for one invalid byte",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:replay_contract",
+   "name": "a_saved_failure_is_replayed_for_its_own_property_only"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "regressions::tests::a_line_that_is_not_utf8_costs_only_itself"
+  }
+ ]
+}

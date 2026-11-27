@@ -1,0 +1,22 @@
+{
+ "id": "save-glues-onto-a-line-without-newline",
+ "title": "Saving to a regressions file with no final newline loses the last entry and the new one",
+ "class": "replay-durability",
+ "symptom": "data-loss",
+ "issue": 59,
+ "cause": "save appended without checking that the file ends in a newline, so the new entry was glued onto the last line and neither parsed",
+ "reported_by": "Doğaç Eldenk (@Dogacel), found with Ephyra",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:replay_contract",
+   "name": "a_saved_failure_is_replayed_for_its_own_property_only"
+  }
+ ],
+ "regression": [
+  {
+   "target": "lib",
+   "name": "regressions::tests::save_starts_a_new_line_after_a_file_without_a_final_newline"
+  }
+ ]
+}
