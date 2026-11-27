@@ -40,13 +40,20 @@ touched and uncommitted changes are tested as they are. It builds in
 | [`hash-collection-replays-stale`](hash-collection-replays-stale) | #46 | replay-fidelity | Doğaç Eldenk | Bruno Volpato (#73) |
 | [`save-glues-onto-a-line-without-newline`](save-glues-onto-a-line-without-newline) | #59 | replay-durability | Doğaç Eldenk | |
 | [`a-bad-line-drops-the-file`](a-bad-line-drops-the-file) | #59 | replay-durability | Doğaç Eldenk | |
+| [`result-ok-value-ignored`](result-ok-value-ignored) | | verdict-return-value | (described in #63) | Bruno Volpato (#63) |
+| [`run-of-discards-passes`](run-of-discards-passes) | | verdict-evidence | (described in #65) | Bruno Volpato (#65) |
+| [`panic-after-discard-aborts`](panic-after-discard-aborts) | | verdict-discard | (described in #76) | Bruno Volpato (#76) |
+| [`failures-n-never-ends`](failures-n-never-ends) | #42 | verdict-termination | Doğaç Eldenk | Bruno Volpato (#66) |
+| [`targeted-phase-ignores-discard-limit`](targeted-phase-ignores-discard-limit) | #102 | verdict-evidence | David R. MacIver | |
 
-Two properties catch them all:
+Three properties catch them all:
 
 - [`every_builtin_generator_keeps_its_contract`](../crates/ephyra/tests/gen_contract.rs) catches
   the generator bugs (the first five rows).
 - [`a_saved_failure_is_replayed_for_its_own_property_only`](../crates/ephyra/tests/replay_contract.rs)
-  catches the replay bugs (the last four).
+  catches the replay bugs (the next four).
+- [`a_runs_verdict_matches_what_its_inputs_did`](../crates/ephyra/tests/verdict_contract.rs)
+  catches the verdict bugs (the last five).
 
 ## An entry
 
@@ -60,7 +67,7 @@ Two properties catch them all:
 |---|---|
 | `id` | the directory's name: what went wrong, in a few words |
 | `title` | one line, as an issue title |
-| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `generator-spread`, `shrink-support`, `shrink-progress`, `shrink-termination`, `replay-isolation`, `replay-fidelity`, `replay-durability`, ... |
+| `class` | the contract the bug breaks, shared by its siblings: `generator-domain`, `generator-spread`, `shrink-support`, `shrink-progress`, `shrink-termination`, `replay-isolation`, `replay-fidelity`, `replay-durability`, `verdict-return-value`, `verdict-evidence`, `verdict-discard`, `verdict-termination`, ... |
 | `symptom` | `wrong-result`, `soundness-false-pass`, `false-failure`, `crash`, `non-termination`, `data-loss`, ... |
 | `issue` | the GitHub issue, if there is one |
 | `cause` | the root cause, in a sentence |

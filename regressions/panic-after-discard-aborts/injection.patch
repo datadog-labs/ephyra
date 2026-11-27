@@ -1,0 +1,47 @@
+diff --git a/crates/ephyra/src/gens/mod.rs b/crates/ephyra/src/gens/mod.rs
+index 9bb89cb..c62fbbe 100644
+--- a/crates/ephyra/src/gens/mod.rs
++++ b/crates/ephyra/src/gens/mod.rs
+@@ -206,10 +206,7 @@ pub trait GenExt: Gen + Sized {
+ 
+     /// Keep only values for which `predicate` holds. After
+     /// [`Source::filter_max_attempts`] rejections the input is
+-    /// [discarded](Source::discard) with reason `filter:<label>`. Generation
+-    /// then goes on with the last rejected value, so code after the filter (a
+-    /// [`map`](Self::map), [`dependent`](Self::dependent) or closure) still
+-    /// runs on it; a panic there counts as the discard. Shrink and
++    /// [discarded](Source::discard) with reason `filter:<label>`. Shrink and
+     /// mutation candidates are filtered by the same predicate. Mutation retries
+     /// a bounded number of times, then falls back to filtered generation (which
+     /// can also discard).
+diff --git a/crates/ephyra/src/runner/exec.rs b/crates/ephyra/src/runner/exec.rs
+index 34bb296..46d485a 100644
+--- a/crates/ephyra/src/runner/exec.rs
++++ b/crates/ephyra/src/runner/exec.rs
+@@ -336,10 +336,8 @@ where
+         self.report.gen_time += generate;
+         self.stats.gen_micros.push(micros(generate));
+         match (made, source.discarded()) {
+-            // The code after a discard can meet a value that a filter
+-            // rejected: its panic is part of the discard.
+-            (_, Some(reason)) => Err(Skipped::Discarded(reason.to_string(), generate)),
+-            (Err(info), None) => Err(Skipped::Panicked(info)),
++            (Err(info), _) => Err(Skipped::Panicked(info)),
++            (Ok(_), Some(reason)) => Err(Skipped::Discarded(reason.to_string(), generate)),
+             (Ok(value), None) => {
+                 Ok(Input { value, point: None, size, iteration, origin, generate })
+             },
+diff --git a/crates/ephyra/src/source.rs b/crates/ephyra/src/source.rs
+index 15db9bf..6ae9a88 100644
+--- a/crates/ephyra/src/source.rs
++++ b/crates/ephyra/src/source.rs
+@@ -97,8 +97,7 @@ impl Source {
+ 
+     /// Mark this input as discarded. The runner will not run the property
+     /// on it; `reason` feeds the discard histogram. Only the first reason is
+-    /// kept. The generator goes on after this call, and a panic in it then
+-    /// counts as this discard.
++    /// kept.
+     pub fn discard(&mut self, reason: impl Into<Cow<'static, str>>) {
+         if self.discarded.is_none() {
+             self.discarded = Some(reason.into());

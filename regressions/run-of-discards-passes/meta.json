@@ -1,0 +1,26 @@
+{
+ "id": "run-of-discards-passes",
+ "title": "A run whose every input was discarded passes when a time budget or a loop ends it before the discard limit",
+ "class": "verdict-evidence",
+ "symptom": "soundness-false-pass",
+ "issue": null,
+ "cause": "a run starts as Passed and only the discard limit changed that; a zero budget also ended the run before its first input",
+ "reported_by": "described in #65 by Bruno Volpato (@bvolpato-dd)",
+ "fixed_by": "Bruno Volpato (@bvolpato-dd), #65",
+ "oracles": [
+  {
+   "target": "test:verdict_contract",
+   "name": "a_runs_verdict_matches_what_its_inputs_did"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:stopping",
+   "name": "a_run_whose_every_input_is_discarded_does_not_pass"
+  },
+  {
+   "target": "test:stopping",
+   "name": "the_shortest_budget_tries_one_input"
+  }
+ ]
+}

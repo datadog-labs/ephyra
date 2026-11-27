@@ -1,0 +1,96 @@
+diff --git a/crates/ephyra/src/config.rs b/crates/ephyra/src/config.rs
+index a690eff..ed007a7 100644
+--- a/crates/ephyra/src/config.rs
++++ b/crates/ephyra/src/config.rs
+@@ -135,8 +135,7 @@ pub struct Config {
+     /// How many distinct failures to look for. At 1 (the default) the run
+     /// stops at the first failure. Above 1 it goes on until it has found
+     /// this many failures with distinct signatures (see
+-    /// [`signature`](crate::signature)) or the tests or time run out
+-    /// (failing inputs count toward `tests`, as passing ones do); each
++    /// [`signature`](crate::signature)) or the tests or time run out; each
+     /// is shrunk while keeping its signature, remembered and listed in
+     /// [`Report::failures`](crate::Report::failures).
+     pub failures: usize,
+diff --git a/crates/ephyra/src/runner/exec.rs b/crates/ephyra/src/runner/exec.rs
+index 929e052..34bb296 100644
+--- a/crates/ephyra/src/runner/exec.rs
++++ b/crates/ephyra/src/runner/exec.rs
+@@ -462,9 +462,7 @@ where
+     /// With [`Config::failures`](crate::Config::failures) above 1, the
+     /// first failure of each new [signature](crate::signature) is kept
+     /// instead (see [`failure`](Self::failure)), and failures with a
+-    /// signature already seen are counted against it. Each failing input
+-    /// counts toward [`Config::tests`](crate::Config::tests), as a passing
+-    /// one does. The next call to
++    /// signature already seen are counted against it. The next call to
+     /// [`wants_more`](Self::wants_more) (or `test`, or `finish`) shrinks,
+     /// remembers and records the kept failure, and the run goes on until
+     /// that many distinct failures are found; a loop that shrinks by hand
+@@ -473,7 +471,6 @@ where
+     pub fn test(&mut self, input: &Input<G::Value>) -> Tested {
+         let (tested, found) = self.test_input(input, true);
+         if let Some(found) = found {
+-            self.failed += 1;
+             self.note_failure(found);
+         }
+         tested
+diff --git a/crates/ephyra/src/runner/mod.rs b/crates/ephyra/src/runner/mod.rs
+index ab9cb5c..66f5330 100644
+--- a/crates/ephyra/src/runner/mod.rs
++++ b/crates/ephyra/src/runner/mod.rs
+@@ -85,8 +85,7 @@ pub(crate) use self::{
+ /// Run `property` against inputs from `generator` until [`Config::tests`]
+ /// inputs pass, one fails, too many are discarded, or a time limit elapses.
+ /// With [`Config::failures`] above 1, a failure does not end the run until
+-/// that many distinct failures are found (see [`signature`](crate::signature)),
+-/// and failing inputs count toward [`Config::tests`] as passing ones do.
++/// that many distinct failures are found (see [`signature`](crate::signature)).
+ ///
+ /// Before random testing, an explicit replay point ([`Config::replay`] or
+ /// `EPHYRA_REPLAY`) and any stored regressions for this property are
+@@ -193,7 +192,7 @@ fn property_name(config: &Config) -> String {
+ /// distinct failures: [`test`](Self::test) keeps the first failure of each
+ /// new signature, and [`wants_more`](Self::wants_more) shrinks, remembers
+ /// and records it, then lets the loop go on until that many are found or
+-/// the tests or time run out. A loop that shrinks by hand calls
++/// the budget ends. A loop that shrinks by hand calls
+ /// [`shrink`](Self::shrink), [`reproduces`](Self::reproduces) or
+ /// [`shrunk_to`](Self::shrunk_to) when a failed test leaves
+ /// [`failure`](Self::failure) set, before the next `wants_more`.
+@@ -247,8 +246,6 @@ pub struct Run<G: Gen, P> {
+     /// With `Config::failures` above 1: the signatures found, in order,
+     /// with how many failures had each.
+     distinct: Vec<(exec::Signature, u64)>,
+-    /// Failing inputs of the search, which count toward `Config::tests`.
+-    failed: u64,
+     /// Mutations made through [`mutate`](Self::mutate), for the target
+     /// summary of hand-written loops.
+     mutations: u64,
+@@ -314,7 +311,6 @@ where
+             rng: ChaCha8Rng::seed_from_u64(mix(seed, u64::MAX - 1)),
+             pending: None,
+             distinct: Vec::new(),
+-            failed: 0,
+             mutations: 0,
+             shrinking: None,
+             #[cfg(feature = "coverage")]
+diff --git a/crates/ephyra/src/runner/search.rs b/crates/ephyra/src/runner/search.rs
+index 6e8a212..925e07f 100644
+--- a/crates/ephyra/src/runner/search.rs
++++ b/crates/ephyra/src/runner/search.rs
+@@ -45,12 +45,12 @@ where
+     /// With [`Config::failures`](crate::Config::failures) above 1, a
+     /// failure kept by [`test`](Self::test) is first shrunk, remembered and
+     /// recorded, and the run stops only once that many distinct failures
+-    /// are found or another rule fires. Failing inputs then count as tests.
++    /// are found.
+     pub fn wants_more(&mut self) -> bool {
+         if !self.carry_on() || self.report.status != Status::Passed {
+             return false;
+         }
+-        if self.report.tests + self.failed >= self.config.tests {
++        if self.report.tests >= self.config.tests {
+             return false;
+         }
+         // Even the shortest budget lets the loop try one input.

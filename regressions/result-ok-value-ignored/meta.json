@@ -1,0 +1,22 @@
+{
+ "id": "result-ok-value-ignored",
+ "title": "A property returning Result<bool, E> or Result<TestResult, E> passes on Ok(false), Ok(Fail) and Ok(Err(..))",
+ "class": "verdict-return-value",
+ "symptom": "soundness-false-pass",
+ "issue": null,
+ "cause": "impl<T, E: Debug> Testable for Result<T, E> left T unconstrained and mapped every Ok to a pass",
+ "reported_by": "described in #63 by Bruno Volpato (@bvolpato-dd)",
+ "fixed_by": "Bruno Volpato (@bvolpato-dd), #63",
+ "oracles": [
+  {
+   "target": "test:verdict_contract",
+   "name": "a_runs_verdict_matches_what_its_inputs_did"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:results",
+   "name": "ok_fails_when_its_value_does"
+  }
+ ]
+}

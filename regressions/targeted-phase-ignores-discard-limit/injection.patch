@@ -1,0 +1,39 @@
+diff --git a/crates/ephyra/src/runner/search.rs b/crates/ephyra/src/runner/search.rs
+index d5b3659..6e8a212 100644
+--- a/crates/ephyra/src/runner/search.rs
++++ b/crates/ephyra/src/runner/search.rs
+@@ -148,12 +148,10 @@ where
+         let target_tests = self.config.target.tests;
+         let explore = self.config.target.explore;
+         let mut iterations = 0u64;
++        let mut discarded = 0u64;
+ 
+         while iterations < target_tests {
+-            // The run's discard limit, `max_discard_ratio * tests`, on the run's discards:
+-            // the phase used to count its own against its own budget, so a run could pass
+-            // with many times the documented number of discards (#102).
+-            if self.timed_out_or_gave_up(self.report.discarded, self.config.tests) {
++            if self.timed_out_or_gave_up(discarded, target_tests) {
+                 break;
+             }
+             iterations += 1;
+@@ -163,7 +161,10 @@ where
+                 match self.draw_at(point, crate::report::Origin::Explore) {
+                     Some(input) => input,
+                     None if self.report.status != Status::Passed => break,
+-                    None => continue,
++                    None => {
++                        discarded += 1;
++                        continue;
++                    },
+                 }
+             } else {
+                 let Some(seed) = self.pool.pick(&mut self.rng) else { break };
+@@ -181,6 +182,7 @@ where
+                 break;
+             }
+             if tested.discarded() {
++                discarded += 1;
+                 continue;
+             }
+             self.keep(input.value, &tested);

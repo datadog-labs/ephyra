@@ -1,0 +1,22 @@
+{
+ "id": "targeted-phase-ignores-discard-limit",
+ "title": "A property that calls target() passes with far more discards than max_discard_ratio * tests",
+ "class": "verdict-evidence",
+ "symptom": "soundness-false-pass",
+ "issue": 102,
+ "cause": "the targeted phase counted its own discards against its own budget (target.tests), not the run's against max_discard_ratio * tests",
+ "reported_by": "David R. MacIver (@DRMacIver), found by an LLM writing tests",
+ "fixed_by": "this pull request",
+ "oracles": [
+  {
+   "target": "test:verdict_contract",
+   "name": "a_runs_verdict_matches_what_its_inputs_did"
+  }
+ ],
+ "regression": [
+  {
+   "target": "test:stopping",
+   "name": "the_targeted_phase_keeps_the_runs_discard_limit"
+  }
+ ]
+}

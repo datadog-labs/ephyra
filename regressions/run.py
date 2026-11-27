@@ -150,7 +150,7 @@ def main():
             m["applies"] = False
             continue
         m["applies"] = True
-        if any(f.split("/")[-1].startswith("test") or "/tests/" in f for f in files):
+        if any("/tests/" in f or f.endswith(("/tests.rs", "_test.rs", "_tests.rs")) for f in files):
             problems.append(f"{m['id']}: injection.patch touches a test file ({files})")
     print(f"{sum(m['applies'] for m in metas)}/{len(metas)} injections apply and reverse")
     if args.check:

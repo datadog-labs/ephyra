@@ -1,0 +1,49 @@
+diff --git a/crates/ephyra/src/runner/mod.rs b/crates/ephyra/src/runner/mod.rs
+--- a/crates/ephyra/src/runner/mod.rs
++++ b/crates/ephyra/src/runner/mod.rs
+@@ -228,9 +228,6 @@
+     /// Also the run's seed and property name.
+     report: Report,
+     started: Instant,
+-    /// Whether the time budget ran out before the first input and the run
+-    /// was let on, once, to try one.
+-    overtime: bool,
+     seen: HashSet<u64>,
+     generated: u64,
+     pool: Pool<G::Value>,
+@@ -306,7 +303,6 @@
+             exec: Exec { property, coverage: CoverageState::default(), sinks, naming },
+             report,
+             started: Instant::now(),
+-            overtime: false,
+             seen: HashSet::new(),
+             generated: 0,
+             covers: BTreeMap::new(),
+@@ -355,13 +351,6 @@
+         } else if self.pending.is_some() {
+             self.fail();
+         }
+-        // Whatever ended the search, discards alone are not a pass.
+-        if self.report.status == Status::Passed
+-            && self.report.tests == 0
+-            && self.report.discarded > 0
+-        {
+-            self.report.status = Status::GaveUp;
+-        }
+         if self.report.target.is_none() && self.mutations > 0 {
+             self.report.target = self.target_summary(self.mutations);
+         }
+diff --git a/crates/ephyra/src/runner/search.rs b/crates/ephyra/src/runner/search.rs
+--- a/crates/ephyra/src/runner/search.rs
++++ b/crates/ephyra/src/runner/search.rs
+@@ -53,10 +53,8 @@
+         if self.report.tests + self.failed >= self.config.tests {
+             return false;
+         }
+-        // Even the shortest budget lets the loop try one input.
+         if let Some(budget) = self.config.budget_ms.map(std::time::Duration::from_millis)
+             && self.started.elapsed() > budget
+-            && (self.report.iterations > 0 || std::mem::replace(&mut self.overtime, true))
+         {
+             self.report.stopped_by_budget = true;
+             return false;
