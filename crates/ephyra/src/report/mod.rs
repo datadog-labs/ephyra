@@ -563,7 +563,8 @@ impl Series {
     }
 }
 
-/// One bar of a feature histogram: values in `from..=to`.
+/// One bar of a feature histogram: values in `from..=to`. A value on an edge
+/// that two bars share counts in the upper one.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize))]
 pub struct Bucket {
@@ -603,32 +604,39 @@ impl FeatureSummary {
         let count = values.len() as u64;
         let min = values[0];
         let max = values[values.len() - 1];
-        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let sum = values.iter().sum::<f64>();
+        let mean = if sum.is_finite() {
+            sum / count as f64
+        } else {
+            values.iter().map(|v| v / count as f64).sum::<f64>().clamp(min, max)
+        };
         let median = values[values.len() / 2];
         let p90 = values[(values.len() * 9 / 10).min(values.len() - 1)];
         let integral = values.iter().all(|v| v.fract() == 0.0);
-        let mut histogram = Vec::new();
-        if integral && max - min < 8.0 {
-            let mut at = min;
-            while at <= max {
-                let n = values.iter().filter(|&&v| v == at).count() as u64;
-                histogram.push(Bucket { from: at, to: at, count: n });
-                at += 1.0;
-            }
-        } else if max > min {
-            let width = if integral { ((max - min + 1.0) / 8.0).ceil() } else { (max - min) / 8.0 };
-            for i in 0..8 {
-                let from = min + width * i as f64;
-                let to = if integral { from + width - 1.0 } else { from + width };
-                let last = i == 7;
-                let n = values
-                    .iter()
-                    .filter(|&&v| v >= from && (v < from + width || (last && v <= max)))
-                    .count() as u64;
-                histogram.push(Bucket { from, to: to.min(max), count: n });
-            }
-        } else {
-            histogram.push(Bucket { from: min, to: max, count });
+        // Halved where `max - min` overflows.
+        let scale = if (max - min).is_finite() { 1.0 } else { 0.5 };
+        let span = max * scale - min * scale;
+        let width = if integral { ((span + 1.0) / 8.0).ceil() } else { span / 8.0 };
+        // Fewer than eight when whole buckets reach `max` earlier, or when
+        // rounding puts several starts on the same number.
+        let mut starts: Vec<f64> = (0..8)
+            .map(|i| (min * scale + width * i as f64) / scale)
+            .filter(|&start| start <= max)
+            .collect();
+        starts.dedup();
+        let mut rest = &values[..];
+        let mut histogram = Vec::with_capacity(starts.len());
+        for (i, &from) in starts.iter().enumerate() {
+            let (to, n) = match starts.get(i + 1) {
+                Some(&next) => {
+                    // Above 2^53 the integer before `next` is not `next - 1`.
+                    let to = if integral { (next - 1.0).min(next.next_down()) } else { next };
+                    (to, rest.partition_point(|&v| v < next))
+                },
+                None => (max, rest.len()),
+            };
+            histogram.push(Bucket { from, to, count: n as u64 });
+            rest = &rest[n..];
         }
         FeatureSummary { count, min, max, mean, median, p90, histogram }
     }
@@ -723,4 +731,95 @@ pub struct Sample {
     pub size: usize,
     /// Its iteration number.
     pub iteration: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crate::{
+            Config,
+            check,
+            gens::{
+                self,
+                BoxGen,
+                GenExt,
+            },
+        },
+    };
+
+    /// `(from, to, count)` of each bucket.
+    fn histogram(values: &[f64]) -> Vec<(f64, f64, u64)> {
+        let summary = FeatureSummary::of(values.to_vec());
+        summary.histogram.iter().map(|b| (b.from, b.to, b.count)).collect()
+    }
+
+    #[test]
+    fn histograms_of_rounded_and_extreme_values() {
+        assert_eq!(
+            histogram(&[0.0, 19.0, 5.0]),
+            [
+                (0.0, 2.0, 1),
+                (3.0, 5.0, 1),
+                (6.0, 8.0, 0),
+                (9.0, 11.0, 0),
+                (12.0, 14.0, 0),
+                (15.0, 17.0, 0),
+                (18.0, 19.0, 1)
+            ]
+        );
+        // 0.3 is below the rounded start of the bucket after 0.25.
+        let close = histogram(&[0.0, 0.3, 0.4]);
+        assert_eq!((close[0].2, close[5].2, close[7].2), (1, 1, 1), "{close:?}");
+        let wide = histogram(&[-f64::MAX, 5e307]);
+        assert_eq!((wide.len(), wide[0].2, wide[7].2), (8, 1, 1), "{wide:?}");
+        assert_eq!(FeatureSummary::of(vec![f64::MAX; 3]).mean, f64::MAX);
+        // Above 2^53 an `f64` holds only even integers.
+        let exact = 2f64.powi(53);
+        assert_eq!(histogram(&[exact, exact]), [(exact, exact, 2)]);
+        assert_eq!(
+            histogram(&[exact + 2.0, exact - 1.0]),
+            [(exact - 1.0, exact - 1.0, 1), (exact, exact, 0), (exact + 2.0, exact + 2.0, 1)]
+        );
+    }
+
+    #[test]
+    fn histograms_count_every_value_once() {
+        let centers = vec![0.0, 0.1, -(2f64.powi(53)), 1e16, f64::MAX, f64::MIN];
+        let center = gens::one_of(vec![
+            BoxGen::new(gens::pick_from(centers)),
+            BoxGen::new(gens::f64_bits()),
+        ]);
+        let scale = gens::pick_from(vec![1.0, 0.01, 5e-324, 1e14, 1e307]);
+        let offset = gens::one_of(vec![
+            BoxGen::new(gens::int(-20i32..=20).map(f64::from)),
+            BoxGen::new(gens::f64()),
+            BoxGen::new(gens::f64_bits()),
+        ]);
+        let mut config = Config::default().seed(1).no_regressions();
+        config.coverage.enabled = false;
+        let report =
+            check(&config, (center, scale, gens::vec(offset)), |(center, scale, offsets)| {
+                let values = offsets.iter().map(|offset| center + scale * offset);
+                let values: Vec<f64> = values.filter(|v| v.is_finite()).collect();
+                if values.is_empty() {
+                    return;
+                }
+                let FeatureSummary { min, max, mean, histogram, .. } =
+                    FeatureSummary::of(values.clone());
+                assert!(mean.is_finite());
+                assert!((1..=8).contains(&histogram.len()), "{histogram:?}");
+                let integral = values.iter().all(|v| v.fract() == 0.0);
+                for (i, bucket) in histogram.iter().enumerate() {
+                    let next = histogram.get(i + 1).map_or(f64::INFINITY, |next| next.from);
+                    assert!(bucket.from <= bucket.to && bucket.from < next, "{histogram:?}");
+                    assert!(bucket.to < next || (!integral && bucket.to == next), "{histogram:?}");
+                    let inside = values.iter().filter(|&&v| bucket.from <= v && v < next);
+                    assert!(inside.clone().all(|&v| v <= bucket.to), "{histogram:?}");
+                    assert_eq!(inside.count() as u64, bucket.count, "{histogram:?}");
+                }
+                assert_eq!((histogram[0].from, histogram[histogram.len() - 1].to), (min, max));
+            });
+        assert!(report.passed(), "{report}");
+    }
 }
