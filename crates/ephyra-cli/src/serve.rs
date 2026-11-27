@@ -24,13 +24,15 @@
 //! environment `run_env` builds: every artifact path pointed into the
 //! directory, `-C instrument-coverage` unless `--no-instrument`, and
 //! [`Options::resolved_target_dir`]. Start the server inside the workspace
-//! so `-p` resolves. "Discover tests" builds the test binaries with `cargo
-//! test --no-run --message-format=json` and lists their tests with `--list`,
-//! into `tests.json`.
+//! so `--package` resolves. "Discover tests" builds the test binaries with
+//! `cargo test --no-run --message-format=json` and lists their tests with
+//! `--list`, into `tests.json`.
 //!
 //! The server binds to `127.0.0.1` only and speaks plain HTTP/1.1 from
 //! the standard library. The only thing it ever starts is `cargo`, on
 //! request, one run at a time; cross-site requests are refused by origin.
+//! A request names a package of the workspace and an example or a test. It
+//! cannot add flags to the command: those come from [`Options::cargo_args`].
 
 use std::{
     collections::{
@@ -224,9 +226,6 @@ struct State {
     options: Options,
     stop: Arc<AtomicBool>,
     run: Mutex<Option<RunLog>>,
-    /// Workspace members and their features, from `cargo metadata`, read
-    /// on first use.
-    members: Mutex<Option<Vec<Member>>>,
 }
 
 impl State {
@@ -236,11 +235,6 @@ impl State {
 
     fn log(&self) -> MutexGuard<'_, Option<RunLog>> {
         self.run.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    fn members(&self) -> Vec<Member> {
-        let mut cached = self.members.lock().unwrap_or_else(|e| e.into_inner());
-        cached.get_or_insert_with(|| workspace_members(&self.options.cargo)).clone()
     }
 }
 
@@ -360,18 +354,24 @@ pub(crate) fn cargo_args_for(
     (args, notes)
 }
 
+/// Refuse a package that is not in the workspace. Cargo decides when the list
+/// is not known: `cargo metadata` failed, or a given `--manifest-path` moves
+/// the runs to another workspace.
+fn check_package(package: &str, given: &[String], members: &[Member]) -> Result<(), String> {
+    let known = !members.is_empty() && !given.iter().any(|a| a.starts_with("--manifest-path"));
+    if known && members.iter().all(|m| m.name != package) {
+        return Err(format!("the workspace has no package named `{package}`"));
+    }
+    Ok(())
+}
+
 /// Start serving in a background thread.
 pub fn start(options: Options) -> io::Result<Server> {
     let listener = TcpListener::bind(("127.0.0.1", options.port))?;
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
     let stop = Arc::new(AtomicBool::new(false));
-    let state = Arc::new(State {
-        options,
-        stop: stop.clone(),
-        run: Mutex::new(None),
-        members: Mutex::new(None),
-    });
+    let state = Arc::new(State { options, stop: stop.clone(), run: Mutex::new(None) });
     let thread = thread::spawn(move || {
         while !state.stop.load(Ordering::Relaxed) {
             match listener.accept() {
@@ -498,15 +498,18 @@ fn handle(stream: TcpStream, state: &Arc<State>) -> io::Result<()> {
             let started = if path == "/api/run" {
                 run_request(state, &request.body).and_then(|(name, spec)| {
                     let package = spec.as_ref().and_then(|s| s.package.as_deref());
-                    let (extra, notes) =
-                        cargo_args_for(package, &state.options.cargo_args, &state.members());
+                    let given = &state.options.cargo_args;
+                    let members = workspace_members(&state.options.cargo);
+                    let (extra, notes) = cargo_args_for(package, given, &members);
                     let args = run_args(spec.as_ref(), &extra)?;
+                    if let Some(package) = package {
+                        check_package(package, given, &members)?;
+                    }
                     start_run(state, &name, args, notes, None)
                 })
             } else {
-                *state.members.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                let (extra, notes) =
-                    cargo_args_for(None, &state.options.cargo_args, &state.members());
+                let members = workspace_members(&state.options.cargo);
+                let (extra, notes) = cargo_args_for(None, &state.options.cargo_args, &members);
                 let mut args = vec!["test".to_string()];
                 args.extend(extra);
                 args.extend(["--no-run", "--message-format=json"].map(String::from));
@@ -592,35 +595,37 @@ fn run_request(state: &State, body: &[u8]) -> Result<(String, Option<RunSpec>), 
     Ok(("all tests".to_string(), None))
 }
 
-/// The cargo arguments for a spec (`None` runs every test).
+/// The cargo arguments for a spec (`None` runs every test). Its values come
+/// from a request or a report file: they are passed where neither cargo nor
+/// the test harness reads flags, and one that looks like a flag is refused.
 fn run_args(spec: Option<&RunSpec>, extra: &[String]) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = match spec {
         None => ["test", "--tests"].map(String::from).into(),
         Some(spec) => {
-            let package = spec
-                .package
-                .as_deref()
-                .filter(|p| !p.is_empty())
-                .ok_or("the report does not say which package ran it")?;
+            for (what, value) in
+                [("package", &spec.package), ("target", &spec.target), ("test", &spec.test)]
+            {
+                if let Some(value) = value
+                    && (value.is_empty() || value.starts_with('-'))
+                {
+                    return Err(format!("`{value}` is not the name of a {what}"));
+                }
+            }
+            let package =
+                spec.package.as_deref().ok_or("the report does not say which package ran it")?;
+            let package = format!("--package={package}");
             if spec.kind == "example" {
-                let target = spec
-                    .target
-                    .as_deref()
-                    .filter(|t| !t.is_empty())
-                    .ok_or("the report does not name the example")?;
-                ["run", "-p", package, "--example", target].map(String::from).into()
+                let target =
+                    spec.target.as_deref().ok_or("the report does not name the example")?;
+                vec!["run".to_string(), package, format!("--example={target}")]
             } else {
-                ["test", "-p", package, "--tests"].map(String::from).into()
+                vec!["test".to_string(), package, "--tests".to_string()]
             }
         },
     };
     args.extend_from_slice(extra);
-    if let Some(test) = spec
-        .filter(|s| s.kind != "example")
-        .and_then(|s| s.test.as_deref())
-        .filter(|t| !t.is_empty())
-    {
-        args.extend(["--", test, "--exact"].map(String::from));
+    if let Some(test) = spec.filter(|s| s.kind != "example").and_then(|s| s.test.as_deref()) {
+        args.extend(["--", "--exact", "--", test].map(String::from));
     }
     Ok(args)
 }
@@ -1246,14 +1251,14 @@ mod tests {
             run_args(Some(&spec), &extra).unwrap(),
             [
                 "test",
-                "-p",
-                "ephyra",
+                "--package=ephyra",
                 "--tests",
                 "--features",
                 "coverage",
                 "--",
-                "planted::bst",
-                "--exact"
+                "--exact",
+                "--",
+                "planted::bst"
             ]
         );
         let example = RunSpec {
@@ -1264,12 +1269,60 @@ mod tests {
         };
         assert_eq!(
             run_args(Some(&example), &[]).unwrap(),
-            ["run", "-p", "ephyra", "--example", "bst"]
+            ["run", "--package=ephyra", "--example=bst"]
         );
         assert_eq!(run_args(None, &extra).unwrap(), ["test", "--tests", "--features", "coverage"]);
         assert!(run_args(Some(&RunSpec { package: None, ..spec }), &[]).is_err());
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote("plain"), "plain");
+    }
+
+    #[test]
+    fn run_values_are_names_and_never_flags() {
+        let this = "serve::tests::run_values_are_names_and_never_flags";
+        let spec = RunSpec {
+            package: Some("ephyra".into()),
+            kind: "example".into(),
+            target: Some("bst".into()),
+            test: Some(this.into()),
+        };
+        for value in ["--logfile=log", "-p", "-", ""] {
+            let value = || Some(value.to_string());
+            for (what, spec) in [
+                ("package", RunSpec { package: value(), ..spec.clone() }),
+                ("target", RunSpec { target: value(), ..spec.clone() }),
+                ("test", RunSpec { test: value(), ..spec.clone() }),
+            ] {
+                for kind in ["test", "example"] {
+                    let error = run_args(Some(&RunSpec { kind: kind.into(), ..spec.clone() }), &[])
+                        .unwrap_err();
+                    assert!(error.ends_with(&format!("is not the name of a {what}")), "{error}");
+                }
+            }
+        }
+
+        // The test harness takes the name as it is passed.
+        let args = run_args(Some(&RunSpec { kind: "test".into(), ..spec }), &[]).unwrap();
+        let harness_args = args.iter().skip_while(|a| *a != "--").skip(1);
+        let listed = Command::new(std::env::current_exe().unwrap())
+            .args(["--list", "--format", "terse"])
+            .args(harness_args)
+            .output()
+            .unwrap();
+        assert_eq!(parse_test_list(&String::from_utf8_lossy(&listed.stdout)), [this]);
+    }
+
+    #[test]
+    fn runs_are_of_workspace_packages() {
+        let members = workspace_members(Path::new(env!("CARGO")));
+        assert_eq!(check_package("ephyra-cli", &[], &members), Ok(()));
+        for package in ["*", "ephyra-c?i", "ephyra-cli@0.0.1", "other"] {
+            assert!(check_package(package, &[], &members).is_err(), "{package}");
+        }
+        // Without the list of the workspace the runs are in, cargo decides.
+        assert_eq!(check_package("other", &[], &[]), Ok(()));
+        let elsewhere = ["--manifest-path", "other/Cargo.toml"].map(String::from);
+        assert_eq!(check_package("other", &elsewhere, &members), Ok(()));
     }
 
     #[test]
@@ -1368,13 +1421,27 @@ mod tests {
         let fake = dir.join("fake-cargo.sh");
         fs::write(
             &fake,
-            "#!/bin/sh\necho \"args: $@\"\necho \"html: $EPHYRA_COVERAGE_HTML\"\necho \"flags: $RUSTFLAGS\" >&2\nsleep 0.3\nexit 3\n",
+            "#!/bin/sh\n[ \"$1\" = metadata ] && exec cat \"${0%/*}/metadata.json\"\necho \"args: $@\"\necho \"html: $EPHYRA_COVERAGE_HTML\"\necho \"flags: $RUSTFLAGS\" >&2\nsleep 1\nexit 3\n",
         )
         .unwrap();
         fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        let set_packages = |names: &[&str]| {
+            let package = |name| {
+                json!({
+                    "name": name,
+                    "features": { "coverage": [] },
+                    "manifest_path": "/w/Cargo.toml",
+                    "targets": [],
+                })
+            };
+            let packages: Vec<Value> = names.iter().map(package).collect();
+            let metadata = json!({ "packages": packages });
+            fs::write(dir.join("metadata.json"), metadata.to_string()).unwrap();
+        };
+        set_packages(&["ephyra"]);
         fs::write(
             dir.join("reports.jsonl"),
-            "{\"name\":\"planted::bst\",\"status\":\"Passed\",\"run\":{\"package\":\"ephyra\",\"kind\":\"test\",\"target\":\"reports\",\"test\":\"planted::bst\"}}\n{\"name\":\"old\",\"status\":\"Passed\"}\n",
+            "{\"name\":\"planted::bst\",\"status\":\"Passed\",\"run\":{\"package\":\"ephyra\",\"kind\":\"test\",\"target\":\"reports\",\"test\":\"planted::bst\"}}\n{\"name\":\"old\",\"status\":\"Passed\"}\n{\"name\":\"flag\",\"run\":{\"package\":\"ephyra\",\"kind\":\"test\",\"test\":\"--ignored\"}}\n",
         )
         .unwrap();
         let options = Options {
@@ -1389,6 +1456,14 @@ mod tests {
 
         assert_eq!(post(addr, "/api/run", "{\"name\":\"old\"}", "").0, 400, "no run spec");
         assert_eq!(post(addr, "/api/run", "{\"name\":\"nope\"}", "").0, 400);
+        for (request, error) in [
+            ("{\"name\":\"flag\"}", "`--ignored` is not the name of a test"),
+            ("{\"kind\":\"test\",\"package\":\"--all\"}", "`--all` is not the name of a package"),
+            ("{\"kind\":\"test\",\"package\":\"*\"}", "the workspace has no package named `*`"),
+        ] {
+            let refused = post(addr, "/api/run", request, "");
+            assert_eq!(refused, (400, json!({ "error": error }).to_string()));
+        }
         let (status, body) = post(addr, "/api/run", "{\"name\":\"planted::bst\"}", "");
         assert_eq!((status, body.as_str()), (202, "{\"id\":1}"));
         assert_eq!(post(addr, "/api/run", "{}", "").0, 409, "one run at a time");
@@ -1400,7 +1475,7 @@ mod tests {
             log["lines"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(
             lines.contains(
-                &"args: test -p ephyra --tests --features coverage -- planted::bst --exact"
+                &"args: test --package=ephyra --tests --features coverage -- --exact -- planted::bst"
             ),
             "{lines:?}"
         );
@@ -1411,9 +1486,10 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("instrument-coverage")), "{lines:?}");
         assert_eq!(lines.last().copied(), Some("finished: exit code 3"));
 
-        // Everything, and an explicit spec.
+        // Everything, and an explicit spec, of a package that is new by then.
         assert_eq!(post(addr, "/api/run", "", "").0, 202);
         assert_eq!(wait_idle(addr)["name"], "all tests");
+        set_packages(&["ephyra", "p"]);
         let (status, _) = post(
             addr,
             "/api/run",
@@ -1421,6 +1497,8 @@ mod tests {
             "",
         );
         assert_eq!(status, 202);
+        let command = wait_idle(addr)["command"].to_string();
+        assert!(command.contains(" run --package=p --example=ex --features coverage"), "{command}");
         server.stop();
         thread::sleep(Duration::from_millis(500));
         let _ = fs::remove_dir_all(&dir);

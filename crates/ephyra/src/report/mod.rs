@@ -323,8 +323,9 @@ pub struct CausalJump {
 
 /// How a run was started, read from the environment cargo gives a test or
 /// example when it runs it: enough for `ephyra visualize` to run the same
-/// property again with `cargo test -p <package> --tests -- <test> --exact`
-/// or `cargo run -p <package> --example <target>`.
+/// property again with
+/// `cargo test --package=<package> --tests -- --exact -- <test>`
+/// or `cargo run --package=<package> --example=<target>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 pub struct RunSpec {
