@@ -38,6 +38,7 @@ use ephyra::{
     Config,
     Gen,
     GenExt,
+    Source,
     TestResult,
     check,
     gens,
@@ -146,16 +147,18 @@ fn a_saved_failure_is_replayed_for_its_own_property_only() {
     })
     .assert_passed();
 
-    // End to end: a failure one run saves, the next run replays.
-    let config = Config::default().seed(46).tests(60).no_regressions();
-    check(&config, (gens::int(0usize..INPUTS.len()), gens::int(0u64..=u64::MAX)), |(i, seed)| {
-        let (kind, replays) = INPUTS[i];
-        match replays(seed) {
-            Ok(()) => TestResult::Pass,
-            Err(why) => TestResult::fail(format!("{kind}: {why}")),
+    // End to end: a failure one run saves, the next run replays. A plain loop over the
+    // kinds of input and a few seeds, not a nested `check`: a `check` inside a property
+    // deadlocks on instrumented builds (#61).
+    let mut seeds = Source::new(46, 0);
+    for (kind, replays) in INPUTS {
+        for _ in 0..8 {
+            let seed = seeds.int(0u64..=u64::MAX);
+            if let Err(why) = replays(seed) {
+                panic!("{kind}, seed {seed}: {why}");
+            }
         }
-    })
-    .assert_passed();
+    }
 }
 
 /// Run 1 of a property over `generator` that fails on every input saves the failure;
