@@ -15,6 +15,7 @@ use crate::{
     gens::{
         self,
         BoxGen,
+        Gen,
         GenExt,
     },
     hooks::ShrinkVisitor,
@@ -54,7 +55,13 @@ macro_rules! impl_arbitrary_int {
     ($($t:ty),*) => {$(
         impl Arbitrary for $t {
             fn arbitrary() -> BoxGen<Self> {
-                gens::frequency(vec![(1, gens::edges::<$t>(..).boxed()), (7, gens::int::<$t>(..).boxed())]).boxed()
+                // The edges one time in eight. The hooks are those of the full
+                // range, which hold for every value of the type.
+                let full = gens::int::<$t>(..);
+                gens::frequency(vec![(1, gens::edges::<$t>(..).boxed()), (7, full.boxed())])
+                    .with_shrink(move |value, visit| full.shrink(value, visit))
+                    .with_mutate(move |value, g| full.mutate(value, g))
+                    .boxed()
             }
         }
     )*};
@@ -102,8 +109,12 @@ macro_rules! impl_arbitrary_float {
                     let index = SPECIALS.iter().position(|s| s == value).unwrap_or(0);
                     SPECIALS[..index.min(6)].iter().try_for_each(|s| visitor(*s))
                 };
+                // The mix below only generates. The hooks are the bit patterns',
+                // which hold for every value of the type, with the plain special
+                // values first.
+                let bits = gens::$bits();
                 gens::frequency(vec![
-                    (1, special.with_shrink(plain).boxed()),
+                    (1, special.boxed()),
                     (
                         2,
                         (gens::int(-100i32..=100), gens::int(0usize..4))
@@ -111,8 +122,13 @@ macro_rules! impl_arbitrary_float {
                             .boxed(),
                     ),
                     (2, gens::$unit().boxed()),
-                    (3, gens::$bits().boxed()),
+                    (3, bits.boxed()),
                 ])
+                .with_shrink(move |value, visit| {
+                    plain(value, visit)?;
+                    bits.shrink(value, visit)
+                })
+                .with_mutate(move |value, g| bits.mutate(value, g))
                 .boxed()
             }
         }

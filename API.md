@@ -36,7 +36,7 @@ Constructors in `gens`:
 | `vec(elem)`, then `.len(range)` | One element generator. |
 | `option(g)`, `result(ok, err)` | |
 | `constant(v)`, `pick_from(vec![..])` | |
-| `one_of(vec![g.boxed(), ..])`, `frequency(vec![(w, g.boxed()), ..])` | Call `.boxed()` on the result for a `BoxGen`. |
+| `one_of(vec![g.boxed(), ..])`, `frequency(vec![(w, g.boxed()), ..])` | Call `.boxed()` on the result for a `BoxGen`. Combinators, like `map`: no shrinker, and mutation generates afresh (a value does not say which alternative made it). For alternatives that shrink, use an enum with `#[derive(Arbitrary)]` or `dependent` over an index. |
 | `recursive(depth, leaf, \|inner\| ..)` | A bounded recursive type. |
 | `sized(\|size\| gen)` | Has no shrinker. |
 | `dependent(outer, \|a\| inner)` | Returns `(A, B)`. |

@@ -100,21 +100,30 @@ fn a_float_is_not_halved_below_one() {
 }
 
 #[test]
-fn a_choice_of_ranges_ends_in_the_range_closest_to_zero() {
-    let ports = || {
+fn a_choice_keeps_its_values_inside_its_alternatives() {
+    // EPH-012: the choice ran every alternative's hooks on every value, and an
+    // alternative's shrinker cut a v6 address down to v4's four bytes.
+    let addresses = || {
         gens::one_of(vec![
-            gens::int(0u16..=1023).filter("system", |p| *p <= 1023).boxed(),
-            gens::int(49152u16..=65535).filter("dynamic", |p| *p >= 49152).boxed(),
+            (gens::constant(4u8), gens::vec(any::<u8>()).len(4..=4)).boxed(),
+            (gens::constant(6u8), gens::vec(any::<u8>()).len(16..=16)).boxed(),
         ])
     };
-    assert_eq!(ends(ports, |_| false), ["0"; 20]);
-    let floats = || {
-        gens::one_of(vec![
-            gens::f64_range(0.0..=1.0).boxed(),
-            gens::f64_range(100.0..=200.0).boxed(),
-        ])
-    };
-    assert_eq!(ends(floats, |_| false), ["0.0"; 20]);
+    let valid = |(v, b): &(u8, Vec<u8>)| (*v == 4 && b.len() == 4) || (*v == 6 && b.len() == 16);
+    let v6 = (6u8, [0u8; 15].into_iter().chain([250]).collect::<Vec<_>>());
+    assert_eq!(addresses().shrink_candidates(&v6), vec![], "a choice has no shrinker");
+    let mut g = ephyra::Source::new(1, 8);
+    assert!((0..1000).all(|_| valid(&addresses().mutate(&v6, &mut g))));
+    for seed in 0..20 {
+        let config = Config::default().seed(seed).no_regressions();
+        let report = check(&config, addresses(), |(_, b)| b.iter().all(|x| *x < 200));
+        let shown = &report.failure.as_ref().expect("fails").counterexample().debug;
+        let bytes = shown.matches(", ").count();
+        assert!(
+            (shown.starts_with("(4") && bytes == 4) || (shown.starts_with("(6") && bytes == 16),
+            "{shown}"
+        );
+    }
 }
 
 #[test]

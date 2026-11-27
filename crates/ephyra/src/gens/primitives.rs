@@ -608,10 +608,15 @@ impl<GT: Gen, GE: Gen> Gen for ResultGen<GT, GE> {
 // Choice between generators
 // --------------------------------------------------------------------------
 
-/// Pick one of `alternatives` uniformly, then generate from it. Shrink
-/// candidates come from every alternative's shrinker (a value cannot tell
-/// which alternative produced it), so keep alternatives' supports
-/// compatible or add a `filter`.
+/// Pick one of `alternatives` uniformly, then generate from it.
+///
+/// A combinator, like [`map`](crate::GenExt::map): the value does not record
+/// which alternative produced it, so no alternative's hooks can be trusted
+/// with it. The choice has no shrinker, and mutation generates a fresh value
+/// from a fresh choice. For alternatives that should shrink and mutate, give
+/// the value its alternative: an enum with `#[derive(Arbitrary)]`, whose hooks
+/// match on the variant, or [`dependent`](crate::gens::dependent) over an
+/// index, `dependent(int(0..n), |i| alternatives[*i].clone())`.
 ///
 /// # Panics
 /// If `alternatives` is empty.
@@ -621,7 +626,8 @@ pub fn one_of<T>(alternatives: Vec<BoxGen<T>>) -> Frequency<T> {
 }
 
 /// Pick one of `alternatives` with probability proportional to its weight,
-/// then generate from it. See [`one_of`] for how it shrinks.
+/// then generate from it. A combinator: no shrinker, and mutation generates
+/// afresh; see [`one_of`].
 ///
 /// # Panics
 /// If all weights are zero.
@@ -643,17 +649,10 @@ impl<T> Gen for Frequency<T> {
         chosen.generate(g)
     }
 
-    fn shrink(&self, value: &T, visitor: &mut ShrinkVisitor<'_, T>) -> ShrinkFlow {
-        for (_, alternative) in self.alternatives.iter().filter(|(weight, _)| *weight > 0) {
-            alternative.shrink(value, visitor)?;
-        }
-        ControlFlow::Continue(())
-    }
-
-    fn mutate(&self, value: &T, g: &mut Source) -> T {
-        let alt = g.weighted(&self.alternatives).clone();
-        alt.mutate(value, g)
-    }
+    // No shrinker, and the default mutation (a fresh value): an alternative's
+    // hooks hold only for the values that alternative produces, and a value
+    // does not say which one did. Running them on another's value gave values
+    // no alternative can produce (EPH-012).
 }
 
 impl<T> Clone for Frequency<T> {
@@ -671,7 +670,9 @@ impl<T> fmt::Debug for Frequency<T> {
 /// A recursive generator with bounded depth. `branch` receives a generator
 /// for the next level down and builds the current level from it; at depth
 /// `max_depth` the generator is `leaf`. Shrinking and mutation delegate to
-/// the generator `branch` builds at the top level.
+/// the generator `branch` builds at the top level. When that is a choice
+/// ([`one_of`], [`frequency`]), as it usually is, the result has no shrinker,
+/// as a choice has none.
 ///
 /// ```
 /// use ephyra::{gens, BoxGen, GenExt, Gen, Source};
@@ -860,8 +861,9 @@ mod tests {
         let res = result(int(0..=9), bool());
         assert_eq!(res.shrink_candidates(&Ok(2)), vec![Ok(0), Ok(1)]);
         assert_eq!(res.shrink_candidates(&Err(true)), vec![Err(false)]);
+        // A choice is a combinator: it does not know which alternative made a value.
         let alts = frequency(vec![(0, constant(0).boxed()), (1, int(0..=9).boxed())]);
-        assert_eq!(alts.shrink_candidates(&4), vec![0, 2, 3]);
+        assert_eq!(alts.shrink_candidates(&4), Vec::<i32>::new());
         let s = string();
         let candidates = s.shrink_candidates(&"bb".to_string());
         assert_eq!(candidates[0], "");
@@ -904,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn recursive_respects_depth_and_shrinks() {
+    fn recursive_respects_depth() {
         #[derive(Debug, Clone, PartialEq)]
         enum T {
             Leaf(u8),
@@ -954,12 +956,10 @@ mod tests {
             assert!(depth(&t) <= 3);
         }
         assert_eq!(max_seen, 3);
-        let candidates =
-            tree.shrink_candidates(&T::Node(Box::new(T::Leaf(4)), Box::new(T::Leaf(0))));
-        assert!(
-            candidates.contains(&T::Node(Box::new(T::Leaf(0)), Box::new(T::Leaf(0)))),
-            "{candidates:?}"
-        );
+        // Its top level is a choice, a combinator: a tree does not say which
+        // alternative made it to the choice, so it has no shrinker.
+        let tree_value = T::Node(Box::new(T::Leaf(4)), Box::new(T::Leaf(0)));
+        assert_eq!(tree.shrink_candidates(&tree_value), vec![]);
     }
 
     #[test]

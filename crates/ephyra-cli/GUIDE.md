@@ -259,7 +259,7 @@ let _string = gens::string_len(gens::char(), 0..=32);
 let _by_size = gens::sized(|size| gens::vec(gens::int(0u8..=255)).len(0..=size));
 let _choice: BoxGen<u8> = gens::one_of(vec![
     gens::constant(0u8).boxed(), gens::int(1u8..=255).boxed(),
-]).boxed(); // one_of returns Frequency, not BoxGen
+]).boxed(); // one_of returns Frequency, not BoxGen; a choice has no shrinker (use an enum)
 let _weighted = gens::frequency(vec![
     (1, gens::constant(0u8).boxed()), (3, gens::int(1u8..=255).boxed()),
 ]);
