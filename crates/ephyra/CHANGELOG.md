@@ -91,6 +91,15 @@ All notable changes to `ephyra` are documented here. The format follows
 
 ### Added
 
+- `#[ephyra(max_depth = N)]` on a type with `#[derive(Arbitrary)]` bounds a
+  recursive type (fields `Box<Self>`, `Vec<Self>` or `Option<Box<Self>>`): at
+  depth `N` a variant with a `Box<Self>` field is not chosen, a `Vec<Self>`
+  is empty and an `Option<Box<Self>>` is `None`. A value shrinks first to
+  each of its children, then field by field one level down, and mutation
+  keeps the bound. With choices now combinators, this is how a recursive
+  type shrinks: `Add(Add(Lit(9), Lit(31)), …)` failing on a sum of 50 or more
+  shrinks to `Lit(50)`. Type-level `#[ephyra(...)]` attributes take several
+  keys (`support = ..., max_depth = ...`).
 - `tests/gen_contract.rs`: one property, every built-in generator keeps its
   contract (replay, support under generate, mutate and shrink, shrinking that
   settles, generation that spreads over the support), over generated

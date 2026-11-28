@@ -615,8 +615,9 @@ impl<GT: Gen, GE: Gen> Gen for ResultGen<GT, GE> {
 /// with it. The choice has no shrinker, and mutation generates a fresh value
 /// from a fresh choice. For alternatives that should shrink and mutate, give
 /// the value its alternative: an enum with `#[derive(Arbitrary)]`, whose hooks
-/// match on the variant, or [`dependent`](crate::gens::dependent) over an
-/// index, `dependent(int(0..n), |i| alternatives[*i].clone())`.
+/// match on the variant (`#[ephyra(max_depth = N)]` for a recursive one), or
+/// [`dependent`](crate::gens::dependent) over an index,
+/// `dependent(int(0..n), |i| alternatives[*i].clone())`.
 ///
 /// # Panics
 /// If `alternatives` is empty.
@@ -672,7 +673,10 @@ impl<T> fmt::Debug for Frequency<T> {
 /// `max_depth` the generator is `leaf`. Shrinking and mutation delegate to
 /// the generator `branch` builds at the top level. When that is a choice
 /// ([`one_of`], [`frequency`]), as it usually is, the result has no shrinker,
-/// as a choice has none.
+/// as a choice has none. For a recursive enum or struct that should shrink,
+/// derive its generator with `#[derive(Arbitrary)]` and
+/// `#[ephyra(max_depth = N)]`: its values shrink to their children, then field
+/// by field.
 ///
 /// ```
 /// use ephyra::{gens, BoxGen, GenExt, Gen, Source};

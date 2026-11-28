@@ -363,3 +363,103 @@ fn every_variant_is_produced() {
     }
     assert_eq!(seen, [true; 3]);
 }
+
+/// A recursive enum, bounded by `max_depth`.
+#[derive(Debug, Clone, PartialEq, Arbitrary)]
+#[ephyra(max_depth = 4)]
+enum Expr {
+    Lit(i8),
+    Add(Box<Expr>, Box<Expr>),
+}
+
+fn expr_depth(e: &Expr) -> usize {
+    match e {
+        Expr::Lit(_) => 0,
+        Expr::Add(a, b) => 1 + expr_depth(a).max(expr_depth(b)),
+    }
+}
+
+fn eval(e: &Expr) -> i64 {
+    match e {
+        Expr::Lit(n) => i64::from(*n),
+        Expr::Add(a, b) => eval(a) + eval(b),
+    }
+}
+
+/// A rose tree whose children are a `Vec<Self>`, and an optional link.
+#[derive(Debug, Clone, PartialEq, Arbitrary)]
+#[ephyra(max_depth = 3)]
+struct Tree {
+    value: u8,
+    children: Vec<Tree>,
+    next: Option<Box<Tree>>,
+}
+
+fn tree_depth(t: &Tree) -> usize {
+    let below = t.children.iter().map(tree_depth).chain(t.next.as_deref().map(tree_depth));
+    below.map(|d| d + 1).max().unwrap_or(0)
+}
+
+/// Generation, a mutation chain and every shrink candidate stay within the depth.
+fn stays_within<T: Clone + std::fmt::Debug>(
+    generator: &ephyra::BoxGen<T>,
+    depth: impl Fn(&T) -> usize,
+    max: usize,
+) {
+    let mut g = Source::new(7, 4);
+    let mut deepest = 0;
+    for _ in 0..100 {
+        let mut value = generator.generate(&mut g);
+        for _ in 0..8 {
+            assert!(depth(&value) <= max, "{value:?} is deeper than {max}");
+            deepest = deepest.max(depth(&value));
+            for candidate in generator.shrink_candidates(&value) {
+                assert!(depth(&candidate) <= max, "{value:?} shrank to {candidate:?}");
+            }
+            value = generator.mutate(&value, &mut g);
+        }
+    }
+    assert_eq!(deepest, max, "the bound is reached");
+}
+
+#[test]
+fn max_depth_bounds_generation_mutation_and_shrinking() {
+    stays_within(&any::<Expr>(), expr_depth, 4);
+    stays_within(&any::<Tree>(), tree_depth, 3);
+}
+
+#[test]
+fn a_recursive_value_shrinks_by_replacing_a_node_with_a_child() {
+    let children = any::<Expr>().shrink_candidates(&Expr::Add(
+        Box::new(Expr::Lit(3)),
+        Box::new(Expr::Add(Box::new(Expr::Lit(1)), Box::new(Expr::Lit(2)))),
+    ));
+    assert_eq!(children[0], Expr::Lit(3));
+    assert_eq!(children[1], Expr::Add(Box::new(Expr::Lit(1)), Box::new(Expr::Lit(2))));
+    // A sum that reaches 50 is the bug; the smallest witness is one literal.
+    let mut failed = 0;
+    for seed in 0..10 {
+        let config = Config::default().seed(seed).no_regressions();
+        let report = check(&config, any::<Expr>(), |e: Expr| eval(&e) < 50);
+        let Some(failure) = report.failure.as_ref() else { continue };
+        failed += 1;
+        assert_eq!(failure.counterexample().debug, "Lit(50)", "{report}");
+    }
+    assert!(failed >= 5, "only {failed} of 10 seeds failed");
+}
+
+#[test]
+fn at_depth_zero_vectors_are_empty_and_options_none() {
+    let mut g = Source::new(1, 4);
+    for _ in 0..200 {
+        let tree = any::<Tree>().generate(&mut g);
+        fn leaves_are_bare(t: &Tree, left: usize) -> bool {
+            if left == 0 {
+                return t.children.is_empty() && t.next.is_none();
+            }
+            t.children.iter().all(|c| leaves_are_bare(c, left - 1))
+                && t.next.as_deref().is_none_or(|n| leaves_are_bare(n, left - 1))
+        }
+        assert!(leaves_are_bare(&tree, 3), "{tree:?}");
+    }
+}

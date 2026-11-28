@@ -95,7 +95,15 @@ enum Op {
 // gens::vec(ephyra::any::<Op>()).len(0..=40)
 ```
 
-Recursive derived types have no depth bound; use `gens::recursive`.
+Recursive types: `#[ephyra(max_depth = N)]` bounds fields that hold the type
+itself (`Box<Self>`, `Vec<Self>`, `Option<Box<Self>>`). A value shrinks to its
+children first, then field by field; mutation keeps the bound.
+
+```rust
+#[derive(Clone, Debug, ephyra::Arbitrary)]
+#[ephyra(max_depth = 4)]
+enum Expr { Lit(i8), Add(Box<Expr>, Box<Expr>) }
+```
 
 Verifying generators: `check_generator`, `check_shrinker` and `check_mutator`
 run through `check`, so they shrink and replay like a property. Mark a
