@@ -1,0 +1,12 @@
+diff --git a/crates/ephyra-macros/src/lib.rs b/crates/ephyra-macros/src/lib.rs
+--- a/crates/ephyra-macros/src/lib.rs
++++ b/crates/ephyra-macros/src/lib.rs
+@@ -666,7 +666,7 @@
+     // has only its fields to mutate.
+     // A fresh value is drawn at this value's own depth, under `max_depth`.
+     let fresh = match max_depth {
+-        Some(_) => quote!(Self::__ephyra_level(depth).generate(g)),
++        Some(_) => quote!(<Self as ::ephyra::Arbitrary>::arbitrary().generate(g)),
+         None => quote!(<Self as ::ephyra::Arbitrary>::arbitrary().generate(g)),
+     };
+     let mutate_value = if shapes.len() > 1 {

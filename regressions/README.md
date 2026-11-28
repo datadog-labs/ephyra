@@ -49,12 +49,15 @@ touched and uncommitted changes are tested as they are. It builds in
 | [`handled-panic-becomes-the-message`](handled-panic-becomes-the-message) | #58 | report-message | Doğaç Eldenk | |
 | [`resumed-payload-message-lost`](resumed-payload-message-lost) | #101 | report-message | David R. MacIver | |
 | [`two-panics-on-a-line-are-one-failure`](two-panics-on-a-line-are-one-failure) | #100 | report-failure-kept | David R. MacIver | |
+| [`max-depth-fresh-value-at-the-top`](max-depth-fresh-value-at-the-top) | | generator-domain | (injected, #143) | never shipped |
+| [`max-depth-option-at-depth-zero`](max-depth-option-at-depth-zero) | | generator-domain | (injected, #143) | never shipped |
+| [`max-depth-children-not-candidates`](max-depth-children-not-candidates) | | shrink-progress | (injected, #143) | never shipped |
 | [`replay-of-a-generator-panic-passes`](replay-of-a-generator-panic-passes) | #97 | report-replay | David R. MacIver | |
 | [`replay-reports-a-random-seed`](replay-reports-a-random-seed) | #98 | report-replay | David R. MacIver | |
 | [`checker-counterexample-outside-support`](checker-counterexample-outside-support) | #113 | report-counterexample | David R. MacIver | |
 | [`shrink-panic-escapes-check`](shrink-panic-escapes-check) | | report-survives | (described in #72) | Bruno Volpato (#72) |
 
-Four properties catch them all:
+Five properties catch them all:
 
 - [`every_builtin_generator_keeps_its_contract`](../crates/ephyra/tests/gen_contract.rs) catches
   the generator bugs (the first five rows, and `a-choice-runs-other-alternatives-hooks`).
@@ -63,7 +66,10 @@ Four properties catch them all:
 - [`a_runs_verdict_matches_what_its_inputs_did`](../crates/ephyra/tests/verdict_contract.rs)
   catches the verdict bugs (the next five).
 - [`what_a_failing_report_says_is_true`](../crates/ephyra/tests/report_contract.rs) catches the
-  report bugs (the last seven).
+  report bugs (the next seven).
+- [`every_derived_recursive_type_keeps_its_contract`](../crates/ephyra/tests/gen_contract_derived.rs)
+  catches the `max_depth` bugs (the last three). They never shipped: they are bugs an
+  implementation of `max_depth` could plausibly have, injected to show the property guards it.
 
 ## An entry
 

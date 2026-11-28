@@ -106,9 +106,23 @@ pub fn generator(args: TokenStream, item: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// Recursive types (`enum Expr { Lit(i32), Add(Box<Expr>, Box<Expr>) }`)
-/// derive fine but have no depth bound; for those, write the generator with
-/// `ephyra::gens::recursive` instead.
+/// Recursive types need `#[ephyra(max_depth = N)]` on the type, which bounds
+/// how deep fields holding the type itself nest:
+///
+/// ```ignore
+/// #[derive(Debug, Clone, ephyra::Arbitrary)]
+/// #[ephyra(max_depth = 4)]
+/// enum Expr { Lit(i8), Add(Box<Expr>, Box<Expr>) }
+/// ```
+///
+/// Such a field is `Box<Self>`, `Vec<Self>` or `Option<Box<Self>>` (or has
+/// its own `#[ephyra(gen = ...)]`). At depth `N` a variant with a `Box<Self>`
+/// field is not chosen, a `Vec<Self>` is empty and an `Option<Box<Self>>` is
+/// `None`, so some variant must have no `Box<Self>` field. A value shrinks
+/// first to each of its children (`Add(a, b)` to `a` and to `b`), then field
+/// by field, every field one level down; mutation keeps the bound. The value
+/// says which variant it is, so its hooks always run on their own values.
+/// Without `max_depth`, a recursive type has no bound: generation may not end.
 #[proc_macro_derive(Arbitrary, attributes(ephyra))]
 pub fn derive_arbitrary(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -216,13 +230,150 @@ fn field_generator(field: &syn::Field) -> syn::Result<TokenStream2> {
     })
 }
 
-/// The `#[ephyra(support = path)]` predicate on the type, if any.
-fn support_predicate(input: &DeriveInput) -> syn::Result<Option<Expr>> {
-    ephyra_attr(
-        &input.attrs,
-        "support",
-        "expected `#[ephyra(support = <path to fn(&Self) -> bool>)]`",
-    )
+/// The type-level `#[ephyra(...)]` settings of a derived type.
+#[derive(Default)]
+struct TypeAttrs {
+    /// `support = <path>`: a predicate candidates and mutants must pass.
+    support: Option<Expr>,
+    /// `max_depth = <n>`: how deep fields holding the type itself may nest.
+    max_depth: Option<syn::LitInt>,
+}
+
+/// The type's `#[ephyra(support = <path>, max_depth = <n>)]` settings, from
+/// any number of `#[ephyra(...)]` attributes, each key at most once.
+fn type_attrs(input: &DeriveInput) -> syn::Result<TypeAttrs> {
+    const EXPECTED: &str =
+        "expected `#[ephyra(support = <path to fn(&Self) -> bool>, max_depth = <n>)]`";
+    let mut attrs = TypeAttrs::default();
+    for attr in input.attrs.iter().filter(|attr| attr.path().is_ident("ephyra")) {
+        let pairs =
+            attr.parse_args_with(Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated)?;
+        for pair in pairs {
+            if pair.path.is_ident("support") && attrs.support.is_none() {
+                attrs.support = Some(pair.value);
+            } else if pair.path.is_ident("max_depth") && attrs.max_depth.is_none() {
+                match pair.value {
+                    Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(n), .. }) => {
+                        attrs.max_depth = Some(n)
+                    },
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            other,
+                            "`max_depth` takes an integer literal",
+                        ));
+                    },
+                }
+            } else {
+                return Err(syn::Error::new(pair.path.span(), EXPECTED));
+            }
+        }
+    }
+    Ok(attrs)
+}
+
+/// How a field holds the type it belongs to, for `max_depth`.
+#[derive(Clone, Copy)]
+enum Recursion {
+    /// `Box<Self>`: a variant with one cannot be built at depth 0.
+    Boxed,
+    /// `Vec<Self>`: empty at depth 0.
+    Vector,
+    /// `Option<Box<Self>>`: `None` at depth 0.
+    OptionBoxed,
+}
+
+/// Whether `ty` is `Self` or the type `name` (any generic arguments).
+fn is_self(ty: &Type, name: &Ident) -> bool {
+    let Type::Path(path) = ty else { return false };
+    path.qself.is_none()
+        && path.path.segments.last().is_some_and(|last| last.ident == "Self" || last.ident == *name)
+}
+
+/// `Wrapper<inner>`'s inner type, for a one-argument wrapper named `wrapper`.
+fn wrapped<'a>(ty: &'a Type, wrapper: &str) -> Option<&'a Type> {
+    let Type::Path(path) = ty else { return None };
+    let last = path.path.segments.last()?;
+    if last.ident != wrapper {
+        return None;
+    }
+    let PathArguments::AngleBracketed(arguments) = &last.arguments else { return None };
+    match arguments.args.first()? {
+        GenericArgument::Type(inner) if arguments.args.len() == 1 => Some(inner),
+        _ => None,
+    }
+}
+
+/// Whether the tokens of `ty` mention `Self` or `name` anywhere.
+fn mentions_self(ty: &Type, name: &Ident) -> bool {
+    fn walk(tokens: TokenStream2, name: &Ident) -> bool {
+        tokens.into_iter().any(|tree| {
+            match tree {
+                proc_macro2::TokenTree::Ident(ident) => ident == "Self" || ident == *name,
+                proc_macro2::TokenTree::Group(group) => walk(group.stream(), name),
+                _ => false,
+            }
+        })
+    }
+    walk(quote!(#ty), name)
+}
+
+/// The recursion of a field of type `ty` in the type `name`: `Ok(None)` for a
+/// field that does not hold the type, an error for one that holds it in a
+/// shape `max_depth` cannot bound.
+fn recursion(ty: &Type, name: &Ident) -> syn::Result<Option<Recursion>> {
+    if wrapped(ty, "Box").is_some_and(|inner| is_self(inner, name)) {
+        return Ok(Some(Recursion::Boxed));
+    }
+    if wrapped(ty, "Vec").is_some_and(|inner| is_self(inner, name)) {
+        return Ok(Some(Recursion::Vector));
+    }
+    if wrapped(ty, "Option")
+        .and_then(|inner| wrapped(inner, "Box"))
+        .is_some_and(|inner| is_self(inner, name))
+    {
+        return Ok(Some(Recursion::OptionBoxed));
+    }
+    if mentions_self(ty, name) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "with `max_depth`, a field holding the type itself must be `Box<Self>`, \
+             `Vec<Self>` or `Option<Box<Self>>`; give any other one \
+             `#[ephyra(gen = <expression>)]`",
+        ));
+    }
+    Ok(None)
+}
+
+/// The depth-aware generator of a recursive field: the type's own generator
+/// one level down, inside the field's wrapper.
+fn recursive_generator(recursion: Recursion) -> TokenStream2 {
+    let boxed = quote! {
+        Self::__ephyra_level(depth.saturating_sub(1)).iso(
+            ::std::boxed::Box::new,
+            |boxed: &::std::boxed::Box<Self>| ::core::clone::Clone::clone(&**boxed),
+        )
+    };
+    match recursion {
+        Recursion::Boxed => quote!((#boxed)),
+        Recursion::Vector => {
+            quote! {
+                (if depth == 0 {
+                    ::ephyra::gens::constant(::std::vec::Vec::new()).boxed()
+                } else {
+                    ::ephyra::gens::vec(Self::__ephyra_level(depth - 1)).boxed()
+                })
+            }
+        },
+        Recursion::OptionBoxed => {
+            quote! {
+                (if depth == 0 {
+                    ::ephyra::gens::constant(::core::option::Option::None).boxed()
+                } else {
+                    ::ephyra::gens::option(#boxed).boxed()
+                })
+            }
+        },
+    }
 }
 
 /// One shape of value: a struct or an enum variant, with how to build it,
@@ -244,9 +395,13 @@ struct ShapeField {
     /// Field name, or a synthetic name for tuple fields.
     binding: Ident,
     generator: TokenStream2,
+    /// How the field holds the type itself, under `max_depth`.
+    recursion: Option<Recursion>,
 }
 
-fn shape(path: TokenStream2, fields: &Fields) -> syn::Result<Shape> {
+/// `recursive_in`: the type's name when it has `max_depth`, so that fields
+/// holding the type itself get depth-aware generators.
+fn shape(path: TokenStream2, fields: &Fields, recursive_in: Option<&Ident>) -> syn::Result<Shape> {
     let style = match fields {
         Fields::Named(_) => Style::Named,
         Fields::Unnamed(_) => Style::Unnamed,
@@ -257,7 +412,17 @@ fn shape(path: TokenStream2, fields: &Fields) -> syn::Result<Shape> {
         .enumerate()
         .map(|(i, f)| {
             let binding = f.ident.clone().unwrap_or_else(|| format_ident!("field_{i}"));
-            Ok(ShapeField { binding, generator: field_generator(f)? })
+            let overridden =
+                ephyra_attr(&f.attrs, "gen", "expected `#[ephyra(gen = <expression>)]`")?.is_some();
+            let recursion = match recursive_in {
+                Some(name) if !overridden => recursion(&f.ty, name)?,
+                _ => None,
+            };
+            let generator = match recursion {
+                Some(recursion) => recursive_generator(recursion),
+                None => field_generator(f)?,
+            };
+            Ok(ShapeField { binding, generator, recursion })
         })
         .collect::<syn::Result<_>>()?;
     Ok(Shape { path, fields, style })
@@ -326,12 +491,41 @@ impl Shape {
                 #generator.shrink(#binding, &mut |candidate| emit(#rebuilt))?;
             }
         });
+        // A node's children are candidates for the node: the step that makes
+        // a recursive value shrink fast.
+        let children = self.fields.iter().filter_map(|f| {
+            let binding = &f.binding;
+            Some(match f.recursion? {
+                Recursion::Boxed => quote!(emit(::core::clone::Clone::clone(&**#binding))?;),
+                Recursion::Vector => {
+                    quote! {
+                        for child in #binding.iter() {
+                            emit(::core::clone::Clone::clone(child))?;
+                        }
+                    }
+                },
+                Recursion::OptionBoxed => {
+                    quote! {
+                        if let ::core::option::Option::Some(child) = #binding {
+                            emit(::core::clone::Clone::clone(&**child))?;
+                        }
+                    }
+                },
+            })
+        });
         quote! {
             #pattern => {
+                #(#children)*
                 #(#per_field)*
                 ::core::ops::ControlFlow::Continue(())
             }
         }
+    }
+
+    /// Whether the shape needs a level below it (a `Box<Self>` field), so it
+    /// cannot be built at depth 0.
+    fn needs_depth(&self) -> bool {
+        self.fields.iter().any(|f| matches!(f.recursion, Some(Recursion::Boxed)))
     }
 
     /// One mutated field, chosen at random, given the fields are bound.
@@ -373,7 +567,8 @@ impl Shape {
 
 fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
-    let support = support_predicate(&input)?;
+    let TypeAttrs { support, max_depth } = type_attrs(&input)?;
+    let recursive_in = max_depth.as_ref().map(|_| name);
     let mut generics = input.generics.clone();
     for param in generics.type_params_mut() {
         param.bounds.push(syn::parse_quote!(::ephyra::Arbitrary));
@@ -382,7 +577,7 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let shapes: Vec<Shape> = match &input.data {
-        Data::Struct(data) => vec![shape(quote!(#name), &data.fields)?],
+        Data::Struct(data) => vec![shape(quote!(#name), &data.fields, recursive_in)?],
         Data::Enum(data) => {
             if data.variants.is_empty() {
                 return Err(syn::Error::new_spanned(
@@ -394,7 +589,7 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
                 .iter()
                 .map(|variant| {
                     let variant_name = &variant.ident;
-                    shape(quote!(#name::#variant_name), &variant.fields)
+                    shape(quote!(#name::#variant_name), &variant.fields, recursive_in)
                 })
                 .collect::<syn::Result<Vec<_>>>()?
         },
@@ -403,9 +598,11 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
         },
     };
 
-    let generate = if shapes.len() == 1 {
-        shapes[0].generate()
-    } else {
+    // A uniform choice among `shapes`.
+    let choose = |shapes: &[&Shape]| {
+        if shapes.len() == 1 {
+            return shapes[0].generate();
+        }
         let count = shapes.len();
         let arms = shapes.iter().enumerate().map(|(index, s)| {
             let value = s.generate();
@@ -417,6 +614,22 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
                 _ => ::core::unreachable!(),
             }
         }
+    };
+    let all: Vec<&Shape> = shapes.iter().collect();
+    let generate = if max_depth.is_some() && shapes.iter().any(Shape::needs_depth) {
+        // At depth 0, only the shapes that need no level below.
+        let shallow: Vec<&Shape> = shapes.iter().filter(|s| !s.needs_depth()).collect();
+        if shallow.is_empty() {
+            return Err(syn::Error::new_spanned(
+                name,
+                "with `max_depth`, some variant must have no `Box<Self>` field, to end the \
+                 recursion",
+            ));
+        }
+        let (deep, shallow) = (choose(&all), choose(&shallow));
+        quote!(if depth == 0 { #shallow } else { #deep })
+    } else {
+        choose(&all)
     };
 
     // Earlier data-less variants are candidates for every later variant.
@@ -451,10 +664,15 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
         .unzip();
     // An enum sometimes switches variant by drawing a fresh value; a struct
     // has only its fields to mutate.
+    // A fresh value is drawn at this value's own depth, under `max_depth`.
+    let fresh = match max_depth {
+        Some(_) => quote!(Self::__ephyra_level(depth).generate(g)),
+        None => quote!(<Self as ::ephyra::Arbitrary>::arbitrary().generate(g)),
+    };
     let mutate_value = if shapes.len() > 1 {
         quote! {
             if g.bool_with(0.125) {
-                <Self as ::ephyra::Arbitrary>::arbitrary().generate(g)
+                #fresh
             } else {
                 match value { #(#mutate_arms)* }
             }
@@ -463,30 +681,57 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
         quote!(match value { #(#mutate_arms)* })
     };
 
-    Ok(quote! {
-        #[automatically_derived]
-        impl #impl_generics ::ephyra::Arbitrary for #name #ty_generics #where_clause {
-            fn arbitrary() -> ::ephyra::BoxGen<Self> {
-                use ::ephyra::{Gen as _, GenExt as _};
-                let generator = |g: &mut ::ephyra::Source| -> Self { #generate };
-                ::ephyra::BoxGen::new(
-                    generator
-                        .with_shrink(|value: &Self, visitor| {
-                            let mut emit = |candidate: Self| {
-                                #check_candidate
-                                visitor(candidate)
-                            };
-                            #unit_candidates
-                            match value { #(#shrink_arms)* }
-                        })
-                        .with_mutate(|value: &Self, g| {
-                            let mutated: Self = #mutate_value;
-                            #check_mutant
-                            mutated
-                        }),
-                )
+    let body = quote! {
+        use ::ephyra::{Gen as _, GenExt as _};
+        let generator = move |g: &mut ::ephyra::Source| -> Self { #generate };
+        ::ephyra::BoxGen::new(
+            generator
+                .with_shrink(move |value: &Self, visitor| {
+                    let mut emit = |candidate: Self| {
+                        #check_candidate
+                        visitor(candidate)
+                    };
+                    #unit_candidates
+                    match value { #(#shrink_arms)* }
+                })
+                .with_mutate(move |value: &Self, g| {
+                    let mutated: Self = #mutate_value;
+                    #check_mutant
+                    mutated
+                }),
+        )
+    };
+    Ok(match max_depth {
+        None => {
+            quote! {
+                #[automatically_derived]
+                impl #impl_generics ::ephyra::Arbitrary for #name #ty_generics #where_clause {
+                    fn arbitrary() -> ::ephyra::BoxGen<Self> {
+                        #body
+                    }
+                }
             }
-        }
+        },
+        Some(max_depth) => {
+            quote! {
+                #[automatically_derived]
+                impl #impl_generics ::ephyra::Arbitrary for #name #ty_generics #where_clause {
+                    fn arbitrary() -> ::ephyra::BoxGen<Self> {
+                        Self::__ephyra_level(#max_depth)
+                    }
+                }
+
+                #[automatically_derived]
+                impl #impl_generics #name #ty_generics #where_clause {
+                    /// The generator of values at most `depth` levels deep.
+                    #[doc(hidden)]
+                    fn __ephyra_level(depth: usize) -> ::ephyra::BoxGen<Self> {
+                        let _ = depth;
+                        #body
+                    }
+                }
+            }
+        },
     })
 }
 

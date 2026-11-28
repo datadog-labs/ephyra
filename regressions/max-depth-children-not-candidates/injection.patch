@@ -1,0 +1,11 @@
+diff --git a/crates/ephyra-macros/src/lib.rs b/crates/ephyra-macros/src/lib.rs
+--- a/crates/ephyra-macros/src/lib.rs
++++ b/crates/ephyra-macros/src/lib.rs
+@@ -515,7 +515,6 @@
+         });
+         quote! {
+             #pattern => {
+-                #(#children)*
+                 #(#per_field)*
+                 ::core::ops::ControlFlow::Continue(())
+             }

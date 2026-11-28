@@ -1,0 +1,22 @@
+{
+ "id": "max-depth-children-not-candidates",
+ "title": "A derived recursive value is not offered its children as shrink candidates, so a counterexample keeps structure the failure does not need",
+ "class": "shrink-progress",
+ "symptom": "misleading-report",
+ "cause": "the shrink arm emitted only per-field candidates, without replacing a node by one of its children",
+ "regression": [
+  {
+   "target": "test:macros",
+   "name": "a_recursive_value_shrinks_by_replacing_a_node_with_a_child"
+  }
+ ],
+ "issue": null,
+ "reported_by": "a plausible bug in #143, injected to show the property guards it",
+ "fixed_by": "never shipped",
+ "oracles": [
+  {
+   "target": "test:gen_contract_derived",
+   "name": "every_derived_recursive_type_keeps_its_contract"
+  }
+ ]
+}
