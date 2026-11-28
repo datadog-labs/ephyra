@@ -1,0 +1,16 @@
+diff --git a/crates/ephyra-macros/src/lib.rs b/crates/ephyra-macros/src/lib.rs
+--- a/crates/ephyra-macros/src/lib.rs
++++ b/crates/ephyra-macros/src/lib.rs
+@@ -366,11 +366,7 @@
+         },
+         Recursion::OptionBoxed => {
+             quote! {
+-                (if depth == 0 {
+-                    ::ephyra::gens::constant(::core::option::Option::None).boxed()
+-                } else {
+-                    ::ephyra::gens::option(#boxed).boxed()
+-                })
++                (::ephyra::gens::option(#boxed).boxed())
+             }
+         },
+     }

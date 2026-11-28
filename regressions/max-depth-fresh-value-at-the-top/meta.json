@@ -1,0 +1,22 @@
+{
+ "id": "max-depth-fresh-value-at-the-top",
+ "title": "A derived recursive value's fresh mutation is drawn at max_depth, not at its own depth, so a nested value outgrows the bound",
+ "class": "generator-domain",
+ "symptom": "wrong-result",
+ "cause": "the fresh value a mutation draws one time in eight came from the top-level generator, whatever the depth of the value being mutated",
+ "regression": [
+  {
+   "target": "test:macros",
+   "name": "max_depth_bounds_generation_mutation_and_shrinking"
+  }
+ ],
+ "issue": null,
+ "reported_by": "a plausible bug in #143, injected to show the property guards it",
+ "fixed_by": "never shipped",
+ "oracles": [
+  {
+   "target": "test:gen_contract_derived",
+   "name": "every_derived_recursive_type_keeps_its_contract"
+  }
+ ]
+}

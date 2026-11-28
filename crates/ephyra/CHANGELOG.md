@@ -100,6 +100,13 @@ All notable changes to `ephyra` are documented here. The format follows
   type shrinks: `Add(Add(Lit(9), Lit(31)), …)` failing on a sum of 50 or more
   shrinks to `Lit(50)`. Type-level `#[ephyra(...)]` attributes take several
   keys (`support = ..., max_depth = ...`).
+- `tests/gen_contract_derived.rs`: one property over derived recursive types
+  (`Box`, `Vec` and `Option<Box>` fields, depths 0 to 5, with `support`): the
+  generator contract within `max_depth`, and a failure one leaf causes
+  shrinking to that leaf. Three regression entries inject bugs a `max_depth`
+  implementation could have (a fresh mutation drawn at the top level, an
+  `Option` left `Some` at depth 0, children not offered as candidates) and
+  show the property catches each.
 - `tests/gen_contract.rs`: one property, every built-in generator keeps its
   contract (replay, support under generate, mutate and shrink, shrinking that
   settles, generation that spreads over the support), over generated

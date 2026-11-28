@@ -1,0 +1,22 @@
+{
+ "id": "max-depth-option-at-depth-zero",
+ "title": "At max_depth, an Option<Box<Self>> field can still hold a value, so the bound is exceeded",
+ "class": "generator-domain",
+ "symptom": "wrong-result",
+ "cause": "the depth-0 case of an Option<Box<Self>> field drew from option() instead of being None",
+ "regression": [
+  {
+   "target": "test:macros",
+   "name": "at_depth_zero_vectors_are_empty_and_options_none"
+  }
+ ],
+ "issue": null,
+ "reported_by": "a plausible bug in #143, injected to show the property guards it",
+ "fixed_by": "never shipped",
+ "oracles": [
+  {
+   "target": "test:gen_contract_derived",
+   "name": "every_derived_recursive_type_keeps_its_contract"
+  }
+ ]
+}
