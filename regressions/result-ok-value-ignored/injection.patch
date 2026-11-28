@@ -1,8 +1,7 @@
 diff --git a/crates/ephyra-cli/src/index.rs b/crates/ephyra-cli/src/index.rs
-index 235e2df..fa1cffc 100644
 --- a/crates/ephyra-cli/src/index.rs
 +++ b/crates/ephyra-cli/src/index.rs
-@@ -82,7 +82,7 @@ pub enum Kind {
+@@ -82,7 +82,7 @@
      /// (`gen`, or the tuple of per-parameter `#[ephyra(gen = ...)]`s and
      /// defaults) and `metrics` expressions if given, whether its body uses
      /// `assume!`, and whether it can discard at all (it returns
@@ -11,7 +10,7 @@ index 235e2df..fa1cffc 100644
      Property {
          parameters: Vec<(String, String)>,
          strategy: Option<String>,
-@@ -398,29 +398,17 @@ fn property(function: &ItemFn, args: &[Meta]) -> Kind {
+@@ -398,29 +398,17 @@
  }
  
  /// Whether a property returning `output` can discard an input, as
@@ -48,11 +47,10 @@ index 235e2df..fa1cffc 100644
          },
          _ => true,
      }
-@@ -680,21 +668,6 @@ mod tests {
-         );
+@@ -681,21 +669,6 @@
      }
  
--    #[test]
+     #[test]
 -    fn a_result_discards_when_its_ok_value_can() {
 -        let discards = |output: &str| {
 -            can_discard(&syn::parse_str::<ReturnType>(&format!("-> {output}")).unwrap())
@@ -67,27 +65,14 @@ index 235e2df..fa1cffc 100644
 -        }
 -    }
 -
-     #[test]
+-    #[test]
      fn functions_are_classified_from_their_signatures_and_arguments() {
          let (_dir, index) = fixture();
+         assert_eq!(entry(&index, "sorted").kind, Kind::Predicate { input: "[u8]".into() });
 diff --git a/crates/ephyra-macros/src/lib.rs b/crates/ephyra-macros/src/lib.rs
-index 741fef3..b918ed9 100644
 --- a/crates/ephyra-macros/src/lib.rs
 +++ b/crates/ephyra-macros/src/lib.rs
-@@ -23,12 +23,10 @@ use {
-         Expr,
-         Fields,
-         FnArg,
--        GenericArgument,
-         Ident,
-         ItemFn,
-         Meta,
-         Pat,
--        PathArguments,
-         ReturnType,
-         Token,
-         Type,
-@@ -534,17 +532,15 @@ fn expand_arbitrary(input: DeriveInput) -> syn::Result<TokenStream2> {
+@@ -779,17 +779,15 @@
  /// it can keep relations such as `lo < hi` that the property `assume!`s.
  ///
  /// A property that can discard inputs (it returns `TestResult`, as `assume!`
@@ -112,7 +97,7 @@ index 741fef3..b918ed9 100644
  #[proc_macro_attribute]
  pub fn test(args: TokenStream, item: TokenStream) -> TokenStream {
      let args = parse_macro_input!(args with Punctuated::<Meta, Token![,]>::parse_terminated);
-@@ -651,8 +647,8 @@ fn expand_test(args: Punctuated<Meta, Token![,]>, func: ItemFn) -> syn::Result<T
+@@ -896,8 +894,8 @@
          return Err(syn::Error::new(
              func.sig.span(),
              "`metrics` go with the check of a strategy the property can discard from \
@@ -123,7 +108,7 @@ index 741fef3..b918ed9 100644
          ));
      }
  
-@@ -764,31 +760,17 @@ fn check_test_cfgs(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
+@@ -1009,31 +1007,17 @@
  }
  
  /// Whether a property returning `output` can discard an input. Only
@@ -162,13 +147,14 @@ index 741fef3..b918ed9 100644
          },
          _ => true,
      }
-@@ -818,20 +800,7 @@ mod tests {
+@@ -1063,21 +1047,8 @@
          let discarding =
              expand("gen = pairs()", "fn p(a: u8, b: u8) -> TestResult { todo!() }").unwrap();
          assert!(discarding.contains("__ephyra_check_p"));
 -        for output in ["-> Result<TestResult, String>", "-> io::Result<Result<TestResult, String>>"]
 -        {
--            let item = format!("fn p(a: u8, b: u8) {output} {{ todo!() }}");
++        for output in ["-> bool", "", "-> ()", "-> Result<(), String>"] {
+             let item = format!("fn p(a: u8, b: u8) {output} {{ todo!() }}");
 -            let expanded = expand("gen = pairs(), metrics = m", &item).unwrap();
 -            assert!(expanded.contains("__ephyra_check_p"), "{output}");
 -        }
@@ -180,12 +166,11 @@ index 741fef3..b918ed9 100644
 -            "-> Result<Result<bool, String>, String>",
 -            "-> fmt::Result",
 -        ] {
-+        for output in ["-> bool", "", "-> ()", "-> Result<(), String>"] {
-             let item = format!("fn p(a: u8, b: u8) {output} {{ todo!() }}");
+-            let item = format!("fn p(a: u8, b: u8) {output} {{ todo!() }}");
              let expanded = expand("gen = pairs()", &item).unwrap();
              assert!(!expanded.contains("__ephyra_check_p"), "{output}");
+             assert!(expand("gen = pairs(), metrics = m", &item).is_err(), "{output}");
 diff --git a/crates/ephyra/src/lib.rs b/crates/ephyra/src/lib.rs
-index 1840f28..ee9ee81 100644
 --- a/crates/ephyra/src/lib.rs
 +++ b/crates/ephyra/src/lib.rs
 @@ -49,10 +49,9 @@
@@ -203,10 +188,9 @@ index 1840f28..ee9ee81 100644
  //! # Writing a generator
  //!
 diff --git a/crates/ephyra/src/runner/testable.rs b/crates/ephyra/src/runner/testable.rs
-index d410b20..2055111 100644
 --- a/crates/ephyra/src/runner/testable.rs
 +++ b/crates/ephyra/src/runner/testable.rs
-@@ -47,33 +47,8 @@ impl TestResult {
+@@ -47,33 +47,8 @@
      }
  }
  
@@ -242,7 +226,7 @@ index d410b20..2055111 100644
  pub trait Testable {
      /// Convert into the runner's view of the result.
      fn into_outcome(self) -> Outcome;
-@@ -91,10 +66,10 @@ impl Testable for () {
+@@ -91,10 +66,10 @@
      }
  }
  
