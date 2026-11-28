@@ -62,6 +62,7 @@ struct Context {
     /// Trace-only observations. `None` keeps their lazy values unevaluated.
     observations: Option<Vec<(String, FeatureValue)>>,
     signature: Option<String>,
+    novelty_keys: Vec<u64>,
 }
 
 thread_local! {
@@ -231,6 +232,19 @@ pub fn cover(condition: bool, label: impl Into<String>) {
     record(|context| context.covers.push((label.into(), condition)));
 }
 
+/// Record an external coverage or novelty key for the current test case (for
+/// example, a state-transition hash, protocol-stage fingerprint, or
+/// out-of-process edge ID).
+///
+/// Any key not seen earlier in the run contributes to
+/// [`Tested::novelty`](crate::Tested::novelty) and enables novelty-guided seed
+/// retention: passing inputs that discover new keys join the targeted phase's
+/// mutation pool alongside [`target`] scores, even without LLVM coverage
+/// instrumentation. Outside a running property this is a no-op.
+pub fn observe_novelty(key: u64) {
+    record(|context| context.novelty_keys.push(key));
+}
+
 /// What a property reported through the side channel.
 pub(crate) struct Observed {
     pub labels: Vec<String>,
@@ -244,6 +258,8 @@ pub(crate) struct Observed {
     pub observations: Vec<(String, FeatureValue)>,
     /// The last name given with [`signature`].
     pub signature: Option<String>,
+    /// External coverage/novelty keys recorded with [`observe_novelty`].
+    pub novelty_keys: Vec<u64>,
 }
 
 /// Run `f` with the side channel active and return what it reported. Nested
@@ -270,6 +286,7 @@ pub(crate) fn collect<R>(trace_observations: bool, f: impl FnOnce() -> R) -> (R,
             features: context.features,
             observations: context.observations.unwrap_or_default(),
             signature: context.signature,
+            novelty_keys: context.novelty_keys,
         },
     )
 }

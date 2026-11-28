@@ -5,6 +5,7 @@
 //! with panic capture, coverage and the sinks, and what the run showed.
 
 use std::{
+    collections::HashSet,
     fmt::{
         self,
         Debug,
@@ -56,6 +57,8 @@ use {
 pub(super) struct Exec<P> {
     pub(super) property: P,
     pub(super) coverage: CoverageState,
+    /// External novelty keys seen so far via [`crate::observe_novelty`].
+    pub(super) external_novelty: HashSet<u64>,
     /// Where each evaluated input goes: the observation file, when
     /// `Config::report.observations` is set, and the installed sinks.
     pub(super) sinks: Vec<Box<dyn crate::sink::RunSink>>,
@@ -113,6 +116,15 @@ impl<P> Exec<P> {
         let elapsed = started.elapsed();
         let signature = self.signature(&result, observed.signature.take(), kept.as_ref());
         let covered = self.coverage.end(before, &result, observing);
+        let mut ext_novel = 0u32;
+        if shrinking.is_none() && matches!(result, Ok(Outcome::Pass)) {
+            for &key in &observed.novelty_keys {
+                if self.external_novelty.insert(key) {
+                    ext_novel = ext_novel.saturating_add(1);
+                }
+            }
+        }
+        let novelty = covered.novelty.saturating_add(ext_novel);
         if observing {
             let (status, reason) = case_status(&result);
             self.emit(&crate::sink::TestCase {
@@ -134,7 +146,7 @@ impl<P> Exec<P> {
                 shrink_accepted: shrinking.map(|s| signature.as_ref() == Some(s)),
             });
         }
-        Ran { result, observed, elapsed, novelty: covered.novelty, signature }
+        Ran { result, observed, elapsed, novelty, signature }
     }
 
     /// How `result` failed, if it did: its kind and panic site, or, when

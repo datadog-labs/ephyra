@@ -1168,3 +1168,46 @@ fn a_generator_panic_after_failures_is_a_warning() {
     assert!(report.abort.is_some());
     assert!(report.health.iter().any(|w| w.kind == "aborted"), "{report}");
 }
+
+#[test]
+fn observe_novelty_counts_unique_keys_and_activates_guided_search() {
+    // Outside a running property, observe_novelty is a no-op.
+    crate::observe_novelty(0xdead_beef);
+
+    let mut config = cfg();
+    config.seed = Some(7);
+    let mut run = Run::new(&config, gens::int(0u32..=1), |x: u32| {
+        // Key 100 is emitted on every call; key 200+x only for each distinct input.
+        crate::observe_novelty(100);
+        crate::observe_novelty(200 + u64::from(x));
+        true
+    });
+    let input = run.draw().expect("ints never discard");
+    let first = run.test(&input);
+    assert!(first.novel(), "first input discovers two keys: {first:?}");
+    assert_eq!(first.novelty(), 2);
+
+    let repeat = run.test(&input);
+    assert!(!repeat.novel(), "repeating the same keys yields zero novelty: {repeat:?}");
+    assert_eq!(repeat.novelty(), 0);
+
+    let other = Input { value: 1 - input.value, ..input.clone() };
+    let second = run.test(&other);
+    assert!(second.novel(), "new key 200+other yields novelty 1: {second:?}");
+    assert_eq!(second.novelty(), 1);
+    run.finish().assert_passed();
+
+    // End-to-end check(): observe_novelty enables the targeted mutation phase
+    // even without LLVM coverage instrumentation or target() calls.
+    let mut guided = cfg();
+    guided.seed = Some(1);
+    guided.tests = 20;
+    guided.target.tests = 30;
+    let report = check(&guided, gens::int(0u64..=15), |x: u64| {
+        crate::observe_novelty(x);
+        true
+    });
+    assert_eq!(report.status, Status::Passed, "{report}");
+    let target = report.target.as_ref().expect("external novelty activates targeted phase");
+    assert_eq!(target.iterations, 30, "{target:?}");
+}

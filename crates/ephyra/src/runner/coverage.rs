@@ -150,16 +150,18 @@ where
     R: Testable,
     P: FnMut(G::Value) -> R,
 {
-    /// Whether coverage-guided search is on and coverage is being collected.
+    /// Whether coverage- or external-novelty-guided search is active.
     pub(super) fn guided(&self) -> bool {
+        let external = !self.exec.external_novelty.is_empty();
         #[cfg(feature = "coverage")]
         {
-            (self.config.coverage.guided || self.exec.coverage.targets.is_some())
-                && self.exec.coverage.tracker.is_some()
+            external
+                || ((self.config.coverage.guided || self.exec.coverage.targets.is_some())
+                    && self.exec.coverage.tracker.is_some())
         }
         #[cfg(not(feature = "coverage"))]
         {
-            false
+            external
         }
     }
 
