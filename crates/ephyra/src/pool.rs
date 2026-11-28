@@ -14,6 +14,10 @@ pub(crate) struct Seed<T> {
     pub value: T,
     pub score: f64,
     pub energy: u32,
+    /// Coverage-guided corpus seed added via [`Pool::add_forced`]: kept across
+    /// energy refills rather than permanently dropped once its initial energy
+    /// budget is spent.
+    pub corpus: bool,
 }
 
 /// A bounded collection of seeds ordered by score.
@@ -65,13 +69,17 @@ impl<T: Clone> Pool<T> {
     /// worst seed when the pool is full. Returns whether it set a new overall
     /// best.
     pub fn add(&mut self, value: T, score: f64) -> bool {
-        self.improves(score) && self.add_forced(value, score)
+        self.improves(score) && self.insert(value, score, false)
     }
 
     /// Add an input regardless of its score (coverage-guided search keeps
     /// inputs for the code they reach, not for their score). Evicts the
     /// worst seed when full, and returns whether it set a new overall best.
     pub fn add_forced(&mut self, value: T, score: f64) -> bool {
+        self.insert(value, score, true)
+    }
+
+    fn insert(&mut self, value: T, score: f64, corpus: bool) -> bool {
         if self.seeds.len() >= self.capacity
             && let Some(worst) = self
                 .seeds
@@ -87,13 +95,16 @@ impl<T: Clone> Pool<T> {
             self.best = Some((score, value.clone()));
             self.improvements += 1;
         }
-        self.seeds.push(Seed { value, score, energy: self.energy });
+        self.seeds.push(Seed { value, score, energy: self.energy, corpus });
         new_best
     }
 
     /// Pick a seed to mutate, preferring high scores, and spend one unit of
-    /// its energy. Seeds whose energy is spent are dropped; when every seed
-    /// is spent the energies are refilled so the search keeps going.
+    /// its energy. Score-only seeds whose energy is spent are dropped; corpus
+    /// seeds added via [`add_forced`](Self::add_forced) keep their slot across
+    /// refills so newly discovered coverage frontiers are not permanently
+    /// evicted after a single energy round. When every seed is spent the
+    /// energies are refilled so the search keeps going.
     pub fn pick(&mut self, rng: &mut impl RngCore) -> Option<Seed<T>> {
         if self.seeds.is_empty() {
             return None;
@@ -105,7 +116,15 @@ impl<T: Clone> Pool<T> {
         }
         let mut ranked: Vec<usize> =
             (0..self.seeds.len()).filter(|&i| self.seeds[i].energy > 0).collect();
-        ranked.sort_by(|&a, &b| self.seeds[b].score.total_cmp(&self.seeds[a].score));
+        ranked.sort_by(|&a, &b| {
+            self.seeds[b].score.total_cmp(&self.seeds[a].score).then_with(|| {
+                if self.seeds[a].corpus || self.seeds[b].corpus {
+                    b.cmp(&a)
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+        });
         let n = ranked.len() as u64;
         let total = n * (n + 1) / 2;
         let mut roll = uniform(rng, total - 1);
@@ -121,7 +140,7 @@ impl<T: Clone> Pool<T> {
         let seed = &mut self.seeds[chosen];
         seed.energy -= 1;
         let picked = seed.clone();
-        if seed.energy == 0 && self.seeds.len() > 1 {
+        if seed.energy == 0 && !seed.corpus && self.seeds.len() > 1 {
             self.seeds.swap_remove(chosen);
         }
         Some(picked)
@@ -159,5 +178,45 @@ mod tests {
             assert!(pool.pick(&mut rng).is_some(), "the pool never runs dry");
         }
         assert!(!pool.is_empty());
+    }
+
+    #[test]
+    fn forced_corpus_seeds_survive_energy_refill() {
+        let mut pool = Pool::new(4, 2);
+        pool.add_forced(1u8, 0.0);
+        pool.add_forced(2u8, 0.0);
+        pool.add_forced(3u8, 0.0);
+        let mut rng = Source::new(7, 1);
+        let mut counts = [0u32; 4];
+        // Across multiple full energy cycles, every forced corpus seed remains
+        // in the pool and continues to be selected instead of being permanently
+        // evicted after its first 2 picks.
+        for _ in 0..60 {
+            let picked = pool.pick(&mut rng).expect("pool never empty");
+            counts[picked.value as usize] += 1;
+        }
+        assert_eq!(pool.len(), 3, "corpus seeds must not be retired on energy == 0");
+        assert!(
+            counts[1] > 2 && counts[2] > 2 && counts[3] > 2,
+            "every corpus seed should be picked across refills: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn forced_corpus_seeds_prefer_recent_discoveries_on_score_ties() {
+        let mut pool = Pool::new(4, 100);
+        pool.add_forced(1u8, 0.0);
+        pool.add_forced(2u8, 0.0);
+        pool.add_forced(3u8, 0.0);
+        let mut rng = Source::new(42, 1);
+        let mut counts = [0u32; 4];
+        for _ in 0..60 {
+            let picked = pool.pick(&mut rng).expect("pool non-empty");
+            counts[picked.value as usize] += 1;
+        }
+        assert!(
+            counts[3] > counts[1],
+            "newer equal-score corpus seed should be weighted above older seed: {counts:?}"
+        );
     }
 }
